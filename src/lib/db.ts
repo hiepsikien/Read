@@ -51,7 +51,8 @@ function createDb() {
       position INTEGER NOT NULL,
       title TEXT NOT NULL,
       content TEXT NOT NULL,
-      word_count INTEGER NOT NULL DEFAULT 0
+      word_count INTEGER NOT NULL DEFAULT 0,
+      group_index INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS purchases (
@@ -67,8 +68,16 @@ function createDb() {
     CREATE INDEX IF NOT EXISTS idx_chapters_book ON chapters(book_id, position);
   `);
 
+  migrateChapters(db);
   seedIfEmpty(db);
   return db;
+}
+
+function migrateChapters(db: Database.Database) {
+  const cols = db.prepare(`PRAGMA table_info(chapters)`).all() as Array<{ name: string }>;
+  if (!cols.some((col) => col.name === "group_index")) {
+    db.exec(`ALTER TABLE chapters ADD COLUMN group_index INTEGER NOT NULL DEFAULT 1`);
+  }
 }
 
 function seedIfEmpty(db: Database.Database) {
@@ -148,8 +157,8 @@ function seedIfEmpty(db: Database.Database) {
   });
 
   const insertChapter = db.prepare(
-    `INSERT INTO chapters (id, book_id, position, title, content, word_count)
-     VALUES (@id, @book_id, @position, @title, @content, @word_count)`
+    `INSERT INTO chapters (id, book_id, position, title, content, word_count, group_index)
+     VALUES (@id, @book_id, @position, @title, @content, @word_count, @group_index)`
   );
 
   SAMPLE_FREE.forEach((chapter, index) => {
@@ -160,6 +169,7 @@ function seedIfEmpty(db: Database.Database) {
       title: chapter.title,
       content: chapter.content,
       word_count: countWords(chapter.content),
+      group_index: index + 1,
     });
   });
 
@@ -171,6 +181,7 @@ function seedIfEmpty(db: Database.Database) {
       title: chapter.title,
       content: chapter.content,
       word_count: countWords(chapter.content),
+      group_index: index + 1,
     });
   });
 }
@@ -238,7 +249,7 @@ export function getBook(id: string) {
 export function getChapters(bookId: string) {
   return getDb()
     .prepare(
-      `SELECT id, book_id, position, title, word_count, content
+      `SELECT id, book_id, position, title, word_count, content, group_index
        FROM chapters
        WHERE book_id = ?
        ORDER BY position ASC`
@@ -283,7 +294,8 @@ export function canAccessChapter(options: {
 }) {
   const { book, chapter, userId } = options;
   if (book.price_cents === 0) return true;
-  if (chapter.position === 1) return true;
+  // Whole logical chapter 1 is free, including every reading segment inside it.
+  if ((chapter.group_index ?? 1) === 1) return true;
   if (!userId) return false;
   if (book.publisher_id === userId) return true;
   return hasPurchase(userId, book.id);

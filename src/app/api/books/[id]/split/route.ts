@@ -30,8 +30,8 @@ export async function POST(_request: Request, { params }: Params) {
   const db = getDb();
   const wipe = db.prepare(`DELETE FROM chapters WHERE book_id = ?`);
   const insert = db.prepare(
-    `INSERT INTO chapters (id, book_id, position, title, content, word_count)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO chapters (id, book_id, position, title, content, word_count, group_index)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   const touch = db.prepare(`UPDATE books SET updated_at = ? WHERE id = ?`);
 
@@ -44,7 +44,8 @@ export async function POST(_request: Request, { params }: Params) {
         index + 1,
         chapter.title,
         chapter.content,
-        countWords(chapter.content)
+        countWords(chapter.content),
+        chapter.groupIndex
       );
     });
     touch.run(new Date().toISOString(), id);

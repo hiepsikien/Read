@@ -189,7 +189,8 @@ export default function ManageBookPage() {
           Chapters
         </h2>
         <p className="mt-2 text-sm text-[var(--ink-soft)]">
-          Extracted text is ready. Split it into chapters for the in-app reader.
+          Detects existing chapters and sections, then packs them into comfortable
+          reading segments — without cutting a section across two units.
         </p>
         <button
           type="button"
@@ -197,7 +198,7 @@ export default function ManageBookPage() {
           disabled={!data.book.has_raw_text || busy === "split"}
           className="mt-4 rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white hover:bg-[var(--sage-deep)] disabled:opacity-50"
         >
-          {busy === "split" ? "Splitting…" : "Auto-split into chapters"}
+          {busy === "split" ? "Splitting…" : "Auto-split into reading segments"}
         </button>
 
         <ol className="mt-5 divide-y divide-[var(--line)]">

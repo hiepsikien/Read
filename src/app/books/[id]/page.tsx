@@ -78,7 +78,7 @@ export default async function BookDetailPage({ params }: Props) {
 
       {!owned && book.price_cents > 0 && (
         <p className="mt-4 text-sm text-[var(--ink-soft)]">
-          Chapter 1 is free inside Read. Purchase unlocks the remaining chapters in the in-app reader.
+          Chapter 1 free
         </p>
       )}
 
@@ -88,7 +88,7 @@ export default async function BookDetailPage({ params }: Props) {
         </h2>
         <ol className="mt-4 divide-y divide-[var(--line)]">
           {chapters.map((chapter) => {
-            const locked = !owned && book.price_cents > 0 && chapter.position > 1;
+            const locked = !owned && book.price_cents > 0 && (chapter.group_index ?? chapter.position) > 1;
             return (
               <li key={chapter.id} className="flex items-center justify-between gap-4 py-3">
                 {locked ? (

@@ -32,6 +32,8 @@ export interface Chapter {
   title: string;
   content: string;
   word_count: number;
+  /** Logical source chapter (1 = free preview group for paid books). */
+  group_index: number;
 }
 
 export interface Purchase {

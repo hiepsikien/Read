@@ -17,6 +17,7 @@ export async function GET(_request: Request, { params }: Params) {
     position: chapter.position,
     title: chapter.title,
     word_count: chapter.word_count,
+    group_index: chapter.group_index,
   }));
 
   const owned =

@@ -34,6 +34,7 @@ export async function GET(_request: Request, { params }: Params) {
     position: item.position,
     title: item.title,
     word_count: item.word_count,
+    group_index: item.group_index,
     locked: !canAccessChapter({ book, chapter: item, userId: session.user?.id }),
   }));
 
