@@ -16,7 +16,11 @@ import {
   useRouter,
 } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { ApiError, type ChapterListItem } from "@read/api-client";
+import {
+  ApiError,
+  parseInlineMarkdown,
+  type ChapterListItem,
+} from "@read/api-client";
 import { useAuth } from "../../../lib/auth";
 import {
   colors,
@@ -145,7 +149,12 @@ export default function ReaderScreen() {
     );
   }
 
-  const paragraphs = data.chapter.content.split(/\n\s*\n/).filter(Boolean);
+  // Native text renders every newline as a hard break, so collapse the soft
+  // line wrapping that survives inside a paragraph.
+  const paragraphs = data.chapter.content
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
+    .filter(Boolean);
 
   return (
     <SafeAreaView style={[styles.reader, { backgroundColor: palette.bg }]} edges={["top"]}>
@@ -185,7 +194,7 @@ export default function ReaderScreen() {
               key={index}
               style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}
             >
-              {paragraph}
+              <InlineMarkdown value={paragraph} />
             </Text>
           ))}
         </View>
@@ -256,6 +265,24 @@ export default function ReaderScreen() {
         </View>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function InlineMarkdown({ value }: { value: string }) {
+  return (
+    <>
+      {parseInlineMarkdown(value).map((token, index) => (
+        <Text
+          key={`${index}-${token.text}`}
+          style={[
+            token.bold && styles.inlineBold,
+            token.italic && styles.inlineItalic,
+          ]}
+        >
+          {token.text}
+        </Text>
+      ))}
+    </>
   );
 }
 
@@ -336,4 +363,6 @@ const styles = StyleSheet.create({
   tocRow: { paddingVertical: 12, paddingHorizontal: 12, borderRadius: 10 },
   tocLocked: { opacity: 0.5 },
   tocLockedLabel: { fontSize: 12, marginTop: 2 },
+  inlineBold: { fontWeight: "700" },
+  inlineItalic: { fontStyle: "italic" },
 });

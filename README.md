@@ -10,7 +10,7 @@ Mobile-friendly book reading product with **web**, **native (Expo/React Native)*
 |-----|------|------|
 | Web | `apps/web` | Next.js — full MVP library / reader / publisher |
 | API | `apps/api` | FastAPI + PostgreSQL — auth, books, split, purchase |
-| Mobile | `apps/mobile` | Expo (iOS + Android) — library → detail → reader → purchase |
+| Mobile | `apps/mobile` | Expo (iOS + Android) — reader flow + publisher upload/split/publish |
 
 Shared typed client: `packages/api-client`.
 

@@ -34,7 +34,7 @@ Cho phép:
 | Ngôn ngữ UI | **Tiếng Anh trước** |
 | Preview sách trả phí | **Cả logical Chapter 1** miễn phí (mọi đoạn thuộc chapter 1) |
 | Nơi đọc | **Trong app** — text/chapter reader, không mở file gốc bên ngoài |
-| Định dạng nội dung lúc này | **Plain text** — chưa giữ bold/italic/font/size từ file gốc (cải thiện sau) |
+| Định dạng nội dung lúc này | **Markdown nhẹ** — DOCX giữ bold/italic; PDF vẫn plain text |
 
 ---
 
@@ -75,13 +75,16 @@ File: `apps/api/app/chapters.py` (port từ logic MVP trước)
 
 Luồng:
 
+0. **Reflow văn bản** về paragraph thật (`normalize_document_text`)
+   - PDF extraction cho ra *dòng hiển thị*, có khi mỗi từ một dòng
+   - HTML tự collapse whitespace nên web không thấy lỗi, native thì xuống dòng thật
 1. **Nhận chapter có sẵn** trong tài liệu  
    - `Chapter 1`, `Chương`, `Part`, `Book`,…  
    - Hoặc dạng `1. Title` / `2. Title` nếu không có chữ “Chapter”
 2. **Trong mỗi chapter**, nhận **mục/section** (`Section`, `Mục`, heading đánh số con,…)
-3. **Gói các mục** thành đoạn đọc khoảng **~850 từ** (vừa đọc trên mobile)
+3. **Gói các mục** thành đoạn đọc khoảng **~2000 từ**
 4. **Không cắt một mục nằm giữa 2 đoạn** — mỗi section là đơn vị nguyên
-5. Nếu một mục quá dài (> ~1300 từ): chỉ tách theo **đoạn văn (paragraph)**, không cắt giữa paragraph
+5. Nếu một mục quá dài (> ~3000 từ): chỉ tách theo **đoạn văn (paragraph)**, không cắt giữa paragraph
 6. Mỗi reading segment lưu `group_index` = số chapter logic gốc  
    - Paid preview: mọi segment có `group_index === 1` đều free
 
@@ -215,11 +218,11 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 
 ## 9. Phase sau
 
-### Native mobile (đã có reader MVP)
+### Native mobile (reader + publisher đã xong)
 - Library → book detail → in-app reader (theme, font, TOC, prev/next)
 - Mock purchase + unlock chapter 402
-- Còn lại: publisher upload / split / publish trên mobile
-- EAS Build / store distribution
+- Publisher: upload (PDF/DOCX qua document picker) → split → publish → mở reader
+- Còn lại: EAS Build / store distribution, persist tiến độ đọc
 
 ### AI (đã bàn, chưa code)
 - Smart split / metadata / blurb bằng AI (publisher)
@@ -229,8 +232,9 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 - Focus mode, TTS, transition chapter tinh gọn hơn
 
 ### Rich format
-- Giữ **bold / italic / heading** từ DOCX
-- PDF giữ style trung thực khó hơn — cân nhắc sau
+- Đã giữ **bold / italic** từ DOCX trên mobile + web reader
+- DOCX giữ nguyên paragraph thật; scene heading all-caps được tách dòng
+- Còn lại: heading style/underline/font/size; PDF giữ style trung thực khó hơn
 
 ### Khác
 - Stripe thật  
@@ -252,7 +256,7 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 ## 11. Lịch sử quyết định nhanh
 
 1. Làm **MVP trước**, chưa nhúng AI  
-2. Plain text OK cho MVP; rich format cải thiện sau  
+2. Nội dung lưu dạng Markdown nhẹ; DOCX giữ bold/italic, PDF vẫn plain text
 3. Smart split **bắt buộc trong MVP**: tôn trọng chapter/mục có sẵn, đoạn vừa đọc, không cắt giữa mục  
 4. Đọc **trong app**, không phụ thuộc PDF viewer ngoài  
 

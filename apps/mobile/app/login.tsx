@@ -5,10 +5,10 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { ApiError } from "@read/api-client";
+import { FormScroll } from "../components/FormScroll";
 import { useAuth } from "../lib/auth";
 import { colors } from "../lib/theme";
 
@@ -40,7 +40,7 @@ export default function LoginScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <FormScroll style={styles.screen} contentContainerStyle={styles.container}>
       <Text style={styles.title}>Sign in to Read</Text>
       <Text style={styles.sub}>Reading happens inside the app.</Text>
 
@@ -82,12 +82,13 @@ export default function LoginScreen() {
           </Text>
         </Pressable>
       ))}
-    </View>
+    </FormScroll>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, gap: 12, backgroundColor: colors.mist },
+  screen: { backgroundColor: colors.mist },
+  container: { padding: 20, gap: 12, paddingBottom: 48 },
   title: { fontSize: 28, fontWeight: "700", color: colors.ink, marginTop: 8 },
   sub: { color: colors.inkSoft, marginBottom: 8 },
   input: {

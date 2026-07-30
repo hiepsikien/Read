@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -17,6 +18,8 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import Book, Chapter, Purchase, User
 from ..parse_docs import extract_text_from_file
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -167,6 +170,7 @@ async def create_book(
         raw_text = extract_text_from_file(stored_path, original_name)
     except Exception as exc:  # noqa: BLE001
         stored_path.unlink(missing_ok=True)
+        logger.exception("Text extraction failed for %s", original_name)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     now = datetime.now(timezone.utc)
@@ -273,7 +277,10 @@ def split_book(
     if not (book.raw_text or "").strip():
         raise HTTPException(status_code=400, detail="No extracted text available to split.")
 
-    units = split_into_chapters(book.raw_text or "")
+    is_docx = Path(book.source_filename or "").suffix.lower() == ".docx"
+    units = split_into_chapters(
+        book.raw_text or "", preserve_paragraphs=is_docx
+    )
     if not units:
         raise HTTPException(status_code=400, detail="Could not create chapters from this document.")
 

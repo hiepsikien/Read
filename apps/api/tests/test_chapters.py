@@ -1,10 +1,22 @@
 from app.access import can_access_chapter
-from app.chapters import count_words, split_into_chapters
+from app.chapters import (
+    MAX_WORDS,
+    TARGET_WORDS,
+    count_words,
+    normalize_document_text,
+    plain_text,
+    split_into_chapters,
+)
 from app.models import Book, Chapter
 
 
 def para(words: int, seed: str = "word") -> str:
     return " ".join(f"{seed}{i}" for i in range(words))
+
+
+# Sized off the packing constants so the tests keep their intent if we retune them.
+SECTION_WORDS = TARGET_WORDS // 4
+OVERSIZED_PARA_WORDS = MAX_WORDS // 2
 
 
 def test_keeps_existing_chapters_and_does_not_tear_section():
@@ -14,23 +26,23 @@ def test_keeps_existing_chapters_and_does_not_tear_section():
             "",
             "Section 1 — Harbor",
             "",
-            para(200, "harbor"),
+            para(SECTION_WORDS, "harbor"),
             "",
             "Section 2 — Lanterns",
             "",
-            para(200, "lantern"),
+            para(SECTION_WORDS, "lantern"),
             "",
             "Section 3 — Fog",
             "",
-            para(200, "fog"),
+            para(SECTION_WORDS, "fog"),
             "",
             "Section 4 — Tide",
             "",
-            para(200, "tide"),
+            para(SECTION_WORDS, "tide"),
             "",
             "Section 5 — Letters",
             "",
-            para(200, "letter"),
+            para(SECTION_WORDS, "letter"),
             "",
             "Chapter 2 — Departure",
             "",
@@ -66,9 +78,9 @@ def test_keeps_existing_chapters_and_does_not_tear_section():
 
 
 def test_oversized_section_splits_on_paragraph_boundaries_only():
-    unique_a = "ALPHA_UNIQUE_MARKER " + para(500, "alpha")
-    unique_b = "BETA_UNIQUE_MARKER " + para(500, "beta")
-    unique_c = "GAMMA_UNIQUE_MARKER " + para(500, "gamma")
+    unique_a = "ALPHA_UNIQUE_MARKER " + para(OVERSIZED_PARA_WORDS, "alpha") + "."
+    unique_b = "BETA_UNIQUE_MARKER " + para(OVERSIZED_PARA_WORDS, "beta") + "."
+    unique_c = "GAMMA_UNIQUE_MARKER " + para(OVERSIZED_PARA_WORDS, "gamma") + "."
     text = "\n".join(
         [
             "Chapter 1 — Long Form",
@@ -111,6 +123,98 @@ def test_numbered_headings_become_logical_chapters():
     assert len(units) == 3
     assert [u.group_index for u in units] == [1, 2, 3]
     assert "Beginnings" in units[0].title
+
+
+def test_reflows_pdf_style_word_per_line_text():
+    text = "\n".join(
+        [
+            "LỜI MỞ ĐẦU",
+            "",
+            "Khi ánh hoàng hôn của thời Trung cổ dần lịm tắt, một bình minh",
+            "",
+            "mới",
+            "",
+            "của",
+            "",
+            "trí",
+            "",
+            "tuệ",
+            "",
+            "đã bừng tỉnh.",
+            "",
+            "Câu tiếp theo mở ra một đoạn khác.",
+        ]
+    )
+
+    normalized = normalize_document_text(text)
+
+    assert "một bình minh mới của trí tuệ đã bừng tỉnh." in normalized
+    assert normalized.startswith("LỜI MỞ ĐẦU\n\n")
+    # Two prose paragraphs plus the heading, and no stray single newlines.
+    assert len(normalized.split("\n\n")) == 3
+    assert "\n" not in normalized.replace("\n\n", "")
+
+
+def test_reflow_keeps_docx_style_paragraphs_separate():
+    text = "\n\n".join(
+        [
+            "First paragraph ends here.",
+            "Second paragraph stands alone.",
+            "Third one too.",
+        ]
+    )
+
+    assert normalize_document_text(text, preserve_paragraphs=True).split("\n\n") == [
+        "First paragraph ends here.",
+        "Second paragraph stands alone.",
+        "Third one too.",
+    ]
+
+
+def test_keeps_long_uppercase_scene_heading_on_its_own_line():
+    heading = "MẬT PHÒNG ĐIỆN KÍNH THIÊN - THĂNG LONG - ĐÊM 1510"
+    prose = "Ngọn đèn dầu lay động trong căn phòng kín."
+
+    normalized = normalize_document_text(
+        f"{heading}\n\n{prose}", preserve_paragraphs=True
+    )
+
+    assert normalized == f"{heading}\n\n{prose}"
+
+
+def test_docx_paragraph_without_terminal_punctuation_stays_separate():
+    text = "Một dòng chủ ý không có dấu cuối\n\nĐoạn văn tiếp theo."
+
+    normalized = normalize_document_text(text, preserve_paragraphs=True)
+
+    assert normalized == text
+
+
+def test_markdown_does_not_affect_heading_detection_or_word_count():
+    text = (
+        "**CHƯƠNG 1 — KHỞI ĐẦU**\n\n"
+        "Một đoạn có **chữ đậm** và *chữ nghiêng*."
+    )
+
+    units = split_into_chapters(text)
+
+    assert len(units) == 1
+    assert units[0].title == "Chapter 1 — KHỞI ĐẦU"
+    assert "**chữ đậm**" in units[0].content
+    assert "*chữ nghiêng*" in units[0].content
+    assert count_words("Một **hai** *ba*") == 3
+    assert plain_text(r"Một \* ký tự") == "Một * ký tự"
+
+
+def test_segments_target_longer_reading_units():
+    text = "\n\n".join(para(600, f"seg{i}") + "." for i in range(10))
+
+    units = split_into_chapters(text)
+
+    assert units
+    # Roughly TARGET_WORDS per unit rather than the old ~850.
+    assert all(count_words(u.content) <= MAX_WORDS for u in units)
+    assert max(count_words(u.content) for u in units) > 1200
 
 
 def test_can_access_chapter_rules():

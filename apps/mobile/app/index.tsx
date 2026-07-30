@@ -72,9 +72,16 @@ export default function LibraryScreen() {
         {user ? (
           <>
             <Text style={styles.meta}>Signed in as {user.name}</Text>
-            <Pressable onPress={signOut} style={styles.secondaryBtn}>
-              <Text style={styles.secondaryBtnText}>Sign out</Text>
-            </Pressable>
+            <View style={styles.authActions}>
+              {user.role === "publisher" ? (
+                <Pressable style={styles.secondaryBtn} onPress={() => router.push("/publisher")}>
+                  <Text style={styles.secondaryBtnText}>Publisher</Text>
+                </Pressable>
+              ) : null}
+              <Pressable onPress={signOut} style={styles.secondaryBtn}>
+                <Text style={styles.secondaryBtnText}>Sign out</Text>
+              </Pressable>
+            </View>
           </>
         ) : (
           <Pressable style={styles.primaryBtn} onPress={() => router.push("/login")}>
@@ -117,6 +124,7 @@ const styles = StyleSheet.create({
   brand: { fontSize: 44, fontWeight: "700", color: colors.ink, marginTop: 2 },
   sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 21 },
   authRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  authActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   meta: { color: colors.inkSoft },
   section: {
     marginTop: 12,

@@ -22,6 +22,9 @@ export default function RootLayout() {
           name="read/[bookId]/[chapterId]"
           options={{ headerShown: false }}
         />
+        <Stack.Screen name="publisher/index" options={{ title: "Publisher" }} />
+        <Stack.Screen name="publisher/new" options={{ title: "Upload book" }} />
+        <Stack.Screen name="publisher/[id]" options={{ title: "Manage book" }} />
       </Stack>
     </AuthProvider>
   );

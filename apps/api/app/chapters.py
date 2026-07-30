@@ -3,9 +3,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-TARGET_WORDS = 850
-MAX_WORDS = 1300
-MIN_WORDS = 280
+TARGET_WORDS = 2000
+MAX_WORDS = 3000
+MIN_WORDS = 650
 
 CHAPTER_HEADING = re.compile(
     r"^(?:chapter|chương|phần|part|book)\s+([0-9ivxlcdm]+|[a-z])\b(?:\s*[:.\-–—]\s*(.*))?$",
@@ -19,6 +19,10 @@ NUMBERED_HEADING = re.compile(
     r"^([0-9]+(?:\.[0-9]+){0,3}|[ivxlcdm]+)[.)]\s+(.+)$",
     re.I,
 )
+SENTENCE_END = re.compile(r"[.!?…:;][\"'”’)\]]*$")
+INLINE_WHITESPACE = re.compile(r"[ \t\u00a0\u200b]+")
+MARKDOWN_MARKER = re.compile(r"(?<!\\)\*{1,3}")
+MARKDOWN_ESCAPE = re.compile(r"\\([\\*])")
 
 
 @dataclass
@@ -48,16 +52,94 @@ class LogicalChapter:
     sections: list[SectionBlock]
 
 
+def plain_text(text: str) -> str:
+    """Return the readable projection used by split/count heuristics."""
+    without_markers = MARKDOWN_MARKER.sub("", text)
+    return MARKDOWN_ESCAPE.sub(r"\1", without_markers)
+
+
 def count_words(text: str) -> int:
-    return len([part for part in text.strip().split() if part])
+    return len([part for part in plain_text(text).strip().split() if part])
 
 
 def is_free_preview_group(group_index: int) -> bool:
     return group_index == 1
 
 
-def split_into_chapters(raw_text: str) -> list[SplitChapter]:
-    normalized = raw_text.replace("\r", "").strip()
+def is_heading_line(line: str) -> bool:
+    candidate = plain_text(line).strip()
+    if not candidate or len(candidate) > 110:
+        return False
+    return bool(
+        CHAPTER_HEADING.match(candidate)
+        or SECTION_LABELED.match(candidate)
+        or NUMBERED_HEADING.match(candidate)
+        or is_title_case_heading(candidate)
+    )
+
+
+def normalize_document_text(
+    raw_text: str, *, preserve_paragraphs: bool = False
+) -> str:
+    """Reflow extracted text into real paragraphs.
+
+    PDF extraction emits visual lines — sometimes a single word per line, with
+    blank lines in between. Clients that collapse whitespace (HTML) hide this,
+    but native text renders every newline as a hard break, so the reflow has to
+    happen before chapters are stored.
+    """
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = text.split("\n")
+    if preserve_paragraphs:
+        return "\n\n".join(
+            INLINE_WHITESPACE.sub(" ", line).strip()
+            for line in raw_lines
+            if line.strip()
+        )
+
+    # PDF extraction may put every visual line (or word) in its own block, so a
+    # sentence end is the only reliable paragraph signal in reflow mode.
+    has_blank_lines = any(not line.strip() for line in raw_lines)
+
+    paragraphs: list[str] = []
+    after_blank = True
+    last_was_heading = False
+
+    for raw_line in raw_lines:
+        line = INLINE_WHITESPACE.sub(" ", raw_line).strip()
+        if not line:
+            after_blank = True
+            continue
+
+        heading = is_heading_line(line)
+        previous_plain = plain_text(paragraphs[-1]) if paragraphs else ""
+        breaks_paragraph = (
+            not paragraphs
+            or heading
+            or last_was_heading
+            or bool(
+                SENTENCE_END.search(previous_plain)
+                and (after_blank or not has_blank_lines)
+            )
+        )
+
+        if breaks_paragraph:
+            paragraphs.append(line)
+        else:
+            paragraphs[-1] = f"{paragraphs[-1]} {line}"
+
+        after_blank = False
+        last_was_heading = heading
+
+    return "\n\n".join(paragraphs).strip()
+
+
+def split_into_chapters(
+    raw_text: str, *, preserve_paragraphs: bool = False
+) -> list[SplitChapter]:
+    normalized = normalize_document_text(
+        raw_text, preserve_paragraphs=preserve_paragraphs
+    )
     if not normalized:
         return []
 
@@ -139,7 +221,7 @@ def build_logical_chapters(lines: list[str]) -> list[LogicalChapter]:
 def detect_headings(lines: list[str]) -> list[HeadingHit]:
     hits: list[HeadingHit] = []
     for index, line in enumerate(lines):
-        trimmed = line.strip()
+        trimmed = plain_text(line).strip()
         if not trimmed or len(trimmed) > 110:
             continue
 
@@ -336,8 +418,12 @@ def looks_like_heading_context(
     index: int,
     strong_pattern: bool,
 ) -> bool:
-    prev = lines[index - 1].strip() if index > 0 else ""
-    next_line = lines[index + 1].strip() if index + 1 < len(lines) else ""
+    prev = plain_text(lines[index - 1]).strip() if index > 0 else ""
+    next_line = (
+        plain_text(lines[index + 1]).strip()
+        if index + 1 < len(lines)
+        else ""
+    )
     if len(line) > 110:
         return False
 
@@ -352,15 +438,21 @@ def looks_like_heading_context(
 
 
 def is_title_case_heading(line: str) -> bool:
-    cleaned = re.sub(r"^#+\s*", "", line).strip()
+    cleaned = re.sub(r"^#+\s*", "", plain_text(line)).strip()
     if len(cleaned) < 4 or len(cleaned) > 80:
         return False
     if re.search(r"[.!?]$", cleaned):
         return False
     if "  " in cleaned:
         return False
-    if re.match(r"^[A-Z0-9][A-Z0-9\s,'’\-–—:]+$", cleaned) and len(cleaned.split()) <= 8:
-        return True
+    heading_tokens = [
+        token for token in cleaned.split() if token not in {"-", "–", "—"}
+    ]
+    if len(heading_tokens) <= 16 and any(c.isalpha() for c in cleaned):
+        # `str.upper()` covers accented scripts that an [A-Z] class would miss,
+        # e.g. Vietnamese headings such as "LỜI MỞ ĐẦU".
+        if cleaned == cleaned.upper():
+            return True
     if re.match(r"^#{1,3}\s+\S", line):
         return True
     return False

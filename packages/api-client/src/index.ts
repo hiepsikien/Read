@@ -50,6 +50,99 @@ export interface ApiClientOptions {
   fetch?: typeof fetch;
 }
 
+export interface InlineMarkdownToken {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+}
+
+function isEscaped(value: string, index: number) {
+  let slashes = 0;
+  for (let i = index - 1; i >= 0 && value[i] === "\\"; i -= 1) {
+    slashes += 1;
+  }
+  return slashes % 2 === 1;
+}
+
+function findClosingMarker(value: string, marker: string, start: number) {
+  let index = value.indexOf(marker, start);
+  while (index >= 0) {
+    if (!isEscaped(value, index)) return index;
+    index = value.indexOf(marker, index + marker.length);
+  }
+  return -1;
+}
+
+function unescapeInlineMarkdown(value: string) {
+  return value.replace(/\\([\\*])/g, "$1");
+}
+
+/**
+ * Parse the deliberately small Markdown subset emitted by the DOCX importer:
+ * `**bold**`, `*italic*`, and `***bold italic***`.
+ */
+export function parseInlineMarkdown(value: string): InlineMarkdownToken[] {
+  const tokens: InlineMarkdownToken[] = [];
+  let plain = "";
+
+  function push(text: string, bold: boolean, italic: boolean) {
+    if (!text) return;
+    const previous = tokens[tokens.length - 1];
+    if (previous && previous.bold === bold && previous.italic === italic) {
+      previous.text += text;
+    } else {
+      tokens.push({ text, bold, italic });
+    }
+  }
+
+  function flushPlain() {
+    push(unescapeInlineMarkdown(plain), false, false);
+    plain = "";
+  }
+
+  for (let index = 0; index < value.length; ) {
+    if (
+      value[index] === "\\" &&
+      (value[index + 1] === "*" || value[index + 1] === "\\")
+    ) {
+      plain += value[index + 1];
+      index += 2;
+      continue;
+    }
+
+    const marker = value.startsWith("***", index)
+      ? "***"
+      : value.startsWith("**", index)
+        ? "**"
+        : value[index] === "*"
+          ? "*"
+          : null;
+
+    if (!marker) {
+      plain += value[index];
+      index += 1;
+      continue;
+    }
+
+    const closing = findClosingMarker(value, marker, index + marker.length);
+    if (closing < 0) {
+      plain += marker;
+      index += marker.length;
+      continue;
+    }
+
+    flushPlain();
+    const text = unescapeInlineMarkdown(
+      value.slice(index + marker.length, closing)
+    );
+    push(text, marker.length >= 2, marker.length === 1 || marker.length === 3);
+    index = closing + marker.length;
+  }
+
+  flushPlain();
+  return tokens;
+}
+
 export class ApiError extends Error {
   status: number;
   body: unknown;

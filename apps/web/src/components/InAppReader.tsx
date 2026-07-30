@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ApiError } from "@read/api-client";
+import { ApiError, parseInlineMarkdown } from "@read/api-client";
 import { createBrowserApi } from "@/lib/api";
 import { estimateMinutes, formatPrice } from "@/lib/format";
 
@@ -290,7 +290,7 @@ export function InAppReader({
         >
           {data.chapter.content.split(/\n\s*\n/).map((paragraph, index) => (
             <p key={index} className="whitespace-pre-wrap">
-              {paragraph}
+              <InlineMarkdown value={paragraph} />
             </p>
           ))}
         </div>
@@ -378,4 +378,24 @@ export function InAppReader({
       )}
     </div>
   );
+}
+
+function InlineMarkdown({ value }: { value: string }) {
+  return parseInlineMarkdown(value).map((token, index) => {
+    const text = token.bold ? (
+      <strong>{token.text}</strong>
+    ) : token.italic ? (
+      <em>{token.text}</em>
+    ) : (
+      token.text
+    );
+
+    return token.bold && token.italic ? (
+      <strong key={`${index}-${token.text}`}>
+        <em>{token.text}</em>
+      </strong>
+    ) : (
+      <span key={`${index}-${token.text}`}>{text}</span>
+    );
+  });
 }
