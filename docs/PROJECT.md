@@ -316,6 +316,13 @@ API tiêu biểu:
 - Tone màu ink / sage / mist — tránh purple generic và cream+terracotta cliché  
 - Reader full-screen trong app; chrome ẩn khi scroll  
 
+### Logo
+- PNG: `apps/web/public/brand/read-logo.png` (wordmark serif + open-book, ink/sage)
+- SVG: `apps/web/public/brand/read-logo.svg`
+- Preview trong docs: `docs/assets/read-logo.png`
+- App icon / favicon: `apps/web/src/app/icon.png`
+- Đã gắn vào header web và hero library
+
 ---
 
 ## 11. Lịch sử quyết định nhanh
