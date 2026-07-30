@@ -78,7 +78,8 @@ export default async function BookDetailPage({ params }: Props) {
 
       {!owned && book.price_cents > 0 && (
         <p className="mt-4 text-sm text-[var(--ink-soft)]">
-          Chapter 1 free
+          The whole first chapter is free inside Read — every reading segment in it.
+          Purchase unlocks the rest.
         </p>
       )}
 
