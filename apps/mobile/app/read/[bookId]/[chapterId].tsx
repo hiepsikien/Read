@@ -505,7 +505,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   barBrand: { fontSize: 18, fontWeight: "700" },
-  barBrand: { fontSize: 18, fontWeight: "700" },
   barControls: { flexDirection: "row", alignItems: "center", gap: 6 },
   speechBar: {
     minHeight: 46,
@@ -534,7 +533,6 @@ const styles = StyleSheet.create({
   },
   navText: { fontSize: 15 },
   lockedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 10 },
-  lockedBrand: { fontSize: 24, fontWeight: "700" },
   lockedTitle: { fontSize: 22, fontWeight: "600", marginTop: 8 },
   lockedBody: { textAlign: "center", lineHeight: 22, marginBottom: 8 },
   primaryBtn: {
