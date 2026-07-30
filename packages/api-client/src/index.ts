@@ -1,6 +1,6 @@
-export type UserRole = "reader" | "publisher";
+export type UserRole = "reader" | "publisher" | "admin";
 
-export type BookStatus = "draft" | "published";
+export type BookStatus = "draft" | "pending_review" | "published" | "rejected";
 
 export type SplitLength = "short" | "standard" | "long";
 
@@ -21,6 +21,12 @@ export interface SessionUser {
   role: UserRole;
 }
 
+export interface Category {
+  id: string;
+  slug: string;
+  label: string;
+}
+
 export interface BookListItem {
   id: string;
   title: string;
@@ -28,9 +34,15 @@ export interface BookListItem {
   price_cents: number;
   status: BookStatus;
   publisher_name?: string;
+  publisher_id?: string;
+  source_filename?: string | null;
   chapter_count: number;
   created_at: string;
   updated_at?: string;
+  category?: Category | null;
+  review_note?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
 }
 
 export interface ChapterListItem {
@@ -40,6 +52,7 @@ export interface ChapterListItem {
   word_count: number;
   group_index: number;
   locked?: boolean;
+  content_preview?: string;
 }
 
 export interface BookDetail {
@@ -54,11 +67,15 @@ export interface BookDetail {
   created_at: string;
   updated_at: string;
   has_raw_text: boolean;
+  category?: Category | null;
+  review_note?: string | null;
+  submitted_at?: string | null;
+  reviewed_at?: string | null;
 }
 
 export interface ApiClientOptions {
   baseUrl: string;
-  getToken?: () => string | null | undefined;
+  getToken?: () => string | null | undefined | Promise<string | null | undefined>;
   fetch?: typeof fetch;
 }
 
@@ -99,36 +116,31 @@ export function parseInlineMarkdown(value: string): InlineMarkdownToken[] {
 
   function push(text: string, bold: boolean, italic: boolean) {
     if (!text) return;
-    const previous = tokens[tokens.length - 1];
-    if (previous && previous.bold === bold && previous.italic === italic) {
-      previous.text += text;
-    } else {
-      tokens.push({ text, bold, italic });
+    const last = tokens[tokens.length - 1];
+    if (last && last.bold === bold && last.italic === italic) {
+      last.text += text;
+      return;
     }
+    tokens.push({ text, bold, italic });
   }
 
   function flushPlain() {
+    if (!plain) return;
     push(unescapeInlineMarkdown(plain), false, false);
     plain = "";
   }
 
   for (let index = 0; index < value.length; ) {
-    if (
-      value[index] === "\\" &&
-      (value[index + 1] === "*" || value[index + 1] === "\\")
-    ) {
+    if (value[index] === "\\" && index + 1 < value.length) {
       plain += value[index + 1];
       index += 2;
       continue;
     }
 
-    const marker = value.startsWith("***", index)
-      ? "***"
-      : value.startsWith("**", index)
-        ? "**"
-        : value[index] === "*"
-          ? "*"
-          : null;
+    let marker: string | null = null;
+    if (value.startsWith("***", index)) marker = "***";
+    else if (value.startsWith("**", index)) marker = "**";
+    else if (value[index] === "*") marker = "*";
 
     if (!marker) {
       plain += value[index];
@@ -144,9 +156,7 @@ export function parseInlineMarkdown(value: string): InlineMarkdownToken[] {
     }
 
     flushPlain();
-    const text = unescapeInlineMarkdown(
-      value.slice(index + marker.length, closing)
-    );
+    const text = unescapeInlineMarkdown(value.slice(index + marker.length, closing));
     push(text, marker.length >= 2, marker.length === 1 || marker.length === 3);
     index = closing + marker.length;
   }
@@ -171,12 +181,9 @@ export function createApiClient(options: ApiClientOptions) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const doFetch = options.fetch ?? fetch;
 
-  async function request<T>(
-    path: string,
-    init: RequestInit = {}
-  ): Promise<T> {
+  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    const token = options.getToken?.();
+    const token = await options.getToken?.();
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
@@ -204,10 +211,11 @@ export function createApiClient(options: ApiClientOptions) {
   }
 
   return {
-    login(email: string, password: string) {
-      return request<{ user: SessionUser; token: string }>("/api/auth/login", {
+    /** Local/dev stand-in for Firebase email auth when the API has AUTH_DEV_MODE. */
+    login(email: string, password: string, name?: string) {
+      return request<{ user: SessionUser; token: string }>("/api/auth/dev-login", {
         method: "POST",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, name }),
       });
     },
     logout() {
@@ -216,9 +224,21 @@ export function createApiClient(options: ApiClientOptions) {
     me() {
       return request<{ user: SessionUser | null }>("/api/auth/me");
     },
-    listBooks(mine = false) {
-      const q = mine ? "?mine=1" : "";
-      return request<{ books: BookListItem[] }>(`/api/books${q}`);
+    enableAuthor(enabled = true) {
+      return request<{ user: SessionUser }>("/api/auth/enable-author", {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    listCategories() {
+      return request<{ categories: Category[] }>("/api/books/categories/list");
+    },
+    listBooks(options?: { mine?: boolean; category?: string }) {
+      const params = new URLSearchParams();
+      if (options?.mine) params.set("mine", "1");
+      if (options?.category) params.set("category", options.category);
+      const q = params.toString();
+      return request<{ books: BookListItem[] }>(`/api/books${q ? `?${q}` : ""}`);
     },
     getBook(id: string) {
       return request<{
@@ -241,27 +261,30 @@ export function createApiClient(options: ApiClientOptions) {
         description?: string;
         pricing?: "free" | "paid";
         price?: number;
+        category_id?: string;
       }
     ) {
-      return request<{ ok: boolean }>(`/api/books/${id}`, {
+      return request<{ ok: boolean; status?: BookStatus }>(`/api/books/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
     },
     splitBook(id: string, options?: { length?: SplitLength }) {
-      return request<{ ok: boolean; chapter_count: number }>(
-        `/api/books/${id}/split`,
-        {
-          method: "POST",
-          body: JSON.stringify({ length: options?.length ?? "standard" }),
-        }
-      );
+      return request<{ ok: boolean; chapter_count: number }>(`/api/books/${id}/split`, {
+        method: "POST",
+        body: JSON.stringify({ length: options?.length ?? "standard" }),
+      });
     },
+    submitReview(id: string) {
+      return request<{ ok: boolean; status: BookStatus }>(`/api/books/${id}/submit-review`, {
+        method: "POST",
+      });
+    },
+    /** @deprecated Prefer submitReview — kept as an alias for older clients. */
     publishBook(id: string) {
-      return request<{ ok: boolean; status: string }>(
-        `/api/books/${id}/publish`,
-        { method: "POST" }
-      );
+      return request<{ ok: boolean; status: BookStatus }>(`/api/books/${id}/publish`, {
+        method: "POST",
+      });
     },
     purchaseBook(id: string) {
       return request<{
@@ -288,6 +311,29 @@ export function createApiClient(options: ApiClientOptions) {
         };
         chapters: ChapterListItem[];
       }>(`/api/books/${bookId}/chapters/${chapterId}`);
+    },
+    adminQueue() {
+      return request<{ books: BookListItem[] }>("/api/admin/queue");
+    },
+    adminBook(id: string) {
+      return request<{
+        book: BookDetail & { publisher_name: string };
+        chapters: ChapterListItem[];
+      }>(`/api/admin/books/${id}`);
+    },
+    adminApprove(id: string) {
+      return request<{ ok: boolean; status: BookStatus }>(`/api/admin/books/${id}/approve`, {
+        method: "POST",
+      });
+    },
+    adminReject(id: string, note: string) {
+      return request<{ ok: boolean; status: BookStatus; review_note: string }>(
+        `/api/admin/books/${id}/reject`,
+        {
+          method: "POST",
+          body: JSON.stringify({ note }),
+        }
+      );
     },
   };
 }

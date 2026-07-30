@@ -26,6 +26,7 @@ import {
   FONT_SIZE_STEP,
   useReaderPreferences,
 } from "../../../lib/reader-preferences";
+import { useIosSpeech } from "../../../lib/use-ios-speech";
 import {
   colors,
   estimateMinutes,
@@ -103,6 +104,26 @@ export default function ReaderScreen() {
     };
   }, [data]);
 
+  // Native text renders every newline as a hard break, so collapse the soft
+  // line wrapping that survives inside a paragraph.
+  const paragraphs = useMemo(
+    () =>
+      (data?.chapter.content ?? "")
+        .split(/\n\s*\n/)
+        .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
+        .filter(Boolean),
+    [data?.chapter.content]
+  );
+  const speech = useIosSpeech(paragraphs);
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        void speech.stop();
+      };
+    }, [speech.stop])
+  );
+
   const palette = readerThemes[theme];
 
   if (loading) {
@@ -145,13 +166,6 @@ export default function ReaderScreen() {
     );
   }
 
-  // Native text renders every newline as a hard break, so collapse the soft
-  // line wrapping that survives inside a paragraph.
-  const paragraphs = data.chapter.content
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
-    .filter(Boolean);
-
   return (
     <SafeAreaView style={[styles.reader, { backgroundColor: palette.bg }]} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -176,6 +190,60 @@ export default function ReaderScreen() {
         </View>
       </View>
 
+      {speech.supported ? (
+        <View
+          style={[
+            styles.speechBar,
+            {
+              backgroundColor: withAlpha(palette.fg, 0.04),
+              borderBottomColor: withAlpha(palette.fg, 0.12),
+            },
+          ]}
+        >
+          <Text style={[styles.speechLabel, { color: palette.muted }]}>Listen</Text>
+          <View style={styles.speechControls}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                speech.playbackState === "speaking"
+                  ? "Pause reading"
+                  : speech.playbackState === "paused"
+                    ? "Resume reading"
+                    : "Read chapter aloud"
+              }
+              style={chip(palette.fg)}
+              onPress={() => void speech.togglePlayback()}
+            >
+              <Text style={{ color: palette.fg, fontWeight: "600" }}>
+                {speech.playbackState === "speaking"
+                  ? "Pause"
+                  : speech.playbackState === "paused"
+                    ? "Resume"
+                    : "Play"}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Reading speed ${speech.rate} times`}
+              style={chip(palette.fg)}
+              onPress={() => void speech.cycleRate()}
+            >
+              <Text style={{ color: palette.fg }}>{speech.rate}×</Text>
+            </Pressable>
+            {speech.playbackState !== "idle" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Stop reading"
+                style={chip(palette.fg)}
+                onPress={() => void speech.stop()}
+              >
+                <Text style={{ color: palette.fg }}>Stop</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
       <ScrollView contentContainerStyle={styles.readerBody}>
         <Text style={[styles.readerEyebrow, { color: palette.muted }]}>{data.book.title}</Text>
         <Text style={[styles.readerTitle, { color: palette.fg }]}>{data.chapter.title}</Text>
@@ -186,14 +254,26 @@ export default function ReaderScreen() {
 
         <View style={styles.paragraphs}>
           {paragraphs.map((paragraph, index) => (
-            <Text
+            <View
               key={index}
-              style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}
+              style={[
+                styles.paragraph,
+                speech.currentParagraph === index && {
+                  backgroundColor: withAlpha(palette.fg, 0.08),
+                },
+              ]}
             >
-              <InlineMarkdown value={paragraph} />
-            </Text>
+              <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
+                <InlineMarkdown value={paragraph} />
+              </Text>
+            </View>
           ))}
         </View>
+        {speech.error ? (
+          <Text accessibilityRole="alert" style={[styles.speechError, { color: palette.muted }]}>
+            {speech.error}
+          </Text>
+        ) : null}
 
         <View style={[styles.nav, { borderTopColor: withAlpha(palette.fg, 0.12) }]}>
           {neighbors.prev && !neighbors.prev.locked ? (
@@ -312,11 +392,24 @@ const styles = StyleSheet.create({
   },
   barBrand: { fontSize: 18, fontWeight: "700" },
   barControls: { flexDirection: "row", alignItems: "center", gap: 6 },
+  speechBar: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  speechLabel: { fontSize: 13, fontWeight: "600" },
+  speechControls: { flexDirection: "row", alignItems: "center", gap: 6 },
   readerBody: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 60 },
   readerEyebrow: { fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase" },
   readerTitle: { fontSize: 26, fontWeight: "700", marginTop: 8 },
   readerMeta: { fontSize: 13, marginTop: 6 },
   paragraphs: { gap: 18, marginTop: 24 },
+  paragraph: { borderRadius: 8, marginHorizontal: -6, paddingHorizontal: 6, paddingVertical: 3 },
+  speechError: { fontSize: 12, marginTop: 12 },
   nav: {
     flexDirection: "row",
     justifyContent: "space-between",

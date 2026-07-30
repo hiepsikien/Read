@@ -1,9 +1,15 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from functools import lru_cache
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from nanoid import generate
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -14,31 +20,156 @@ from .models import User
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
+_firebase_app = None
+
+
+@dataclass(frozen=True)
+class TokenClaims:
+    uid: str
+    email: str
+    name: str
+
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def verify_password(password: str, password_hash: str) -> bool:
+def verify_password(password: str, password_hash: str | None) -> bool:
+    if not password_hash:
+        return False
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(user: User) -> str:
+def _init_firebase() -> Any | None:
+    global _firebase_app
     settings = get_settings()
-    expire = datetime.now(timezone.utc) + timedelta(hours=settings.jwt_expire_hours)
-    payload = {
-        "sub": user.id,
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "exp": expire,
-    }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    if not settings.firebase_enabled:
+        return None
+    if _firebase_app is not None:
+        return _firebase_app
+
+    import firebase_admin
+    from firebase_admin import credentials
+
+    if firebase_admin._apps:
+        _firebase_app = firebase_admin.get_app()
+        return _firebase_app
+
+    cred: credentials.Base
+    raw = settings.firebase_credentials_json.strip()
+    if raw:
+        if raw.startswith("{"):
+            cred = credentials.Certificate(json.loads(raw))
+        else:
+            cred = credentials.Certificate(raw)
+    else:
+        cred = credentials.ApplicationDefault()
+
+    _firebase_app = firebase_admin.initialize_app(
+        cred, {"projectId": settings.firebase_project_id}
+    )
+    return _firebase_app
 
 
-def decode_token(token: str) -> dict:
+def verify_id_token(token: str) -> TokenClaims:
+    """Verify a Firebase ID token, or a local stand-in when auth_dev_mode is on."""
     settings = get_settings()
-    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    if settings.firebase_enabled:
+        _init_firebase()
+        from firebase_admin import auth as firebase_auth
+
+        try:
+            decoded = firebase_auth.verify_id_token(token)
+        except Exception as exc:  # firebase-admin raises its own error types
+            raise HTTPException(
+                status_code=401, detail="Invalid or expired session."
+            ) from exc
+        email = (decoded.get("email") or "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=401, detail="Authenticated email is required.")
+        name = (
+            (decoded.get("name") or "").strip()
+            or email.split("@")[0]
+        )
+        return TokenClaims(uid=str(decoded["uid"]), email=email, name=name)
+
+    if not settings.auth_dev_mode:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase is not configured. Set FIREBASE_PROJECT_ID or AUTH_DEV_MODE=true.",
+        )
+
+    try:
+        payload = jwt.decode(
+            token,
+            settings.auth_dev_secret,
+            algorithms=["HS256"],
+        )
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.") from exc
+
+    uid = str(payload.get("uid") or payload.get("sub") or "").strip()
+    email = str(payload.get("email") or "").strip().lower()
+    name = str(payload.get("name") or "").strip() or (email.split("@")[0] if email else "Reader")
+    if not uid or not email:
+        raise HTTPException(status_code=401, detail="Invalid session claims.")
+    return TokenClaims(uid=uid, email=email, name=name)
+
+
+def mint_dev_id_token(*, uid: str, email: str, name: str) -> str:
+    """Local-only stand-in for Firebase ID tokens used in development and tests."""
+    settings = get_settings()
+    if not settings.auth_dev_mode:
+        raise RuntimeError("Dev tokens are disabled.")
+    expire = datetime.now(timezone.utc) + timedelta(days=14)
+    return jwt.encode(
+        {
+            "uid": uid,
+            "sub": uid,
+            "email": email.lower(),
+            "name": name,
+            "exp": expire,
+        },
+        settings.auth_dev_secret,
+        algorithm="HS256",
+    )
+
+
+def resolve_role_for_email(email: str, current_role: str | None = None) -> str:
+    settings = get_settings()
+    if email.lower() in settings.admin_email_set:
+        return "admin"
+    if current_role in {"publisher", "admin"}:
+        return current_role
+    return current_role or "reader"
+
+
+def upsert_user_from_claims(db: Session, claims: TokenClaims) -> User:
+    user = (
+        db.query(User).filter(User.firebase_uid == claims.uid).one_or_none()
+        or db.query(User).filter(User.email == claims.email).one_or_none()
+    )
+    now = datetime.now(timezone.utc)
+    if user is None:
+        user = User(
+            id=generate(),
+            firebase_uid=claims.uid,
+            email=claims.email,
+            name=claims.name,
+            role=resolve_role_for_email(claims.email),
+            password_hash=None,
+            created_at=now,
+        )
+        db.add(user)
+    else:
+        user.firebase_uid = claims.uid
+        user.email = claims.email
+        if claims.name:
+            user.name = claims.name
+        user.role = resolve_role_for_email(claims.email, user.role)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def get_current_user_optional(
@@ -48,13 +179,10 @@ def get_current_user_optional(
     if not credentials:
         return None
     try:
-        payload = decode_token(credentials.credentials)
-        user_id = payload.get("sub")
-        if not user_id:
-            return None
-    except JWTError:
+        claims = verify_id_token(credentials.credentials)
+    except HTTPException:
         return None
-    return db.get(User, user_id)
+    return upsert_user_from_claims(db, claims)
 
 
 def get_current_user(
@@ -68,8 +196,16 @@ def get_current_user(
 def require_publisher(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    if user.role != "publisher":
+    if user.role not in {"publisher", "admin"}:
         raise HTTPException(status_code=403, detail="Publisher login required.")
+    return user
+
+
+def require_admin(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin login required.")
     return user
 
 
@@ -80,3 +216,10 @@ def session_user(user: User) -> dict:
         "name": user.name,
         "role": user.role,
     }
+
+
+@lru_cache
+def _warmup() -> None:
+    settings = get_settings()
+    if settings.firebase_enabled:
+        _init_firebase()

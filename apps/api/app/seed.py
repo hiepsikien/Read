@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
+from .categories import ensure_categories
 from .chapters import count_words
 from .models import Book, Chapter, User
 
@@ -88,6 +89,9 @@ SAMPLE_PAID = [
 
 
 def seed_if_empty(db: Session) -> None:
+    categories = ensure_categories(db)
+    fiction = next((c for c in categories if c.slug == "fiction"), categories[0])
+
     count = db.scalar(select(func.count()).select_from(User)) or 0
     if count > 0:
         return
@@ -95,11 +99,13 @@ def seed_if_empty(db: Session) -> None:
     now = datetime.now(timezone.utc)
     publisher_id = generate()
     reader_id = generate()
+    admin_id = generate()
     free_book_id = generate()
     paid_book_id = generate()
 
     publisher = User(
         id=publisher_id,
+        firebase_uid=f"dev-{publisher_id}",
         email="publisher@read.app",
         name="North Harbor Press",
         role="publisher",
@@ -108,13 +114,23 @@ def seed_if_empty(db: Session) -> None:
     )
     reader = User(
         id=reader_id,
+        firebase_uid=f"dev-{reader_id}",
         email="reader@read.app",
         name="Alex Reader",
         role="reader",
         password_hash=hash_password("reader123"),
         created_at=now,
     )
-    db.add_all([publisher, reader])
+    admin = User(
+        id=admin_id,
+        firebase_uid=f"dev-{admin_id}",
+        email="admin@read.app",
+        name="Read Admin",
+        role="admin",
+        password_hash=hash_password("admin123"),
+        created_at=now,
+    )
+    db.add_all([publisher, reader, admin])
 
     free_text = "\n\n".join(f"{c['title']}\n\n{c['content']}" for c in SAMPLE_FREE)
     paid_text = "\n\n".join(f"{c['title']}\n\n{c['content']}" for c in SAMPLE_PAID)
@@ -122,6 +138,7 @@ def seed_if_empty(db: Session) -> None:
     free_book = Book(
         id=free_book_id,
         publisher_id=publisher_id,
+        category_id=fiction.id,
         title="Letters from the Quiet Coast",
         description=(
             "A short free collection of coastal sketches — mornings, harbors, and the people who wait for the tide."
@@ -137,6 +154,7 @@ def seed_if_empty(db: Session) -> None:
     paid_book = Book(
         id=paid_book_id,
         publisher_id=publisher_id,
+        category_id=fiction.id,
         title="The Cartographer's Apprentice",
         description=(
             "A paid novella about maps that refuse to stay still. Chapter 1 is free; unlock the rest with a mock purchase."

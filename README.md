@@ -10,7 +10,7 @@ Mobile-friendly book reading product with **web**, **native (Expo/React Native)*
 |-----|------|------|
 | Web | `apps/web` | Next.js — full MVP library / reader / publisher |
 | API | `apps/api` | FastAPI + PostgreSQL — auth, books, split, purchase |
-| Mobile | `apps/mobile` | Expo (iOS + Android) — reader flow + publisher upload/split/publish |
+| Mobile | `apps/mobile` | Expo (iOS + Android) — reader + publisher + admin moderation |
 
 Shared typed client: `packages/api-client`.
 
@@ -20,6 +20,9 @@ Shared typed client: `packages/api-client`.
 |------|-------|----------|
 | Reader | `reader@read.app` | `reader123` |
 | Publisher | `publisher@read.app` | `publisher123` |
+| Admin | `admin@read.app` | `admin123` |
+
+Local auth uses `AUTH_DEV_MODE` stand-in tokens until Firebase is configured (`FIREBASE_PROJECT_ID` + credentials). Mobile also accepts real Firebase email/password when `EXPO_PUBLIC_FIREBASE_*` is set.
 
 ## Run locally
 
@@ -35,6 +38,7 @@ docker compose up -d db
 python3 -m venv apps/api/.venv
 apps/api/.venv/bin/pip install -r apps/api/requirements.txt
 cp apps/api/.env.example apps/api/.env
+cd apps/api && .venv/bin/alembic upgrade head
 cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
@@ -50,7 +54,7 @@ npm run dev:web
 
 Open http://localhost:3000.
 
-### 4. Mobile (reader MVP)
+### 4. Mobile (reader + publisher + admin)
 
 ```bash
 cd apps/mobile
@@ -65,7 +69,7 @@ Mobile is intentionally **outside** the npm workspaces (Expo + Next conflict on 
 ## Scripts
 
 ```bash
-npm run api:test   # pytest — chapter split + access rules
+npm run api:test   # pytest — split, auth, moderation, DOCX policy
 npm run build      # Next.js production build
 ```
 
@@ -74,10 +78,12 @@ npm run build      # Next.js production build
 - **Web:** Next.js 15 (App Router) + TypeScript + Tailwind
 - **Mobile:** React Native via Expo (cross-platform iOS/Android)
 - **API:** FastAPI + SQLAlchemy + Alembic + PostgreSQL
-- **Auth:** JWT Bearer (web + mobile)
-- **Docs:** `pdf` / `docx` text extract; smart chapter split on the API
+- **Auth:** Firebase ID tokens (with local AUTH_DEV_MODE stand-in)
+- **Docs:** DOCX only (original manuscripts); smart chapter split on the API
+- **Moderation:** draft → pending_review → published/rejected
 - **Payments:** mock purchase (no Stripe yet)
 
 ## Docs
 
 - [docs/PROJECT.md](./docs/PROJECT.md) — product goals, MVP decisions, architecture, phases
+- [docs/FIREBASE_SETUP.md](./docs/FIREBASE_SETUP.md) — Firebase Console, Expo, and FastAPI setup

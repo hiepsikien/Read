@@ -13,7 +13,7 @@
 
 Cho phép:
 
-1. **Publisher** upload tài liệu **PDF** hoặc **DOCX**
+1. **Publisher** upload tài liệu **DOCX** (original manuscript)
 2. Tự động chia thành các **đoạn đọc (reading segments)** một cách thông minh
 3. Chọn sách **Free** hoặc **Paid**
 4. **Reader** đọc free ngay; sách trả phí phải mua (mock payment)
@@ -28,13 +28,16 @@ Cho phép:
 | Tên | **Read** |
 | Clients | **Web (Next.js)** + **Mobile (React Native / Expo, iOS+Android)** |
 | Backend | **FastAPI** + **PostgreSQL** (tách khỏi Next) |
-| Auth | **JWT Bearer** (web + mobile dùng chung) |
-| Định dạng upload | **PDF + DOCX** (không hỗ trợ DOC cũ) |
+| Auth | **Firebase ID token** (AUTH_DEV_MODE stand-in khi chưa cấu hình Firebase) |
+| Định dạng upload | **DOCX only** (PDF bị khóa để giữ styling/original content) |
+| Vai trò | `reader` \| `publisher` \| `admin` |
+| Publish | Author submit review → admin approve/reject |
+| Category | Một primary category bắt buộc trước khi submit |
+| Định dạng nội dung lúc này | **Markdown nhẹ** — DOCX giữ bold/italic |
 | Thanh toán | **Mock** (ghi purchase trong DB, chưa Stripe) |
 | Ngôn ngữ UI | **Tiếng Anh trước** |
 | Preview sách trả phí | **Cả logical Chapter 1** miễn phí (mọi đoạn thuộc chapter 1) |
 | Nơi đọc | **Trong app** — text/chapter reader, không mở file gốc bên ngoài |
-| Định dạng nội dung lúc này | **Markdown nhẹ** — DOCX giữ bold/italic; PDF vẫn plain text |
 
 ---
 
@@ -54,18 +57,24 @@ Cho phép:
   - Prev / Next giữa các đoạn
 
 ### Publisher
-- Đăng nhập role publisher
-- Upload PDF/DOCX + title, description, Free/Paid (+ giá)
+- Đăng nhập role publisher (hoặc bật author mode từ reader)
+- Upload **DOCX** + title, description, category, Free/Paid (+ giá)
 - Server extract text từ file
 - Nút **Auto-split into reading segments**
-- Xem danh sách đoạn đã chia → **Publish to library**
-- Quản lý sách của mình
+- **Submit for review** (không tự publish)
+- Quản lý sách của mình; chỉnh lại khi bị reject
+
+### Admin (mobile-first)
+- Queue sách `pending_review`
+- Preview metadata/chapters
+- Approve → published, hoặc Reject + note
 
 ### Auth (demo)
 | Role | Email | Password |
 |------|-------|----------|
 | Reader | `reader@read.app` | `reader123` |
 | Publisher | `publisher@read.app` | `publisher123` |
+| Admin | `admin@read.app` | `admin123` |
 
 ---
 

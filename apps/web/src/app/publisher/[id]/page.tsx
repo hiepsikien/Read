@@ -89,20 +89,23 @@ export default function ManageBookPage() {
     }
   }
 
-  async function publish() {
-    setBusy("publish");
+  async function submitForReview() {
+    setBusy("submit");
     setMessage("");
     setError("");
     try {
-      await createBrowserApi().publishBook(params.id);
-      setMessage("Book published to the library.");
+      await createBrowserApi().submitReview(params.id);
+      setMessage("Submitted for admin review.");
       await load();
-      router.refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Publish failed.");
+      setError(err instanceof ApiError ? err.message : "Submit failed.");
     } finally {
       setBusy("");
     }
+  }
+
+  async function publish() {
+    return submitForReview();
   }
 
   if (error && !data) {
@@ -245,7 +248,7 @@ export default function ManageBookPage() {
           disabled={data.chapters.length === 0 || busy === "publish"}
           className="rounded-lg bg-[var(--ink)] px-4 py-2.5 text-sm font-medium text-[var(--paper)] disabled:opacity-50"
         >
-          {busy === "publish" ? "Publishing…" : "Publish to library"}
+          {busy === "publish" || busy === "submit" ? "Submitting…" : "Submit for review"}
         </button>
         {data.book.status === "published" && data.chapters[0] && (
           <Link

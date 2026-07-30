@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -9,12 +9,14 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
-import { ApiError } from "@read/api-client";
+import { ApiError, type Category } from "@read/api-client";
 import { FormScroll } from "../../components/FormScroll";
 import { useAuth } from "../../lib/auth";
 import { colors } from "../../lib/theme";
 
 type PickedFile = { uri: string; name: string; mimeType?: string };
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export default function NewBookScreen() {
   const router = useRouter();
@@ -23,21 +25,41 @@ export default function NewBookScreen() {
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryId, setCategoryId] = useState("");
   const [file, setFile] = useState<PickedFile | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listCategories()
+      .then((data) => {
+        if (cancelled) return;
+        setCategories(data.categories);
+        if (data.categories[0]) setCategoryId(data.categories[0].id);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Could not load categories.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
   async function pickFile() {
     const result = await DocumentPicker.getDocumentAsync({
-      type: [
-        "application/pdf",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      ],
+      type: [DOCX_MIME],
       copyToCacheDirectory: true,
     });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setFile({ uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
+    if (!asset.name.toLowerCase().endsWith(".docx")) {
+      setError("Only DOCX manuscripts are supported.");
+      return;
+    }
+    setFile({ uri: asset.uri, name: asset.name, mimeType: asset.mimeType || DOCX_MIME });
     setError("");
   }
 
@@ -46,8 +68,12 @@ export default function NewBookScreen() {
       setError("Title is required.");
       return;
     }
+    if (!categoryId) {
+      setError("Choose a category.");
+      return;
+    }
     if (!file) {
-      setError("Choose a PDF or DOCX file.");
+      setError("Choose a DOCX manuscript.");
       return;
     }
 
@@ -59,10 +85,11 @@ export default function NewBookScreen() {
     form.append("description", description.trim());
     form.append("pricing", pricing);
     form.append("price", price);
+    form.append("category_id", categoryId);
     form.append("file", {
       uri: file.uri,
-      name: file.name,
-      type: file.mimeType || guessMime(file.name),
+      name: file.name.endsWith(".docx") ? file.name : `${file.name}.docx`,
+      type: file.mimeType || DOCX_MIME,
     } as unknown as Blob);
 
     try {
@@ -79,7 +106,8 @@ export default function NewBookScreen() {
     <FormScroll contentContainerStyle={styles.container}>
       <Text style={styles.title}>Upload a book</Text>
       <Text style={styles.sub}>
-        PDF or DOCX only. After upload you can auto-split chapters and publish.
+        Original manuscripts only — DOCX keeps your bold/italic styling. After upload you can
+        auto-split chapters and submit for review.
       </Text>
 
       <Text style={styles.label}>Title</Text>
@@ -101,6 +129,24 @@ export default function NewBookScreen() {
         multiline
         numberOfLines={4}
       />
+
+      <Text style={styles.label}>Category</Text>
+      <View style={styles.categoryWrap}>
+        {categories.map((category) => {
+          const active = categoryId === category.id;
+          return (
+            <Pressable
+              key={category.id}
+              style={[styles.categoryChip, active && styles.categoryChipActive]}
+              onPress={() => setCategoryId(category.id)}
+            >
+              <Text style={[styles.categoryText, active && styles.categoryTextActive]}>
+                {category.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       <Text style={styles.label}>Pricing</Text>
       <View style={styles.pricingRow}>
@@ -133,9 +179,9 @@ export default function NewBookScreen() {
         </>
       ) : null}
 
-      <Text style={styles.label}>Manuscript</Text>
+      <Text style={styles.label}>Manuscript (DOCX)</Text>
       <Pressable style={styles.fileBtn} onPress={pickFile}>
-        <Text style={styles.fileBtnText}>{file ? file.name : "Choose PDF or DOCX"}</Text>
+        <Text style={styles.fileBtnText}>{file ? file.name : "Choose DOCX file"}</Text>
       </Pressable>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -149,14 +195,6 @@ export default function NewBookScreen() {
       </Pressable>
     </FormScroll>
   );
-}
-
-function guessMime(name: string) {
-  if (name.toLowerCase().endsWith(".pdf")) return "application/pdf";
-  if (name.toLowerCase().endsWith(".docx")) {
-    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  }
-  return "application/octet-stream";
 }
 
 const styles = StyleSheet.create({
@@ -182,6 +220,18 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   multiline: { minHeight: 96, textAlignVertical: "top" },
+  categoryWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 },
+  categoryChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  categoryChipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
+  categoryText: { color: colors.ink, fontSize: 13, fontWeight: "600" },
+  categoryTextActive: { color: "#fff" },
   pricingRow: { flexDirection: "row", gap: 10, marginTop: 6 },
   choice: {
     flex: 1,

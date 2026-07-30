@@ -1,38 +1,90 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from nanoid import generate
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth import (
-    create_access_token,
+    get_current_user,
     get_current_user_optional,
+    hash_password,
+    mint_dev_id_token,
+    resolve_role_for_email,
     session_user,
     verify_password,
 )
+from ..config import get_settings
 from ..db import get_db
 from ..models import User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-class LoginBody(BaseModel):
+class DevLoginBody(BaseModel):
     email: str = Field(min_length=1)
     password: str = Field(min_length=1)
+    name: str | None = None
 
 
-@router.post("/login")
-def login(body: LoginBody, db: Annotated[Session, Depends(get_db)]):
+class EnableAuthorBody(BaseModel):
+    enabled: bool = True
+
+
+@router.post("/dev-login")
+def dev_login(body: DevLoginBody, db: Annotated[Session, Depends(get_db)]):
+    """Local stand-in for Firebase email/password when AUTH_DEV_MODE is enabled."""
+    settings = get_settings()
+    if settings.firebase_enabled or not settings.auth_dev_mode:
+        raise HTTPException(
+            status_code=404,
+            detail="Dev login is disabled when Firebase is configured.",
+        )
+
     email = body.email.strip().lower()
     password = body.password
+    name = (body.name or "").strip() or email.split("@")[0]
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required.")
 
-    user = db.query(User).filter(User.email == email).one_or_none()
-    if not user or not verify_password(password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    from datetime import datetime, timezone
 
-    token = create_access_token(user)
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if user and user.password_hash:
+        if not verify_password(password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
+        uid = user.firebase_uid or f"dev-{user.id}"
+        user.firebase_uid = uid
+        if name and not user.name:
+            user.name = name
+        user.role = resolve_role_for_email(email, user.role)
+        db.commit()
+        db.refresh(user)
+    elif user:
+        raise HTTPException(
+            status_code=401,
+            detail="This account has no local password. Use Firebase Auth.",
+        )
+    else:
+        uid = f"dev-{generate()}"
+        user = User(
+            id=generate(),
+            firebase_uid=uid,
+            email=email,
+            name=name,
+            role=resolve_role_for_email(email),
+            password_hash=hash_password(password),
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    token = mint_dev_id_token(
+        uid=user.firebase_uid or f"dev-{user.id}",
+        email=user.email,
+        name=user.name,
+    )
     return {"user": session_user(user), "token": token}
 
 
@@ -44,3 +96,17 @@ def logout():
 @router.get("/me")
 def me(user: Annotated[User | None, Depends(get_current_user_optional)]):
     return {"user": session_user(user) if user else None}
+
+
+@router.post("/enable-author")
+def enable_author(
+    body: EnableAuthorBody,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    if user.role == "admin":
+        return {"user": session_user(user)}
+    user.role = "publisher" if body.enabled else "reader"
+    db.commit()
+    db.refresh(user)
+    return {"user": session_user(user)}

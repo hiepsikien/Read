@@ -40,6 +40,11 @@ yarn-error.log*
 !.env.example
 !.env*.example
 
+# Firebase Admin credentials (server secret)
+apps/api/firebase-service-account.json
+*service-account*.json
+*firebase-adminsdk*.json
+
 # vercel
 .vercel
 

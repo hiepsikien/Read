@@ -13,7 +13,7 @@ import { ApiError, type BookListItem } from "@read/api-client";
 import { useAuth } from "../../lib/auth";
 import { colors, formatPrice } from "../../lib/theme";
 
-export default function PublisherHome() {
+export default function AdminQueueScreen() {
   const router = useRouter();
   const { user, api, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
@@ -24,10 +24,10 @@ export default function PublisherHome() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const data = await api.listBooks({ mine: true });
+      const data = await api.adminQueue();
       setBooks(data.books);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load books.");
+      setError(err instanceof ApiError ? err.message : "Could not load queue.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -41,7 +41,7 @@ export default function PublisherHome() {
         router.replace("/login");
         return;
       }
-      if (user.role !== "publisher" && user.role !== "admin") {
+      if (user.role !== "admin") {
         router.replace("/");
         return;
       }
@@ -71,33 +71,33 @@ export default function PublisherHome() {
         />
       }
     >
-      <Stack.Screen options={{ title: "Publisher" }} />
-      <Text style={styles.eyebrow}>Publisher</Text>
-      <Text style={styles.title}>Your books</Text>
+      <Stack.Screen options={{ title: "Admin" }} />
+      <Text style={styles.eyebrow}>Moderation</Text>
+      <Text style={styles.title}>Review queue</Text>
       <Text style={styles.sub}>
-        Upload a DOCX manuscript, auto-split into chapters, then submit for review.
+        Approve original manuscripts for the public library, or reject with a clear note for the author.
       </Text>
-
-      <Pressable style={styles.primaryBtn} onPress={() => router.push("/publisher/new")}>
-        <Text style={styles.primaryBtnText}>Upload book</Text>
-      </Pressable>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <View style={styles.list}>
         {books.length === 0 ? (
-          <Text style={styles.meta}>No books yet. Upload your first manuscript.</Text>
+          <Text style={styles.meta}>No books waiting for review.</Text>
         ) : (
           books.map((book) => (
             <Pressable
               key={book.id}
               style={styles.row}
-              onPress={() => router.push(`/publisher/${book.id}`)}
+              onPress={() => router.push(`/admin/${book.id}`)}
             >
               <Text style={styles.rowTitle}>{book.title}</Text>
               <Text style={styles.rowMeta}>
-                {book.status} · {book.chapter_count} chapters · {formatPrice(book.price_cents)}
+                {book.category?.label ? `${book.category.label} · ` : ""}
+                {book.publisher_name} · {formatPrice(book.price_cents)} · {book.chapter_count} chapters
               </Text>
+              {book.submitted_at ? (
+                <Text style={styles.rowMeta}>Submitted {new Date(book.submitted_at).toLocaleString()}</Text>
+              ) : null}
             </Pressable>
           ))
         )}
@@ -118,16 +118,8 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 32, fontWeight: "700", color: colors.ink, marginTop: 4 },
   sub: { color: colors.inkSoft, lineHeight: 21, marginTop: 6, marginBottom: 8 },
-  primaryBtn: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.sage,
-    paddingVertical: 11,
-    paddingHorizontal: 18,
-    borderRadius: 10,
-  },
-  primaryBtnText: { color: "#fff", fontWeight: "600" },
   list: {
-    marginTop: 16,
+    marginTop: 8,
     backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,

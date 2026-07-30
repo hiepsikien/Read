@@ -1,0 +1,297 @@
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+from nanoid import generate
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.auth import hash_password, mint_dev_id_token, resolve_role_for_email, verify_id_token
+from app.categories import CATEGORY_SEED, ensure_categories
+from app.db import Base, get_db
+from app.main import app
+from app.models import Book, Chapter, User
+
+
+@pytest.fixture()
+def db_session():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.fixture()
+def client(db_session):
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def seeded(db_session):
+    categories = ensure_categories(db_session)
+    now = datetime.now(timezone.utc)
+    publisher = User(
+        id=generate(),
+        firebase_uid=f"dev-{generate()}",
+        email="author@example.com",
+        name="Author",
+        role="publisher",
+        password_hash=hash_password("password123"),
+        created_at=now,
+    )
+    admin = User(
+        id=generate(),
+        firebase_uid=f"dev-{generate()}",
+        email="admin@read.app",
+        name="Admin",
+        role="admin",
+        password_hash=hash_password("admin123"),
+        created_at=now,
+    )
+    reader = User(
+        id=generate(),
+        firebase_uid=f"dev-{generate()}",
+        email="reader@example.com",
+        name="Reader",
+        role="reader",
+        password_hash=hash_password("reader123"),
+        created_at=now,
+    )
+    db_session.add_all([publisher, admin, reader])
+    db_session.commit()
+    return {
+        "categories": categories,
+        "publisher": publisher,
+        "admin": admin,
+        "reader": reader,
+        "fiction": next(c for c in categories if c.slug == "fiction"),
+    }
+
+
+def auth_header(user: User) -> dict[str, str]:
+    token = mint_dev_id_token(
+        uid=user.firebase_uid or f"dev-{user.id}",
+        email=user.email,
+        name=user.name,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_dev_token_round_trip():
+    token = mint_dev_id_token(uid="uid-1", email="a@read.app", name="Ada")
+    claims = verify_id_token(token)
+    assert claims.uid == "uid-1"
+    assert claims.email == "a@read.app"
+    assert claims.name == "Ada"
+
+
+def test_admin_email_resolves_to_admin_role():
+    assert resolve_role_for_email("admin@read.app") == "admin"
+    assert resolve_role_for_email("reader@example.com") == "reader"
+    assert resolve_role_for_email("reader@example.com", "publisher") == "publisher"
+
+
+def test_category_seed_is_stable(db_session):
+    first = ensure_categories(db_session)
+    second = ensure_categories(db_session)
+    assert len(first) == len(CATEGORY_SEED)
+    assert [c.slug for c in first] == [c.slug for c in second]
+
+
+def test_dev_login_and_me(client, seeded):
+    response = client.post(
+        "/api/auth/dev-login",
+        json={"email": "author@example.com", "password": "password123"},
+    )
+    assert response.status_code == 200
+    token = response.json()["token"]
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["user"]["email"] == "author@example.com"
+    assert me.json()["user"]["role"] == "publisher"
+
+
+def test_enable_author(client, seeded):
+    reader = seeded["reader"]
+    response = client.post(
+        "/api/auth/enable-author",
+        headers=auth_header(reader),
+        json={"enabled": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["role"] == "publisher"
+
+
+def test_rejects_pdf_upload(client, seeded, tmp_path):
+    publisher = seeded["publisher"]
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    with pdf.open("rb") as handle:
+        response = client.post(
+            "/api/books",
+            headers=auth_header(publisher),
+            data={
+                "title": "PDF Attempt",
+                "description": "Nope",
+                "pricing": "free",
+                "category_id": seeded["fiction"].id,
+            },
+            files={
+                "file": (
+                    "book.pdf",
+                    handle,
+                    "application/pdf",
+                )
+            },
+        )
+    assert response.status_code == 400
+    assert "DOCX" in response.json()["error"]
+
+
+def test_submit_review_requires_category(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    now = datetime.now(timezone.utc)
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=None,
+        title="Incomplete",
+        description="",
+        price_cents=0,
+        status="draft",
+        raw_text="Hello world",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(book)
+    db_session.commit()
+
+    response = client.post(
+        f"/api/books/{book.id}/submit-review",
+        headers=auth_header(publisher),
+    )
+    assert response.status_code == 400
+
+
+def test_moderation_approve_flow(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    now = datetime.now(timezone.utc)
+
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Ready Book",
+        description="A story",
+        price_cents=0,
+        status="draft",
+        raw_text="Chapter body",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(book)
+    db_session.flush()
+    db_session.add(
+        Chapter(
+            id=generate(),
+            book_id=book.id,
+            position=1,
+            title="Chapter 1",
+            content="Once upon a time.",
+            word_count=4,
+            group_index=1,
+        )
+    )
+    db_session.commit()
+
+    submit = client.post(
+        f"/api/books/{book.id}/submit-review",
+        headers=auth_header(publisher),
+    )
+    assert submit.status_code == 200
+    assert submit.json()["status"] == "pending_review"
+
+    queue = client.get("/api/admin/queue", headers=auth_header(admin))
+    assert queue.status_code == 200
+    assert any(item["id"] == book.id for item in queue.json()["books"])
+
+    approve = client.post(
+        f"/api/admin/books/{book.id}/approve",
+        headers=auth_header(admin),
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "published"
+
+    library = client.get("/api/books")
+    assert any(item["id"] == book.id for item in library.json()["books"])
+
+
+def test_reject_requires_note(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    now = datetime.now(timezone.utc)
+
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Needs Work",
+        description="",
+        price_cents=0,
+        status="pending_review",
+        raw_text="body",
+        created_at=now,
+        updated_at=now,
+        submitted_at=now,
+    )
+    db_session.add(book)
+    db_session.flush()
+    db_session.add(
+        Chapter(
+            id=generate(),
+            book_id=book.id,
+            position=1,
+            title="Chapter 1",
+            content="Text",
+            word_count=1,
+            group_index=1,
+        )
+    )
+    db_session.commit()
+
+    bad = client.post(
+        f"/api/admin/books/{book.id}/reject",
+        headers=auth_header(admin),
+        json={"note": "no"},
+    )
+    assert bad.status_code == 400
+
+    ok = client.post(
+        f"/api/admin/books/{book.id}/reject",
+        headers=auth_header(admin),
+        json={"note": "Please fix formatting and resubmit."},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "rejected"

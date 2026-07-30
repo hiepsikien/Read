@@ -27,6 +27,8 @@ export default function RootLayout() {
           <Stack.Screen name="publisher/index" options={{ title: "Publisher" }} />
           <Stack.Screen name="publisher/new" options={{ title: "Upload book" }} />
           <Stack.Screen name="publisher/[id]" options={{ title: "Manage book" }} />
+          <Stack.Screen name="admin/index" options={{ title: "Admin" }} />
+          <Stack.Screen name="admin/[id]" options={{ title: "Review book" }} />
         </Stack>
       </ReaderPreferencesProvider>
     </AuthProvider>

@@ -12,6 +12,7 @@ import {
   ApiError,
   SPLIT_LENGTH_OPTIONS,
   type BookDetail,
+  type Category,
   type ChapterListItem,
   type SplitLength,
 } from "@read/api-client";
@@ -26,26 +27,35 @@ export default function ManageBookScreen() {
 
   const [book, setBook] = useState<BookDetail | null>(null);
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [categoryId, setCategoryId] = useState("");
   const [splitLength, setSplitLength] = useState<SplitLength>("standard");
-  const [busy, setBusy] = useState<"" | "save" | "split" | "publish">("");
+  const [busy, setBusy] = useState<"" | "save" | "split" | "submit">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  const locked = book?.status === "pending_review" || book?.status === "published";
 
   const load = useCallback(async () => {
     if (!id) return;
     setError("");
     try {
-      const data = await api.getBook(id);
+      const [data, categoryPayload] = await Promise.all([
+        api.getBook(id),
+        api.listCategories(),
+      ]);
       setBook(data.book);
       setChapters(data.chapters);
+      setCategories(categoryPayload.categories);
       setTitle(data.book.title);
       setDescription(data.book.description);
       setPricing(data.book.price_cents > 0 ? "paid" : "free");
       setPrice(((data.book.price_cents || 499) / 100).toFixed(2));
+      setCategoryId(data.book.category?.id || categoryPayload.categories[0]?.id || "");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
     }
@@ -62,7 +72,13 @@ export default function ManageBookScreen() {
     setMessage("");
     setError("");
     try {
-      await api.updateBook(id!, { title, description, pricing, price: Number(price) });
+      await api.updateBook(id!, {
+        title,
+        description,
+        pricing,
+        price: Number(price),
+        category_id: categoryId,
+      });
       setMessage("Details saved.");
       await load();
     } catch (err) {
@@ -87,16 +103,16 @@ export default function ManageBookScreen() {
     }
   }
 
-  async function publish() {
-    setBusy("publish");
+  async function submit() {
+    setBusy("submit");
     setMessage("");
     setError("");
     try {
-      await api.publishBook(id!);
-      setMessage("Book published to the library.");
+      await api.submitReview(id!);
+      setMessage("Submitted for admin review.");
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Publish failed.");
+      setError(err instanceof ApiError ? err.message : "Submit failed.");
     } finally {
       setBusy("");
     }
@@ -116,34 +132,65 @@ export default function ManageBookScreen() {
       <Text style={styles.title}>{book.title}</Text>
       <Text style={styles.sub}>
         {book.status} · {formatPrice(book.price_cents)}
+        {book.category ? ` · ${book.category.label}` : ""}
         {book.source_filename ? ` · ${book.source_filename}` : ""}
       </Text>
+      {book.status === "rejected" && book.review_note ? (
+        <Text style={styles.rejectNote}>Rejected: {book.review_note}</Text>
+      ) : null}
+      {book.status === "pending_review" ? (
+        <Text style={styles.pendingNote}>Waiting for admin review. Editing is locked.</Text>
+      ) : null}
 
       <Text style={styles.section}>Details</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, locked && styles.disabledInput]}
         value={title}
         onChangeText={setTitle}
+        editable={!locked}
         placeholder="Title"
         placeholderTextColor={colors.inkSoft}
       />
       <TextInput
-        style={[styles.input, styles.multiline]}
+        style={[styles.input, styles.multiline, locked && styles.disabledInput]}
         value={description}
         onChangeText={setDescription}
+        editable={!locked}
         placeholder="Description"
         placeholderTextColor={colors.inkSoft}
         multiline
       />
+
+      <Text style={styles.label}>Category</Text>
+      <View style={styles.categoryWrap}>
+        {categories.map((category) => {
+          const active = categoryId === category.id;
+          return (
+            <Pressable
+              key={category.id}
+              disabled={locked}
+              style={[styles.categoryChip, active && styles.categoryChipActive, locked && styles.disabled]}
+              onPress={() => setCategoryId(category.id)}
+            >
+              <Text style={[styles.categoryText, active && styles.categoryTextActive]}>
+                {category.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
       <View style={styles.pricingRow}>
         <Pressable
-          style={[styles.choice, pricing === "free" && styles.choiceActive]}
+          style={[styles.choice, pricing === "free" && styles.choiceActive, locked && styles.disabled]}
+          disabled={locked}
           onPress={() => setPricing("free")}
         >
           <Text style={[styles.choiceText, pricing === "free" && styles.choiceTextActive]}>Free</Text>
         </Pressable>
         <Pressable
-          style={[styles.choice, pricing === "paid" && styles.choiceActive]}
+          style={[styles.choice, pricing === "paid" && styles.choiceActive, locked && styles.disabled]}
+          disabled={locked}
           onPress={() => setPricing("paid")}
         >
           <Text style={[styles.choiceText, pricing === "paid" && styles.choiceTextActive]}>Paid</Text>
@@ -151,18 +198,19 @@ export default function ManageBookScreen() {
       </View>
       {pricing === "paid" ? (
         <TextInput
-          style={styles.input}
+          style={[styles.input, locked && styles.disabledInput]}
           value={price}
           onChangeText={setPrice}
+          editable={!locked}
           keyboardType="decimal-pad"
           placeholder="4.99"
           placeholderTextColor={colors.inkSoft}
         />
       ) : null}
       <Pressable
-        style={[styles.secondaryBtn, styles.saveBtn]}
+        style={[styles.secondaryBtn, styles.saveBtn, locked && styles.disabled]}
         onPress={saveMeta}
-        disabled={busy === "save"}
+        disabled={locked || busy === "save"}
       >
         <Text style={styles.secondaryBtnText}>{busy === "save" ? "Saving…" : "Save details"}</Text>
       </Pressable>
@@ -178,7 +226,8 @@ export default function ManageBookScreen() {
           return (
             <Pressable
               key={option.value}
-              style={[styles.choice, active && styles.choiceActive]}
+              disabled={locked}
+              style={[styles.choice, active && styles.choiceActive, locked && styles.disabled]}
               onPress={() => setSplitLength(option.value)}
             >
               <Text style={[styles.choiceText, active && styles.choiceTextActive]}>
@@ -192,9 +241,9 @@ export default function ManageBookScreen() {
         })}
       </View>
       <Pressable
-        style={[styles.primaryBtn, !book.has_raw_text && styles.disabled]}
+        style={[styles.primaryBtn, (!book.has_raw_text || locked) && styles.disabled]}
         onPress={split}
-        disabled={!book.has_raw_text || busy === "split"}
+        disabled={!book.has_raw_text || locked || busy === "split"}
       >
         <Text style={styles.primaryBtnText}>
           {busy === "split" ? "Splitting…" : "Auto-split into reading segments"}
@@ -218,12 +267,19 @@ export default function ManageBookScreen() {
 
       <View style={styles.publishRow}>
         <Pressable
-          style={[styles.publishBtn, chapters.length === 0 && styles.disabled]}
-          onPress={publish}
-          disabled={chapters.length === 0 || busy === "publish"}
+          style={[
+            styles.publishBtn,
+            (chapters.length === 0 || locked || !categoryId) && styles.disabled,
+          ]}
+          onPress={submit}
+          disabled={chapters.length === 0 || locked || !categoryId || busy === "submit"}
         >
           <Text style={styles.publishBtnText}>
-            {busy === "publish" ? "Publishing…" : "Publish to library"}
+            {busy === "submit"
+              ? "Submitting…"
+              : book.status === "rejected"
+                ? "Resubmit for review"
+                : "Submit for review"}
           </Text>
         </Pressable>
         {book.status === "published" && chapters[0] ? (
@@ -247,10 +303,32 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.mist },
   title: { fontSize: 28, fontWeight: "700", color: colors.ink, marginTop: 4 },
   sub: { color: colors.inkSoft, marginTop: 4 },
+  rejectNote: {
+    marginTop: 8,
+    color: colors.danger,
+    backgroundColor: "rgba(155,28,28,0.08)",
+    padding: 12,
+    borderRadius: 10,
+  },
+  pendingNote: {
+    marginTop: 8,
+    color: colors.sageDeep,
+    backgroundColor: "rgba(63,111,92,0.1)",
+    padding: 12,
+    borderRadius: 10,
+  },
   section: {
     marginTop: 20,
     fontSize: 12,
     letterSpacing: 1.3,
+    textTransform: "uppercase",
+    color: colors.inkSoft,
+    fontWeight: "600",
+  },
+  label: {
+    marginTop: 8,
+    fontSize: 12,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
     color: colors.inkSoft,
     fontWeight: "600",
@@ -265,7 +343,20 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: 6,
   },
+  disabledInput: { opacity: 0.6 },
   multiline: { minHeight: 90, textAlignVertical: "top" },
+  categoryWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 },
+  categoryChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  categoryChipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
+  categoryText: { color: colors.ink, fontSize: 13, fontWeight: "600" },
+  categoryTextActive: { color: "#fff" },
   pricingRow: { flexDirection: "row", gap: 10, marginTop: 8 },
   choice: {
     flex: 1,

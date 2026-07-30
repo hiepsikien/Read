@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
-import { ApiError } from "@read/api-client";
+import { FormEvent, useEffect, useState } from "react";
+import { ApiError, type Category } from "@read/api-client";
 import { createBrowserApi } from "@/lib/api";
 
 export default function NewBookPage() {
@@ -12,14 +12,30 @@ export default function NewBookPage() {
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryId, setCategoryId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    void createBrowserApi()
+      .listCategories()
+      .then((data) => {
+        setCategories(data.categories);
+        if (data.categories[0]) setCategoryId(data.categories[0].id);
+      })
+      .catch(() => setError("Could not load categories."));
+  }, []);
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!file) {
-      setError("Choose a PDF or DOCX file.");
+      setError("Choose a DOCX manuscript.");
+      return;
+    }
+    if (!categoryId) {
+      setError("Choose a category.");
       return;
     }
 
@@ -31,6 +47,7 @@ export default function NewBookPage() {
     form.set("description", description);
     form.set("pricing", pricing);
     form.set("price", price);
+    form.set("category_id", categoryId);
     form.set("file", file);
 
     try {
@@ -51,7 +68,7 @@ export default function NewBookPage() {
       </Link>
       <h1 className="brand-mark mt-6 text-4xl font-semibold text-[var(--ink)]">Upload a book</h1>
       <p className="mt-2 text-[var(--ink-soft)]">
-        PDF or DOCX only. After upload you can auto-split chapters and publish for in-app reading.
+        Original DOCX manuscripts only. After upload you can auto-split chapters and submit for review.
       </p>
 
       <form onSubmit={onSubmit} className="surface mt-8 space-y-4 rounded-2xl p-6">
@@ -74,6 +91,26 @@ export default function NewBookPage() {
             className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
           />
         </label>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm text-[var(--ink-soft)]">Category</legend>
+          <div className="flex flex-wrap gap-2">
+            {categories.map((category) => (
+              <button
+                key={category.id}
+                type="button"
+                onClick={() => setCategoryId(category.id)}
+                className={`rounded-full border px-3 py-1.5 text-sm ${
+                  categoryId === category.id
+                    ? "border-[var(--sage)] bg-[var(--sage)] text-white"
+                    : "border-[var(--line)] bg-white/70"
+                }`}
+              >
+                {category.label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
 
         <fieldset className="space-y-3">
           <legend className="text-sm text-[var(--ink-soft)]">Pricing</legend>
@@ -114,11 +151,11 @@ export default function NewBookPage() {
         </fieldset>
 
         <label className="block text-sm">
-          <span className="mb-1.5 block text-[var(--ink-soft)]">Manuscript (PDF or DOCX)</span>
+          <span className="mb-1.5 block text-[var(--ink-soft)]">Manuscript (DOCX)</span>
           <input
             type="file"
-            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="w-full text-sm"
             required
           />
@@ -129,9 +166,9 @@ export default function NewBookPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-[var(--sage)] px-4 py-2.5 font-medium text-white hover:bg-[var(--sage-deep)] disabled:opacity-60"
+          className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white hover:bg-[var(--sage-deep)] disabled:opacity-50"
         >
-          {loading ? "Uploading & extracting…" : "Upload"}
+          {loading ? "Uploading…" : "Upload & extract"}
         </button>
       </form>
     </div>

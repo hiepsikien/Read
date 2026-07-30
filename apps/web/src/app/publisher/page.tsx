@@ -30,7 +30,7 @@ export default function PublisherPage() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await createBrowserApi().listBooks(true);
+        const data = await createBrowserApi().listBooks({ mine: true });
         if (!cancelled) setBooks(data.books);
       } catch (err) {
         if (!cancelled) {

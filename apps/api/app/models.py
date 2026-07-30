@@ -10,18 +10,33 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    firebase_uid: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    books: Mapped[list["Book"]] = relationship(back_populates="publisher")
+    books: Mapped[list["Book"]] = relationship(
+        back_populates="publisher",
+        foreign_keys="Book.publisher_id",
+    )
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="user")
 
     __table_args__ = (
-        CheckConstraint("role IN ('reader', 'publisher')", name="ck_users_role"),
+        CheckConstraint("role IN ('reader', 'publisher', 'admin')", name="ck_users_role"),
     )
+
+
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    books: Mapped[list["Book"]] = relationship(back_populates="category")
 
 
 class Book(Base):
@@ -29,6 +44,9 @@ class Book(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     publisher_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -36,15 +54,26 @@ class Book(Base):
     source_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    publisher: Mapped[User] = relationship(back_populates="books")
+    publisher: Mapped[User] = relationship(back_populates="books", foreign_keys=[publisher_id])
+    reviewer: Mapped[User | None] = relationship(foreign_keys=[reviewed_by])
+    category: Mapped[Category | None] = relationship(back_populates="books")
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="book")
 
     __table_args__ = (
-        CheckConstraint("status IN ('draft', 'published')", name="ck_books_status"),
+        CheckConstraint(
+            "status IN ('draft', 'pending_review', 'published', 'rejected')",
+            name="ck_books_status",
+        ),
     )
 
 

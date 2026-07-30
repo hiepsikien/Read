@@ -10,7 +10,6 @@ function hostFromExpo(): string | null {
     Constants.expoConfig?.hostUri,
     Constants.expoGoConfig?.debuggerHost,
     Constants.manifest2?.extra?.expoGo?.debuggerHost,
-    // Legacy Expo Go manifest
     (Constants as { manifest?: { debuggerHost?: string } }).manifest?.debuggerHost,
   ].filter(Boolean) as string[];
 
@@ -53,7 +52,9 @@ export async function setToken(token: string | null) {
   }
 }
 
-export function createMobileApi(getTokenFn?: () => string | null | undefined) {
+export function createMobileApi(
+  getTokenFn?: () => string | null | undefined | Promise<string | null | undefined>
+) {
   return createApiClient({
     baseUrl: getApiBaseUrl(),
     getToken: getTokenFn,

@@ -15,11 +15,12 @@ import { colors, formatPrice } from "../lib/theme";
 
 export default function LibraryScreen() {
   const router = useRouter();
-  const { user, api, signOut, loading: authLoading } = useAuth();
+  const { user, api, signOut, enableAuthor, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [authorBusy, setAuthorBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError("");
@@ -39,6 +40,19 @@ export default function LibraryScreen() {
       void load();
     }, [load])
   );
+
+  async function becomeAuthor() {
+    setAuthorBusy(true);
+    setError("");
+    try {
+      await enableAuthor();
+      router.push("/publisher");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not enable author mode.");
+    } finally {
+      setAuthorBusy(false);
+    }
+  }
 
   if (authLoading || loading) {
     return (
@@ -65,7 +79,8 @@ export default function LibraryScreen() {
       <Text style={styles.eyebrow}>In-app reading</Text>
       <Text style={styles.brand}>Read</Text>
       <Text style={styles.sub}>
-        A calm place for books — free titles open instantly, paid ones unlock after purchase.
+        Free titles open instantly. Paid titles unlock after sign-in and purchase. Authors publish
+        original DOCX manuscripts for review.
       </Text>
 
       <View style={styles.authRow}>
@@ -73,11 +88,22 @@ export default function LibraryScreen() {
           <>
             <Text style={styles.meta}>Signed in as {user.name}</Text>
             <View style={styles.authActions}>
-              {user.role === "publisher" ? (
+              {user.role === "admin" ? (
+                <Pressable style={styles.secondaryBtn} onPress={() => router.push("/admin")}>
+                  <Text style={styles.secondaryBtnText}>Admin</Text>
+                </Pressable>
+              ) : null}
+              {user.role === "publisher" || user.role === "admin" ? (
                 <Pressable style={styles.secondaryBtn} onPress={() => router.push("/publisher")}>
                   <Text style={styles.secondaryBtnText}>Publisher</Text>
                 </Pressable>
-              ) : null}
+              ) : (
+                <Pressable style={styles.secondaryBtn} onPress={becomeAuthor} disabled={authorBusy}>
+                  <Text style={styles.secondaryBtnText}>
+                    {authorBusy ? "Enabling…" : "Become author"}
+                  </Text>
+                </Pressable>
+              )}
               <Pressable onPress={signOut} style={styles.secondaryBtn}>
                 <Text style={styles.secondaryBtnText}>Sign out</Text>
               </Pressable>
@@ -98,6 +124,7 @@ export default function LibraryScreen() {
           <Pressable style={styles.card}>
             <Text style={styles.cardTitle}>{book.title}</Text>
             <Text style={styles.cardMeta}>
+              {book.category?.label ? `${book.category.label} · ` : ""}
               {book.publisher_name} · {formatPrice(book.price_cents)} · {book.chapter_count} chapters
             </Text>
             <Text style={styles.cardBody} numberOfLines={3}>
@@ -123,8 +150,8 @@ const styles = StyleSheet.create({
   },
   brand: { fontSize: 44, fontWeight: "700", color: colors.ink, marginTop: 2 },
   sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 21 },
-  authRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  authActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  authRow: { gap: 8 },
+  authActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   meta: { color: colors.inkSoft },
   section: {
     marginTop: 12,
@@ -150,6 +177,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,
+    alignSelf: "flex-start",
   },
   primaryBtnText: { color: "#fff", fontWeight: "600" },
   secondaryBtn: {

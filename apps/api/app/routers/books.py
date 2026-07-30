@@ -13,15 +13,20 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..access import can_access_chapter
 from ..auth import get_current_user, get_current_user_optional, require_publisher
+from ..categories import category_payload, ensure_categories
 from ..chapters import SPLIT_PROFILES, count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
-from ..models import Book, Chapter, Purchase, User
+from ..models import Book, Category, Chapter, Purchase, User
 from ..parse_docs import extract_text_from_file
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+
+DOCX_EXT = ".docx"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+EDITABLE_STATUSES = {"draft", "rejected"}
 
 
 class PatchBookBody(BaseModel):
@@ -29,6 +34,7 @@ class PatchBookBody(BaseModel):
     description: str | None = None
     pricing: str | None = None
     price: float | None = None
+    category_id: str | None = None
 
 
 class SplitBookBody(BaseModel):
@@ -48,10 +54,34 @@ def _chapter_list_item(chapter: Chapter, locked: bool | None = None) -> dict:
     return item
 
 
+def _book_list_item(book: Book, *, chapter_count: int, publisher_name: str | None = None) -> dict:
+    item = {
+        "id": book.id,
+        "title": book.title,
+        "description": book.description,
+        "price_cents": book.price_cents,
+        "status": book.status,
+        "chapter_count": chapter_count,
+        "created_at": book.created_at.isoformat(),
+        "updated_at": book.updated_at.isoformat(),
+        "category": category_payload(book.category),
+        "review_note": book.review_note,
+        "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
+        "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
+    }
+    if publisher_name is not None:
+        item["publisher_name"] = publisher_name
+    if book.publisher_id:
+        item["publisher_id"] = book.publisher_id
+    if book.source_filename is not None:
+        item["source_filename"] = book.source_filename
+    return item
+
+
 def _owned(book: Book, user: User | None, purchased: bool) -> bool:
     if not user:
         return book.price_cents == 0
-    if book.publisher_id == user.id or book.price_cents == 0:
+    if book.publisher_id == user.id or book.price_cents == 0 or user.role == "admin":
         return True
     return purchased
 
@@ -63,17 +93,54 @@ def _has_purchase(db: Session, user_id: str, book_id: str) -> bool:
     return bool(row)
 
 
+def _can_manage_book(book: Book, user: User | None) -> bool:
+    if not user:
+        return False
+    if user.role == "admin":
+        return True
+    return book.publisher_id == user.id
+
+
+def _assert_editable(book: Book) -> None:
+    if book.status not in EDITABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="This book is locked while under review or published. Rejected and draft books can be edited.",
+        )
+
+
+def _get_category(db: Session, category_id: str | None) -> Category | None:
+    if not category_id:
+        return None
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=400, detail="Unknown category.")
+    return category
+
+
+@router.get("/categories/list")
+def list_categories(db: Annotated[Session, Depends(get_db)]):
+    categories = ensure_categories(db)
+    return {
+        "categories": [
+            {"id": c.id, "slug": c.slug, "label": c.label} for c in categories
+        ]
+    }
+
+
 @router.get("")
 def list_books(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User | None, Depends(get_current_user_optional)],
     mine: int = 0,
+    category: str | None = None,
 ):
     if mine == 1:
-        if not user or user.role != "publisher":
+        if not user or user.role not in {"publisher", "admin"}:
             raise HTTPException(status_code=403, detail="Publisher login required.")
         books = (
             db.query(Book)
+            .options(joinedload(Book.category))
             .filter(Book.publisher_id == user.id)
             .order_by(Book.updated_at.desc())
             .all()
@@ -84,46 +151,31 @@ def list_books(
                 db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book.id))
                 or 0
             )
-            result.append(
-                {
-                    "id": book.id,
-                    "title": book.title,
-                    "description": book.description,
-                    "price_cents": book.price_cents,
-                    "status": book.status,
-                    "chapter_count": chapter_count,
-                    "created_at": book.created_at.isoformat(),
-                    "updated_at": book.updated_at.isoformat(),
-                    "publisher_id": book.publisher_id,
-                    "source_filename": book.source_filename,
-                }
-            )
+            result.append(_book_list_item(book, chapter_count=chapter_count))
         return {"books": result}
 
-    rows = (
-        db.query(Book, User.name)
-        .join(User, User.id == Book.publisher_id)
+    query = (
+        db.query(Book)
+        .options(joinedload(Book.category), joinedload(Book.publisher))
         .filter(Book.status == "published")
         .order_by(Book.created_at.desc())
-        .all()
     )
+    if category:
+        query = query.join(Category, Category.id == Book.category_id).filter(
+            (Category.slug == category) | (Category.id == category)
+        )
     books = []
-    for book, publisher_name in rows:
+    for book in query.all():
         chapter_count = (
             db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book.id))
             or 0
         )
         books.append(
-            {
-                "id": book.id,
-                "title": book.title,
-                "description": book.description,
-                "price_cents": book.price_cents,
-                "status": book.status,
-                "publisher_name": publisher_name,
-                "chapter_count": chapter_count,
-                "created_at": book.created_at.isoformat(),
-            }
+            _book_list_item(
+                book,
+                chapter_count=chapter_count,
+                publisher_name=book.publisher.name if book.publisher else "",
+            )
         )
     return {"books": books}
 
@@ -136,20 +188,31 @@ async def create_book(
     description: Annotated[str, Form()] = "",
     pricing: Annotated[str, Form()] = "free",
     price: Annotated[float, Form()] = 0,
+    category_id: Annotated[str, Form()] = "",
     file: UploadFile = File(...),
 ):
     settings = get_settings()
+    ensure_categories(db)
     title = title.strip()
     description = description.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
+    category = _get_category(db, category_id.strip() or None)
+    if not category:
+        raise HTTPException(status_code=400, detail="Category is required.")
     if not file.filename:
-        raise HTTPException(status_code=400, detail="A PDF or DOCX file is required.")
+        raise HTTPException(status_code=400, detail="A DOCX manuscript is required.")
 
     original_name = file.filename
     ext = Path(original_name).suffix.lower()
-    if ext not in {".pdf", ".docx"}:
-        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported.")
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if ext != DOCX_EXT and content_type != DOCX_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail="Only DOCX manuscripts are supported. PDF uploads are disabled.",
+        )
+    if ext != DOCX_EXT:
+        ext = DOCX_EXT
 
     content = await file.read()
     max_bytes = settings.max_upload_mb * 1024 * 1024
@@ -171,7 +234,7 @@ async def create_book(
     stored_path.write_bytes(content)
 
     try:
-        raw_text = extract_text_from_file(stored_path, original_name)
+        raw_text = extract_text_from_file(stored_path, original_name if original_name.lower().endswith(".docx") else f"{original_name}.docx")
     except Exception as exc:  # noqa: BLE001
         stored_path.unlink(missing_ok=True)
         logger.exception("Text extraction failed for %s", original_name)
@@ -181,6 +244,7 @@ async def create_book(
     book = Book(
         id=book_id,
         publisher_id=user.id,
+        category_id=category.id,
         title=title,
         description=description,
         price_cents=price_cents,
@@ -204,15 +268,19 @@ def get_book(
 ):
     book = (
         db.query(Book)
-        .options(joinedload(Book.publisher), joinedload(Book.chapters))
+        .options(
+            joinedload(Book.publisher),
+            joinedload(Book.chapters),
+            joinedload(Book.category),
+        )
         .filter(Book.id == book_id)
         .one_or_none()
     )
     if not book:
         raise HTTPException(status_code=404, detail="Book not found.")
 
-    is_publisher_owner = bool(user and user.id == book.publisher_id)
-    if book.status != "published" and not is_publisher_owner:
+    is_manager = _can_manage_book(book, user)
+    if book.status != "published" and not is_manager:
         raise HTTPException(status_code=404, detail="Book not found.")
 
     purchased = bool(user and _has_purchase(db, user.id, book.id))
@@ -230,11 +298,15 @@ def get_book(
             "created_at": book.created_at.isoformat(),
             "updated_at": book.updated_at.isoformat(),
             "has_raw_text": bool(book.raw_text),
+            "category": category_payload(book.category),
+            "review_note": book.review_note,
+            "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
+            "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
         },
         "chapters": [_chapter_list_item(c) for c in chapters],
         "access": {
             "owned": _owned(book, user, purchased),
-            "isPublisherOwner": is_publisher_owner,
+            "isPublisherOwner": bool(user and user.id == book.publisher_id),
             "previewChapterId": chapters[0].id if chapters else None,
         },
     }
@@ -250,6 +322,7 @@ def patch_book(
     book = db.get(Book, book_id)
     if not book or book.publisher_id != user.id:
         raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_editable(book)
 
     title = body.title.strip() if body.title is not None else book.title
     description = body.description.strip() if body.description is not None else book.description
@@ -261,12 +334,22 @@ def patch_book(
         dollars = body.price if body.price is not None else price_cents / 100
         price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
 
+    if body.category_id is not None:
+        category = _get_category(db, body.category_id.strip() or None)
+        if not category:
+            raise HTTPException(status_code=400, detail="Category is required.")
+        book.category_id = category.id
+
+    previous_status = book.status
     book.title = title
     book.description = description
     book.price_cents = price_cents
+    if previous_status == "rejected":
+        book.status = "draft"
+        book.review_note = book.review_note  # keep last note for author context
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "status": book.status}
 
 
 @router.post("/{book_id}/split")
@@ -279,6 +362,7 @@ def split_book(
     book = db.get(Book, book_id)
     if not book or book.publisher_id != user.id:
         raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_editable(book)
     if not (book.raw_text or "").strip():
         raise HTTPException(status_code=400, detail="No extracted text available to split.")
 
@@ -289,9 +373,8 @@ def split_book(
             detail=f"Invalid length. Expected one of: {', '.join(SPLIT_PROFILES)}.",
         )
 
-    is_docx = Path(book.source_filename or "").suffix.lower() == ".docx"
     units = split_into_chapters(
-        book.raw_text or "", preserve_paragraphs=is_docx, length=length
+        book.raw_text or "", preserve_paragraphs=True, length=length
     )
     if not units:
         raise HTTPException(status_code=400, detail="Could not create chapters from this document.")
@@ -309,31 +392,56 @@ def split_book(
                 group_index=unit.group_index,
             )
         )
+    if book.status == "rejected":
+        book.status = "draft"
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True, "chapter_count": len(units)}
 
 
-@router.post("/{book_id}/publish")
-def publish_book(
+@router.post("/{book_id}/submit-review")
+def submit_review(
     book_id: str,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_publisher)],
 ):
-    book = db.get(Book, book_id)
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.category))
+        .filter(Book.id == book_id)
+        .one_or_none()
+    )
     if not book or book.publisher_id != user.id:
         raise HTTPException(status_code=404, detail="Book not found.")
-
+    if book.status not in EDITABLE_STATUSES:
+        raise HTTPException(status_code=400, detail="Only draft or rejected books can be submitted.")
+    if not book.category_id:
+        raise HTTPException(status_code=400, detail="Choose a category before submitting.")
     chapter_count = (
         db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == book_id)) or 0
     )
     if chapter_count == 0:
-        raise HTTPException(status_code=400, detail="Split chapters before publishing.")
+        raise HTTPException(status_code=400, detail="Split chapters before submitting for review.")
 
-    book.status = "published"
-    book.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    book.status = "pending_review"
+    book.submitted_at = now
+    book.reviewed_at = None
+    book.reviewed_by = None
+    book.review_note = None
+    book.updated_at = now
     db.commit()
-    return {"ok": True, "status": "published"}
+    return {"ok": True, "status": book.status}
+
+
+@router.post("/{book_id}/publish")
+def publish_book_legacy(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_publisher)],
+):
+    """Backward-compatible alias — authors now submit for review instead of self-publishing."""
+    return submit_review(book_id, db, user)
 
 
 @router.post("/{book_id}/purchase")
@@ -383,8 +491,8 @@ def get_chapter(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found.")
 
-    is_publisher_owner = bool(user and user.id == book.publisher_id)
-    if book.status != "published" and not is_publisher_owner:
+    is_manager = _can_manage_book(book, user)
+    if book.status != "published" and not is_manager:
         raise HTTPException(status_code=404, detail="Book not found.")
 
     chapter = next((c for c in book.chapters if c.id == chapter_id), None)
@@ -395,6 +503,8 @@ def get_chapter(
     user_id = user.id if user else None
 
     def allowed(item: Chapter) -> bool:
+        if is_manager:
+            return True
         return can_access_chapter(
             book=book,
             chapter=item,
