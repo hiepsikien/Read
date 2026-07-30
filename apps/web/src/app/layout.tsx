@@ -26,6 +26,28 @@ export const metadata: Metadata = {
   title: "Read — Books in your browser",
   description:
     "Publish PDF and DOCX books, auto-split chapters, and read free or paid titles in a mobile-friendly in-app reader.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
+  openGraph: {
+    title: "Read — Books in your browser",
+    description:
+      "A calm place for books — free titles open instantly, paid ones unlock after purchase.",
+    images: [
+      {
+        url: "/brand/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "Read",
+      },
+    ],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Read — Books in your browser",
+    description:
+      "A calm place for books — free titles open instantly, paid ones unlock after purchase.",
+    images: ["/brand/og-image.png"],
+  },
 };
 
 export const viewport: Viewport = {

@@ -177,6 +177,7 @@ export function InAppReader({
   }, [data]);
 
   const palette = THEMES[theme];
+  const brandTone = theme === "ink" ? "white" : "color";
 
   async function buy() {
     try {
@@ -202,7 +203,7 @@ export function InAppReader({
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col justify-center px-4 text-center">
         <div className="mx-auto">
-          <BrandLogo variant="mark" height={56} />
+          <BrandLogo variant="mark" height={56} tone={brandTone} />
         </div>
         <h1 className="mt-4 text-2xl font-semibold text-[var(--ink)]">This chapter is locked</h1>
         <p className="mt-3 text-[var(--ink-soft)]">
@@ -257,7 +258,7 @@ export function InAppReader({
       >
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
           <Link href={`/books/${bookId}`} className="flex items-center" aria-label="Back to book">
-            <BrandLogo variant="wordmark" height={24} />
+            <BrandLogo variant="wordmark" height={24} tone={brandTone} />
           </Link>
           <div className="flex items-center gap-2 text-sm">
             <button

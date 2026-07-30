@@ -320,19 +320,20 @@ API tiêu biểu:
 
 | Asset | Path | Dùng cho |
 |-------|------|----------|
-| **Original showcase** | `apps/web/public/brand/read-wordmark-hero.png` / `docs/assets/read-wordmark-original.png` | Bản gốc đẹp (có nền mist) — nguồn sự thật |
-| Wordmark PNG (transparent) | `apps/web/public/brand/read-wordmark.png` | Header, hero, reader — **dùng cái này trên UI** |
-| Mark PNG (transparent) | `apps/web/public/brand/read-mark.png` | Icon-only UI |
+| **Original showcase** | `apps/web/public/brand/read-wordmark-hero.png` | Hero Library + nguồn sự thật |
+| Wordmark PNG/SVG | `read-wordmark.png` / `.svg` | Header, reader chrome |
+| Mark PNG/SVG (book only) | `read-mark.png` / `.svg` | Login, favicon source, compact UI |
+| Mono ink / white | `read-*-ink.*`, `read-*-white.*` | Reader theme tối (không tintColor) |
 | App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon / Apple touch |
+| OG / social | `apps/web/public/brand/og-image.png` | Open Graph + Twitter card |
 | Mobile icon/splash | `apps/mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png` | Expo `app.json` |
-| Mobile UI | `apps/mobile/assets/mark.png`, `wordmark.png` | Library / login / reader |
-
-> SVG `read-*.svg` chỉ còn dự phòng; UI ưu tiên PNG từ bản logo gốc (serif swash R), không dùng bản Georgia generate lại.
+| Mobile UI | `mark.png`, `wordmark.png`, `*-ink.png`, `*-white.png` | Library / login / reader |
 
 **Quy ước UI**
 - **Wordmark** = chữ + sách → dùng **một mình**, không kèm text “Read”
-- **Mark** = chỉ icon sách → compact chrome, login accent, app icon
-- Component: `BrandLogo` (`apps/web/...`, `apps/mobile/components/BrandLogo.tsx`)
+- **Mark** = **chỉ icon sách** (không kèm chữ “d”) → compact chrome, login, app icon
+- `BrandLogo` hỗ trợ `tone`: `color` \| `ink` \| `white`
+- Hero Library dùng `read-wordmark-hero.png` (bản gốc có nền mist)
 
 ---
 

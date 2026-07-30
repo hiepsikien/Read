@@ -192,6 +192,7 @@ export default function ReaderScreen() {
   );
 
   const palette = readerThemes[theme];
+  const brandTone = theme === "ink" ? "white" : "color";
 
   if (loading) {
     return (
@@ -206,7 +207,7 @@ export default function ReaderScreen() {
     return (
       <SafeAreaView style={[styles.lockedWrap, { backgroundColor: palette.bg }]}>
         <Stack.Screen options={{ headerShown: false }} />
-        <BrandLogo variant="mark" height={52} style={{ tintColor: palette.fg, marginBottom: 8 }} />
+        <BrandLogo variant="mark" height={52} tone={brandTone} style={{ marginBottom: 8 }} />
         <Text style={[styles.lockedTitle, { color: palette.fg }]}>This chapter is locked</Text>
         <Text style={[styles.lockedBody, { color: palette.muted }]}>
           Chapter 1 is free. Unlock the full book with a mock purchase to keep reading.
@@ -239,7 +240,7 @@ export default function ReaderScreen() {
 
       <View style={[styles.bar, { borderBottomColor: withAlpha(palette.fg, 0.12) }]}>
         <Pressable onPress={leaveReader} accessibilityLabel="Back to book">
-          <BrandLogo variant="mark" height={26} style={{ tintColor: palette.fg }} />
+          <BrandLogo variant="mark" height={26} tone={brandTone} />
         </Pressable>
         <View style={styles.barControls}>
           <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(-FONT_SIZE_STEP)}>
