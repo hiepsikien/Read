@@ -320,10 +320,11 @@ API tiêu biểu:
 
 | Asset | Path | Dùng cho |
 |-------|------|----------|
-| Mark (SVG, transparent) | `apps/web/public/brand/read-mark.svg` | Favicon ý tưởng / icon-only UI |
-| Mark PNG | `apps/web/public/brand/read-mark.png` | Docs / export |
+| Mark (SVG, transparent) | `apps/web/public/brand/read-mark.svg` | Compact UI / export vector |
+| Mark PNG | `apps/web/public/brand/read-mark.png` | Docs / raster export |
 | Wordmark (SVG) | `apps/web/public/brand/read-wordmark.svg` | Header, hero, reader chrome (web) |
-| App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon Next (đã bỏ `favicon.ico` cũ) |
+| Wordmark PNG | `apps/web/public/brand/read-wordmark.png` | Docs / places needing raster |
+| App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon / Apple touch (Next) |
 | Mobile icon/splash | `apps/mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png` | Expo `app.json` |
 | Mobile UI marks | `apps/mobile/assets/mark.png`, `wordmark.png` | Library / login / reader |
 
@@ -331,6 +332,7 @@ API tiêu biểu:
 - **Wordmark** = chữ + sách → dùng **một mình**, không kèm text “Read”
 - **Mark** = chỉ icon sách → compact chrome, login accent, app icon
 - Component: `BrandLogo` (`apps/web/...`, `apps/mobile/components/BrandLogo.tsx`)
+- Không giữ alias `read-logo.*` — dùng `read-wordmark.*` / `read-mark.*` trực tiếp
 
 ---
 
