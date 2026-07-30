@@ -6,7 +6,9 @@ export function normalizeForSpeech(value: string): string {
   return value
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/https?:\/\/\S+|www\.\S+/gi, "")
+    .replace(/https?:\/\/\S+|www\.\S+/gi, (url) =>
+      /[.,;:!?]$/.test(url) ? url.slice(-1) : ""
+    )
     .replace(/\[(?:\d+(?:\s*[,–-]\s*\d+)*)\]/g, "")
     .replace(/\((?:\d+(?:\s*[,–-]\s*\d+)*)\)/g, "")
     .replace(/^\s*(?:[-*+•]|\d+[.)]|[a-zA-Z][.)])\s+/gm, "")

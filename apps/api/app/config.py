@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,6 +20,15 @@ class Settings(BaseSettings):
     auth_dev_mode: bool = True
     auth_dev_secret: str = "read-dev-firebase-standin-secret-change-me"
 
+    # Google Cloud Text-to-Speech. Application Default Credentials are used.
+    # Prefer ENGINE + GENDER. GOOGLE_TTS_VOICE overrides both when set.
+    google_tts_enabled: bool = False
+    google_tts_engine: str = "neural2"
+    google_tts_gender: str = "male"
+    google_tts_chirp_persona: str = ""
+    google_tts_voice: str = ""
+    tts_cache_dir: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -35,6 +45,22 @@ class Settings(BaseSettings):
     def firebase_enabled(self) -> bool:
         project_id = self.firebase_project_id.strip()
         return bool(project_id and not project_id.startswith("replace-with-"))
+
+    @property
+    def resolved_tts_cache_dir(self) -> str:
+        return self.tts_cache_dir.strip() or str(Path(self.upload_dir) / "tts-cache")
+
+    @property
+    def resolved_tts_voice(self) -> str:
+        # Local import avoids a circular dependency with app.tts.
+        from .tts import resolve_voice
+
+        return resolve_voice(
+            self.google_tts_engine,
+            self.google_tts_gender,
+            chirp_persona=self.google_tts_chirp_persona,
+            voice_override=self.google_tts_voice,
+        )
 
 
 @lru_cache

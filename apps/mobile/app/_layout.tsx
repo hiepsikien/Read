@@ -29,6 +29,7 @@ export default function RootLayout() {
           <Stack.Screen name="publisher/[id]" options={{ title: "Manage book" }} />
           <Stack.Screen name="admin/index" options={{ title: "Admin" }} />
           <Stack.Screen name="admin/[id]" options={{ title: "Review book" }} />
+          <Stack.Screen name="settings" options={{ title: "Settings" }} />
         </Stack>
       </ReaderPreferencesProvider>
     </AuthProvider>

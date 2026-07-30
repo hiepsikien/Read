@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -7,6 +7,9 @@ import {
   StyleSheet,
   Text,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type View as ViewType,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -26,7 +29,8 @@ import {
   FONT_SIZE_STEP,
   useReaderPreferences,
 } from "../../../lib/reader-preferences";
-import { useIosSpeech } from "../../../lib/use-ios-speech";
+import { useIosNarration } from "../../../lib/use-ios-narration";
+import { VoicePickerModal } from "../../../lib/voice-picker";
 import {
   colors,
   estimateMinutes,
@@ -51,7 +55,16 @@ export default function ReaderScreen() {
   const [priceCents, setPriceCents] = useState(0);
   const [error, setError] = useState("");
   const [tocOpen, setTocOpen] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
+
+  const scrollRef = useRef<ScrollView>(null);
+  const contentRef = useRef<ViewType>(null);
+  const paragraphRefs = useRef<Array<ViewType | null>>([]);
+  const scrollYRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  // Follow the spoken paragraph until the reader manually scrolls away.
+  const followNarrationRef = useRef(true);
 
   const load = useCallback(async () => {
     if (!bookId || !chapterId) return;
@@ -95,6 +108,13 @@ export default function ReaderScreen() {
     }
   }
 
+  // The book screen is already one level down in the stack, so popping avoids
+  // pushing a second copy of it that would need two back presses to clear.
+  const leaveReader = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace(`/books/${bookId}`);
+  }, [router, bookId]);
+
   const neighbors = useMemo(() => {
     if (!data) return { prev: null as ChapterListItem | null, next: null as ChapterListItem | null };
     const index = data.chapters.findIndex((c) => c.id === data.chapter.id);
@@ -114,7 +134,53 @@ export default function ReaderScreen() {
         .filter(Boolean),
     [data?.chapter.content]
   );
-  const speech = useIosSpeech(paragraphs);
+  const speech = useIosNarration({ api, bookId, chapterId, paragraphs });
+
+  useEffect(() => {
+    followNarrationRef.current = true;
+    paragraphRefs.current = [];
+  }, [bookId, chapterId]);
+
+  const scrollSpokenParagraphIntoView = useCallback((index: number) => {
+    const paragraph = paragraphRefs.current[index];
+    const content = contentRef.current;
+    if (!paragraph || !content || !followNarrationRef.current) return;
+
+    paragraph.measureLayout(
+      content,
+      (_x, y, _width, height) => {
+        if (!followNarrationRef.current) return;
+        const topPad = 24;
+        const bottomPad = 72;
+        const viewTop = scrollYRef.current + topPad;
+        const viewBottom = scrollYRef.current + viewportHeightRef.current - bottomPad;
+        const paraTop = y;
+        const paraBottom = y + height;
+
+        // Already comfortably visible — don't jostle the page.
+        if (paraTop >= viewTop && paraBottom <= viewBottom) return;
+
+        scrollRef.current?.scrollTo({
+          y: Math.max(0, paraTop - topPad),
+          animated: true,
+        });
+      },
+      () => {
+        // measureLayout can fail mid-unmount; ignore.
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (speech.playbackState !== "speaking") return;
+    if (speech.currentParagraph === null) return;
+    scrollSpokenParagraphIntoView(speech.currentParagraph);
+  }, [speech.currentParagraph, speech.playbackState, scrollSpokenParagraphIntoView]);
+
+  const onReaderScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollYRef.current = event.nativeEvent.contentOffset.y;
+    viewportHeightRef.current = event.nativeEvent.layoutMeasurement.height;
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -147,7 +213,7 @@ export default function ReaderScreen() {
         <Pressable style={styles.primaryBtn} onPress={buy}>
           <Text style={styles.primaryBtnText}>Buy · {formatPrice(priceCents)}</Text>
         </Pressable>
-        <Pressable style={styles.linkBtn} onPress={() => router.replace(`/books/${bookId}`)}>
+        <Pressable style={styles.linkBtn} onPress={leaveReader}>
           <Text style={[styles.linkText, { color: palette.fg }]}>Book details</Text>
         </Pressable>
       </SafeAreaView>
@@ -171,7 +237,7 @@ export default function ReaderScreen() {
       <Stack.Screen options={{ headerShown: false }} />
 
       <View style={[styles.bar, { borderBottomColor: withAlpha(palette.fg, 0.12) }]}>
-        <Pressable onPress={() => router.replace(`/books/${bookId}`)}>
+        <Pressable onPress={leaveReader}>
           <Text style={[styles.barBrand, { color: palette.fg }]}>Read</Text>
         </Pressable>
         <View style={styles.barControls}>
@@ -200,9 +266,16 @@ export default function ReaderScreen() {
             },
           ]}
         >
-          <Text style={[styles.speechLabel, { color: palette.muted }]}>Listen</Text>
+          <Text style={[styles.speechLabel, { color: palette.muted }]}>
+            {speech.provider === "cloud"
+              ? `${speech.manifest?.engine ?? "Cloud"}${
+                  speech.manifest?.gender ? ` · ${speech.manifest.gender}` : ""
+                }`
+              : "Offline voice"}
+          </Text>
           <View style={styles.speechControls}>
             <Pressable
+              disabled={speech.playbackState === "preparing"}
               accessibilityRole="button"
               accessibilityLabel={
                 speech.playbackState === "speaking"
@@ -212,10 +285,15 @@ export default function ReaderScreen() {
                     : "Read chapter aloud"
               }
               style={chip(palette.fg)}
-              onPress={() => void speech.togglePlayback()}
+              onPress={() => {
+                followNarrationRef.current = true;
+                void speech.togglePlayback();
+              }}
             >
               <Text style={{ color: palette.fg, fontWeight: "600" }}>
-                {speech.playbackState === "speaking"
+                {speech.playbackState === "preparing"
+                  ? "Preparing…"
+                  : speech.playbackState === "speaking"
                   ? "Pause"
                   : speech.playbackState === "paused"
                     ? "Resume"
@@ -240,68 +318,103 @@ export default function ReaderScreen() {
                 <Text style={{ color: palette.fg }}>Stop</Text>
               </Pressable>
             ) : null}
+            {user?.role === "admin" ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Change narration voice"
+                style={chip(palette.fg)}
+                onPress={() => {
+                  void speech.pause();
+                  setVoiceOpen(true);
+                }}
+              >
+                <Text style={{ color: palette.fg }}>Voice</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.readerBody}>
-        <Text style={[styles.readerEyebrow, { color: palette.muted }]}>{data.book.title}</Text>
-        <Text style={[styles.readerTitle, { color: palette.fg }]}>{data.chapter.title}</Text>
-        <Text style={[styles.readerMeta, { color: palette.muted }]}>
-          {estimateMinutes(data.chapter.word_count)} min · Chapter {data.chapter.position} of{" "}
-          {data.chapters.length}
-        </Text>
-
-        <View style={styles.paragraphs}>
-          {paragraphs.map((paragraph, index) => (
-            <View
-              key={index}
-              style={[
-                styles.paragraph,
-                speech.currentParagraph === index && {
-                  backgroundColor: withAlpha(palette.fg, 0.08),
-                },
-              ]}
-            >
-              <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
-                <InlineMarkdown value={paragraph} />
-              </Text>
-            </View>
-          ))}
-        </View>
-        {speech.error ? (
-          <Text accessibilityRole="alert" style={[styles.speechError, { color: palette.muted }]}>
-            {speech.error}
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.readerBody}
+        onScroll={onReaderScroll}
+        scrollEventThrottle={16}
+        onScrollBeginDrag={() => {
+          followNarrationRef.current = false;
+        }}
+      >
+        <View ref={contentRef} collapsable={false}>
+          <Text style={[styles.readerEyebrow, { color: palette.muted }]}>{data.book.title}</Text>
+          <Text style={[styles.readerTitle, { color: palette.fg }]}>{data.chapter.title}</Text>
+          <Text style={[styles.readerMeta, { color: palette.muted }]}>
+            {estimateMinutes(data.chapter.word_count)} min · Chapter {data.chapter.position} of{" "}
+            {data.chapters.length}
           </Text>
-        ) : null}
 
-        <View style={[styles.nav, { borderTopColor: withAlpha(palette.fg, 0.12) }]}>
-          {neighbors.prev && !neighbors.prev.locked ? (
-            <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.prev!.id}`)}>
-              <Text style={[styles.navText, { color: palette.fg }]}>← Previous</Text>
-            </Pressable>
-          ) : (
-            <View />
-          )}
-          {neighbors.next ? (
-            neighbors.next.locked ? (
-              <Pressable onPress={buy}>
-                <Text style={[styles.navText, { color: palette.fg, fontWeight: "600" }]}>
-                  Unlock next →
+          <View style={styles.paragraphs}>
+            {paragraphs.map((paragraph, index) => (
+              <View
+                key={index}
+                ref={(node) => {
+                  paragraphRefs.current[index] = node;
+                }}
+                collapsable={false}
+                style={[
+                  styles.paragraph,
+                  speech.currentParagraph === index && {
+                    backgroundColor: withAlpha(palette.fg, 0.08),
+                  },
+                ]}
+              >
+                <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
+                  <InlineMarkdown value={paragraph} />
                 </Text>
+              </View>
+            ))}
+          </View>
+          {speech.error ? (
+            <Text accessibilityRole="alert" style={[styles.speechError, { color: palette.muted }]}>
+              {speech.error}
+            </Text>
+          ) : null}
+
+          <View style={[styles.nav, { borderTopColor: withAlpha(palette.fg, 0.12) }]}>
+            {neighbors.prev && !neighbors.prev.locked ? (
+              <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.prev!.id}`)}>
+                <Text style={[styles.navText, { color: palette.fg }]}>← Previous</Text>
               </Pressable>
             ) : (
-              <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.next!.id}`)}>
-                <Text style={[styles.navText, { color: palette.fg }]}>Next →</Text>
+              <View />
+            )}
+            {neighbors.next ? (
+              neighbors.next.locked ? (
+                <Pressable onPress={buy}>
+                  <Text style={[styles.navText, { color: palette.fg, fontWeight: "600" }]}>
+                    Unlock next →
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.next!.id}`)}>
+                  <Text style={[styles.navText, { color: palette.fg }]}>Next →</Text>
+                </Pressable>
+              )
+            ) : (
+              <Pressable onPress={leaveReader}>
+                <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
               </Pressable>
-            )
-          ) : (
-            <Pressable onPress={() => router.replace(`/books/${bookId}`)}>
-              <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
-            </Pressable>
-          )}
+            )}
+          </View>
         </View>
       </ScrollView>
+
+      <VoicePickerModal
+        visible={voiceOpen}
+        api={api}
+        palette={palette}
+        onClose={() => setVoiceOpen(false)}
+        onSaved={() => void speech.reloadVoice()}
+      />
 
       <Modal visible={tocOpen} animationType="slide" transparent onRequestClose={() => setTocOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setTocOpen(false)} />

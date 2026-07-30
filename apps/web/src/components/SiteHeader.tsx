@@ -53,6 +53,16 @@ export function SiteHeader({ user }: { user: SessionUser | null }) {
               <span className="hidden max-w-[10rem] truncate text-[var(--ink-soft)] sm:inline">
                 {user.name}
               </span>
+              <Link
+                href="/settings"
+                className={cn(
+                  "rounded-md px-2 py-1.5 text-[var(--ink-soft)] transition hover:text-[var(--ink)]",
+                  pathname.startsWith("/settings") && "text-[var(--ink)]"
+                )}
+                aria-label="Settings"
+              >
+                Settings
+              </Link>
               <button
                 type="button"
                 onClick={onLogout}

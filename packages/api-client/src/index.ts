@@ -55,6 +55,43 @@ export interface ChapterListItem {
   content_preview?: string;
 }
 
+export interface ChapterAudioSegment {
+  index: number;
+  paragraph_index: number;
+  url: string;
+}
+
+export interface ChapterAudioManifest {
+  engine?: string;
+  gender?: string;
+  voice: string;
+  cache_hit: boolean;
+  segments: ChapterAudioSegment[];
+}
+
+export interface TtsActiveSettings {
+  engine: string;
+  gender: string;
+  chirp_persona: string;
+  voice_override: string;
+  voice: string;
+  enabled: boolean;
+  source?: string;
+}
+
+export interface TtsSettingsPayload {
+  engines: Array<{ id: string; label: string }>;
+  genders: string[];
+  chirp3_personas: { male: string[]; female: string[] };
+  voices: Array<{
+    engine: string;
+    engine_label: string;
+    gender: string;
+    voice: string;
+  }>;
+  active: TtsActiveSettings;
+}
+
 export interface BookDetail {
   id: string;
   title: string;
@@ -312,6 +349,19 @@ export function createApiClient(options: ApiClientOptions) {
         chapters: ChapterListItem[];
       }>(`/api/books/${bookId}/chapters/${chapterId}`);
     },
+    async prepareChapterAudio(bookId: string, chapterId: string) {
+      const manifest = await request<ChapterAudioManifest>(
+        `/api/books/${bookId}/chapters/${chapterId}/audio`,
+        { method: "POST" }
+      );
+      return {
+        ...manifest,
+        segments: manifest.segments.map((segment) => ({
+          ...segment,
+          url: `${baseUrl}${segment.url}`,
+        })),
+      };
+    },
     adminQueue() {
       return request<{ books: BookListItem[] }>("/api/admin/queue");
     },
@@ -334,6 +384,33 @@ export function createApiClient(options: ApiClientOptions) {
           body: JSON.stringify({ note }),
         }
       );
+    },
+    adminGetTtsSettings() {
+      return request<TtsSettingsPayload>("/api/admin/settings/tts");
+    },
+    adminUpdateTtsSettings(body: {
+      engine: string;
+      gender: string;
+      chirp_persona?: string;
+    }) {
+      return request<{ ok: boolean; active: TtsActiveSettings }>("/api/admin/settings/tts", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+    },
+    ttsPreviewUrl(options: {
+      engine: string;
+      gender: string;
+      chirp_persona?: string;
+      text?: string;
+    }) {
+      const params = new URLSearchParams({
+        engine: options.engine,
+        gender: options.gender,
+      });
+      if (options.chirp_persona) params.set("chirp_persona", options.chirp_persona);
+      if (options.text) params.set("text", options.text);
+      return `${baseUrl}/api/tts/preview?${params.toString()}`;
     },
   };
 }

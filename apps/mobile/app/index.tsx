@@ -104,6 +104,9 @@ export default function LibraryScreen() {
                   </Text>
                 </Pressable>
               )}
+              <Pressable style={styles.secondaryBtn} onPress={() => router.push("/settings")}>
+                <Text style={styles.secondaryBtnText}>Settings</Text>
+              </Pressable>
               <Pressable onPress={signOut} style={styles.secondaryBtn}>
                 <Text style={styles.secondaryBtnText}>Sign out</Text>
               </Pressable>

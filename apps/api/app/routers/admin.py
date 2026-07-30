@@ -10,12 +10,19 @@ from ..auth import require_admin
 from ..categories import category_payload
 from ..db import get_db
 from ..models import Book, Chapter, User
+from ..tts_settings import get_active_tts, tts_settings_payload, upsert_tts_settings
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 class RejectBody(BaseModel):
     note: str = Field(min_length=3, max_length=4000)
+
+
+class TtsSettingsBody(BaseModel):
+    engine: str = Field(min_length=1, max_length=32)
+    gender: str = Field(min_length=1, max_length=16)
+    chirp_persona: str = Field(default="", max_length=64)
 
 
 def _queue_item(book: Book, chapter_count: int) -> dict:
@@ -152,3 +159,42 @@ def reject_book(
     book.updated_at = now
     db.commit()
     return {"ok": True, "status": book.status, "review_note": book.review_note}
+
+
+@router.get("/settings/tts")
+def get_tts_settings(
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    return tts_settings_payload(db)
+
+
+@router.put("/settings/tts")
+def update_tts_settings(
+    body: TtsSettingsBody,
+    db: Annotated[Session, Depends(get_db)],
+    admin: Annotated[User, Depends(require_admin)],
+):
+    try:
+        active = upsert_tts_settings(
+            db,
+            engine=body.engine,
+            gender=body.gender,
+            chirp_persona=body.chirp_persona,
+            admin_id=admin.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "active": {
+            "engine": active.engine,
+            "gender": active.gender,
+            "chirp_persona": active.chirp_persona,
+            "voice_override": active.voice_override,
+            "voice": active.voice,
+            "enabled": active.enabled,
+            "source": active.source,
+        },
+    }

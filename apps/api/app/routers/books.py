@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from google.api_core.exceptions import GoogleAPICallError
+from google.auth.exceptions import DefaultCredentialsError
 from nanoid import generate
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -19,6 +21,8 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import Book, Category, Chapter, Purchase, User
 from ..parse_docs import extract_text_from_file
+from ..tts_settings import get_active_tts
+from .. import tts
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +103,41 @@ def _can_manage_book(book: Book, user: User | None) -> bool:
     if user.role == "admin":
         return True
     return book.publisher_id == user.id
+
+
+def _accessible_chapter(
+    db: Session,
+    *,
+    book_id: str,
+    chapter_id: str,
+    user: User | None,
+) -> tuple[Book, Chapter]:
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.chapters))
+        .filter(Book.id == book_id)
+        .one_or_none()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    is_manager = _can_manage_book(book, user)
+    if book.status != "published" and not is_manager:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    chapter = next((item for item in book.chapters if item.id == chapter_id), None)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found.")
+
+    purchased = bool(user and _has_purchase(db, user.id, book.id))
+    if not is_manager and not can_access_chapter(
+        book=book,
+        chapter=chapter,
+        user_id=user.id if user else None,
+        purchased=purchased,
+    ):
+        raise HTTPException(status_code=402, detail="Purchase required to listen to this chapter.")
+    return book, chapter
 
 
 def _assert_editable(book: Book) -> None:
@@ -548,3 +587,97 @@ def get_chapter(
         },
         "chapters": chapters,
     }
+
+
+@router.post("/{book_id}/chapters/{chapter_id}/audio")
+def prepare_chapter_audio(
+    book_id: str,
+    chapter_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+):
+    _book, chapter = _accessible_chapter(
+        db,
+        book_id=book_id,
+        chapter_id=chapter_id,
+        user=user,
+    )
+    settings = get_settings()
+    active = get_active_tts(db)
+    voice = active.voice
+    segments = tts.chapter_audio_segments(chapter.content, voice)
+    if not segments:
+        raise HTTPException(status_code=400, detail="This chapter has no readable text.")
+
+    was_cached = all(tts.cache_path(settings, segment).is_file() for segment in segments)
+    if not was_cached and not settings.google_tts_enabled:
+        raise HTTPException(status_code=503, detail="Cloud narration is not configured.")
+
+    if not was_cached:
+        try:
+            tts.prepare_segments(settings, segments, voice)
+        except (DefaultCredentialsError, GoogleAPICallError, OSError) as exc:
+            logger.exception("Could not prepare narration for chapter %s", chapter.id)
+            raise HTTPException(
+                status_code=503,
+                detail="Cloud narration is temporarily unavailable.",
+            ) from exc
+
+    return {
+        "engine": active.engine,
+        "gender": active.gender,
+        "voice": voice,
+        "cache_hit": was_cached,
+        "segments": [
+            {
+                "index": segment.index,
+                "paragraph_index": segment.paragraph_index,
+                "url": (
+                    f"/api/books/{book_id}/chapters/{chapter_id}/audio/"
+                    f"{segment.index}?v={segment.cache_key[:16]}"
+                ),
+            }
+            for segment in segments
+        ],
+    }
+
+
+@router.get("/{book_id}/chapters/{chapter_id}/audio/{segment_index}")
+def get_chapter_audio_segment(
+    book_id: str,
+    chapter_id: str,
+    segment_index: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+):
+    _book, chapter = _accessible_chapter(
+        db,
+        book_id=book_id,
+        chapter_id=chapter_id,
+        user=user,
+    )
+    settings = get_settings()
+    voice = get_active_tts(db).voice
+    segments = tts.chapter_audio_segments(chapter.content, voice)
+    if segment_index < 0 or segment_index >= len(segments):
+        raise HTTPException(status_code=404, detail="Audio segment not found.")
+    segment = segments[segment_index]
+    path = tts.cache_path(settings, segment)
+
+    if not path.is_file():
+        if not settings.google_tts_enabled:
+            raise HTTPException(status_code=503, detail="Cloud narration is not configured.")
+        try:
+            path = tts.synthesize_segment(settings, segment, voice)
+        except (DefaultCredentialsError, GoogleAPICallError, OSError) as exc:
+            logger.exception("Could not synthesize narration segment for chapter %s", chapter.id)
+            raise HTTPException(
+                status_code=503,
+                detail="Cloud narration is temporarily unavailable.",
+            ) from exc
+
+    return FileResponse(
+        path,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
