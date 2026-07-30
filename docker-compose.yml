@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: read
+      POSTGRES_PASSWORD: read
+      POSTGRES_DB: read
+    ports:
+      - "5433:5432"
+    volumes:
+      - read_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U read -d read"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  read_pgdata:

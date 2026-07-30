@@ -1,19 +1,18 @@
 # Read
 
-Mobile-friendly in-app book reading product.
-
-Publishers upload **PDF** or **DOCX**, auto-split into chapters, and publish as **Free** or **Paid**. Readers open books **inside the Read app** (formatted chapter reader) — not in an external PDF viewer.
+Mobile-friendly book reading product with **web**, **native (Expo/React Native)**, and a shared **FastAPI** backend.
 
 > **Tài liệu dự án (Tiếng Việt):** [docs/PROJECT.md](./docs/PROJECT.md)
 
-## MVP features
+## Architecture
 
-- Library of published books
-- Free books: full in-app reading
-- Paid books: **whole logical Chapter 1 free** (all reading segments in it), remaining unlock after mock purchase
-- Publisher upload (PDF/DOCX) → extract text → **smart auto-split** into comfortable reading segments → publish
-- In-app reader: themes (Paper / Ink / Sepia), font size, contents sheet, progress, remember last chapter
-- English UI
+| App | Path | Role |
+|-----|------|------|
+| Web | `apps/web` | Next.js — full MVP library / reader / publisher |
+| API | `apps/api` | FastAPI + PostgreSQL — auth, books, split, purchase |
+| Mobile | `apps/mobile` | Expo (iOS + Android) — scaffold: login + library |
+
+Shared typed client: `packages/api-client`.
 
 ## Demo accounts
 
@@ -24,31 +23,61 @@ Publishers upload **PDF** or **DOCX**, auto-split into chapters, and publish as 
 
 ## Run locally
 
+### 1. Database
+
 ```bash
-npm install
-npm run dev
+docker compose up -d db
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+### 2. API
 
-SQLite database is created at `data/read.db`. Uploads go to `uploads/`.
+```bash
+python3 -m venv apps/api/.venv
+apps/api/.venv/bin/pip install -r apps/api/requirements.txt
+cp apps/api/.env.example apps/api/.env
+cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000
+```
+
+API: http://localhost:8000 · Docs: http://localhost:8000/docs
+
+### 3. Web
+
+```bash
+npm install
+cp apps/web/.env.local.example apps/web/.env.local
+npm run dev:web
+```
+
+Open http://localhost:3000.
+
+### 4. Mobile (scaffold)
+
+```bash
+cd apps/mobile
+npm install
+npx expo start
+```
+
+Set `EXPO_PUBLIC_API_URL` to your machine LAN IP when testing on a physical device (not `localhost`).
+
+Mobile is intentionally **outside** the npm workspaces (Expo + Next conflict on React); it links `@read/api-client` via `file:`.
 
 ## Scripts
 
 ```bash
-npm test      # smart chapter-split unit tests
-npm run build
-npm start
+npm run api:test   # pytest — chapter split + access rules
+npm run build      # Next.js production build
 ```
 
 ## Stack
 
-- Next.js (App Router) + TypeScript + Tailwind
-- SQLite (`better-sqlite3`)
-- `pdf-parse` + `mammoth` for document text extraction
-- Cookie sessions (`iron-session`)
-- Mock purchases (no Stripe yet)
+- **Web:** Next.js 15 (App Router) + TypeScript + Tailwind
+- **Mobile:** React Native via Expo (cross-platform iOS/Android)
+- **API:** FastAPI + SQLAlchemy + Alembic + PostgreSQL
+- **Auth:** JWT Bearer (web + mobile)
+- **Docs:** `pdf` / `docx` text extract; smart chapter split on the API
+- **Payments:** mock purchase (no Stripe yet)
 
 ## Docs
 
-- [docs/PROJECT.md](./docs/PROJECT.md) — đầy đủ mục tiêu, quyết định MVP, kiến trúc, luồng, phase sau
+- [docs/PROJECT.md](./docs/PROJECT.md) — product goals, MVP decisions, architecture, phases

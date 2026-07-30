@@ -1,11 +1,11 @@
 # Tài liệu dự án Read
 
-> Ứng dụng đọc sách trên browser (mobile + desktop), đọc **trong app** — không mở PDF bằng trình xem ngoài.
+> Ứng dụng đọc sách: **web-app (Next.js)** + **mobile native (React Native / Expo, iOS + Android)** + **FastAPI** — đọc trong app, không mở PDF ngoài.
 
 - **Repo:** https://github.com/hiepsikien/Read  
 - **Thương hiệu:** Read  
 - **Ngôn ngữ UI (MVP):** English  
-- **Trạng thái:** MVP  
+- **Trạng thái:** MVP (web đầy đủ; mobile scaffold; API tách riêng)  
 
 ---
 
@@ -17,7 +17,7 @@ Cho phép:
 2. Tự động chia thành các **đoạn đọc (reading segments)** một cách thông minh
 3. Chọn sách **Free** hoặc **Paid**
 4. **Reader** đọc free ngay; sách trả phí phải mua (mock payment)
-5. Trải nghiệm đọc nằm **trong app Read** (in-app reader), thân thiện mobile và desktop browser
+5. Trải nghiệm đọc nằm **trong app Read** (web reader đầy đủ; native mobile đang scaffold → full UI phase sau)
 
 ---
 
@@ -26,6 +26,9 @@ Cho phép:
 | Hạng mục | Quyết định |
 |----------|------------|
 | Tên | **Read** |
+| Clients | **Web (Next.js)** + **Mobile (React Native / Expo, iOS+Android)** |
+| Backend | **FastAPI** + **PostgreSQL** (tách khỏi Next) |
+| Auth | **JWT Bearer** (web + mobile dùng chung) |
 | Định dạng upload | **PDF + DOCX** (không hỗ trợ DOC cũ) |
 | Thanh toán | **Mock** (ghi purchase trong DB, chưa Stripe) |
 | Ngôn ngữ UI | **Tiếng Anh trước** |
@@ -68,7 +71,7 @@ Cho phép:
 
 ## 4. Chia chapter thông minh (quan trọng)
 
-File: `src/lib/chapters.ts`
+File: `apps/api/app/chapters.py` (port từ logic MVP trước)
 
 Luồng:
 
@@ -85,7 +88,7 @@ Luồng:
 Chạy test:
 
 ```bash
-npm test
+cd apps/api && .venv/bin/pytest -q
 ```
 
 ---
@@ -93,53 +96,39 @@ npm test
 ## 5. Kiến trúc kỹ thuật
 
 ```
-Browser (Next.js UI)
-  ├── Library / Book detail / Login
-  ├── In-app Reader
-  └── Publisher dashboard
-        ↓
-Next.js App Router API
-  ├── Auth (iron-session cookie)
-  ├── Books CRUD + upload
-  ├── Split / Publish / Purchase
-  └── Chapter content (gated)
-        ↓
-SQLite (data/read.db) + uploads/
+Web (apps/web Next.js)          Mobile (apps/mobile Expo RN)
+  Library / Reader / Publisher     Login + Library (scaffold)
+                 \                 /
+                  \               /
+                   v             v
+              FastAPI (apps/api)
+           JWT auth · books · split
+           publish · purchase · gated chapters
+                        |
+                        v
+              PostgreSQL + uploads/
 ```
 
 ### Stack
-- **Next.js 15** (App Router) + TypeScript + Tailwind CSS 4
-- **SQLite** qua `better-sqlite3`
-- **pdf-parse** (PDF) + **mammoth** (DOCX) — extract plain text
-- **iron-session** — session cookie
-- **bcryptjs** — hash mật khẩu demo
+- **Web:** Next.js 15 (App Router) + TypeScript + Tailwind CSS 4
+- **Mobile:** React Native qua **Expo** (cross-platform iOS + Android)
+- **API:** FastAPI + SQLAlchemy + Alembic + PostgreSQL
+- **Auth:** JWT Bearer (`packages/api-client` dùng chung)
+- **Extract:** `pypdf` (PDF) + `python-docx` (DOCX)
 - Thanh toán: mock (không cổng thật)
 
 ### Cấu trúc thư mục chính
 
 ```
-read-app/
-├── src/
-│   ├── app/
-│   │   ├── page.tsx                 # Library
-│   │   ├── login/
-│   │   ├── books/[id]/             # Book detail
-│   │   ├── read/[bookId]/...       # In-app reader
-│   │   ├── publisher/              # Publisher dashboard
-│   │   └── api/                    # REST API
-│   ├── components/
-│   │   ├── InAppReader.tsx
-│   │   ├── SiteHeader.tsx
-│   │   └── ...
-│   └── lib/
-│       ├── db.ts                   # Schema, seed, access control
-│       ├── chapters.ts             # Smart split
-│       ├── parse.ts                # PDF/DOCX → text
-│       ├── auth.ts
-│       └── types.ts
-├── data/                           # SQLite (gitignored)
-├── uploads/                        # File upload (gitignored)
-├── docs/PROJECT.md                 # Tài liệu này
+read/
+├── apps/
+│   ├── web/                 # Next.js web-app (UI only)
+│   ├── api/                 # FastAPI + Alembic + pytest
+│   └── mobile/              # Expo React Native scaffold
+├── packages/
+│   └── api-client/          # typed fetch + DTOs
+├── docker-compose.yml       # PostgreSQL
+├── docs/PROJECT.md
 └── README.md
 ```
 
@@ -174,24 +163,37 @@ read-app/
 ```bash
 git clone https://github.com/hiepsikien/Read.git
 cd Read
-npm install          # cài dependencies vào node_modules
-npm run dev          # chạy dev server (thường http://localhost:3000)
+docker compose up -d db          # PostgreSQL :5433
+python3 -m venv apps/api/.venv
+apps/api/.venv/bin/pip install -r apps/api/requirements.txt
+cp apps/api/.env.example apps/api/.env
+cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000
+# terminal khác:
+cd Read && npm install && cp apps/web/.env.local.example apps/web/.env.local
+npm run dev:web                  # http://localhost:3000
+```
+
+Mobile scaffold:
+
+```bash
+cd apps/mobile && npm install && npx expo start
 ```
 
 Lệnh khác:
 
 ```bash
-npm run build        # build production
-npm start            # chạy bản build
-npm test             # test bộ chia chapter
+npm run build                    # build web production
+cd apps/api && .venv/bin/pytest -q
 ```
 
 Dữ liệu runtime:
-- DB: `data/read.db` (tự tạo + seed khi lần đầu)
-- Upload: `uploads/`
+- DB: PostgreSQL (Docker)
+- Upload: `uploads/` (relative keys trong DB)
 
-Biến môi trường (xem `.env.local`):
-- `SESSION_SECRET` — secret cho cookie session
+Biến môi trường:
+- API: `DATABASE_URL`, `JWT_SECRET`, `UPLOAD_DIR`, `CORS_ORIGINS`
+- Web: `NEXT_PUBLIC_API_URL`
+- Mobile: `EXPO_PUBLIC_API_URL`
 
 ---
 
@@ -211,7 +213,13 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 
 ---
 
-## 9. Phase sau (chưa làm trong MVP)
+## 9. Phase sau (chưa làm / đang scaffold)
+
+### Native mobile đầy đủ
+- In-app reader (theme, font, TOC, progress) trên Expo
+- Book detail + purchase
+- Publisher upload / split / publish
+- EAS Build / store distribution
 
 ### AI (đã bàn, chưa code)
 - Smart split / metadata / blurb bằng AI (publisher)
@@ -221,7 +229,7 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 - Focus mode, TTS, transition chapter tinh gọn hơn
 
 ### Rich format
-- Giữ **bold / italic / heading** từ DOCX (`mammoth.convertToHtml`)
+- Giữ **bold / italic / heading** từ DOCX
 - PDF giữ style trung thực khó hơn — cân nhắc sau
 
 ### Khác
