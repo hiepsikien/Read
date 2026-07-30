@@ -216,6 +216,7 @@ def session_user(user: User) -> dict:
         "id": user.id,
         "email": user.email,
         "name": user.name,
+        "handle": user.handle,
         "role": user.role,
         **legal_status_payload(user),
     }

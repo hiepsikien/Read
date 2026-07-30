@@ -15,10 +15,10 @@ import {
   type ChapterListItem,
   type ModerationEvent,
 } from "@read/api-client";
-import { BookCover } from "../../components/BookCover";
-import { FormScroll } from "../../components/FormScroll";
-import { useAuth } from "../../lib/auth";
-import { colors, formatPrice } from "../../lib/theme";
+import { BookCover } from "../../../components/BookCover";
+import { FormScroll } from "../../../components/FormScroll";
+import { useAuth } from "../../../lib/auth";
+import { colors, formatPrice } from "../../../lib/theme";
 
 export default function AdminReviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -169,6 +169,16 @@ export default function AdminReviewScreen() {
         </View>
       </View>
       <Text style={styles.body}>{book.description || "No description provided."}</Text>
+
+      {book.status === "published" && book.visibility === "listed" ? (
+        <Pressable
+          style={styles.editCatalogBtn}
+          onPress={() => router.push(`/admin/${book.id}/edit`)}
+        >
+          <Text style={styles.editCatalogText}>Edit catalog</Text>
+          <Text style={styles.editCatalogHint}>Title, description, category, price, cover</Text>
+        </Pressable>
+      ) : null}
 
       <Text style={styles.section}>Chapters · {chapters.length}</Text>
       <View style={styles.list}>
@@ -328,6 +338,18 @@ const styles = StyleSheet.create({
   heroCopy: { flex: 1, gap: 5 },
   sub: { color: colors.inkSoft },
   body: { color: colors.inkSoft, lineHeight: 21, marginTop: 8 },
+  editCatalogBtn: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: colors.sage,
+    backgroundColor: "rgba(63,111,92,0.1)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 3,
+  },
+  editCatalogText: { color: colors.sageDeep, fontWeight: "700", fontSize: 15 },
+  editCatalogHint: { color: colors.inkSoft, fontSize: 12 },
   section: {
     marginTop: 18,
     fontSize: 12,

@@ -77,7 +77,13 @@ def _chapter_list_item(chapter: Chapter, locked: bool | None = None) -> dict:
     return item
 
 
-def _book_list_item(book: Book, *, chapter_count: int, publisher_name: str | None = None) -> dict:
+def _book_list_item(
+    book: Book,
+    *,
+    chapter_count: int,
+    publisher_name: str | None = None,
+    publisher_handle: str | None = None,
+) -> dict:
     item = {
         "id": book.id,
         "title": book.title,
@@ -97,6 +103,10 @@ def _book_list_item(book: Book, *, chapter_count: int, publisher_name: str | Non
     }
     if publisher_name is not None:
         item["publisher_name"] = publisher_name
+    if publisher_handle is not None:
+        item["publisher_handle"] = publisher_handle
+    elif book.publisher is not None and getattr(book.publisher, "handle", None):
+        item["publisher_handle"] = book.publisher.handle
     if book.publisher_id:
         item["publisher_id"] = book.publisher_id
     if book.source_filename is not None:
@@ -236,6 +246,7 @@ def list_books(
                 book,
                 chapter_count=chapter_count,
                 publisher_name=book.publisher.name if book.publisher else "",
+                publisher_handle=book.publisher.handle if book.publisher else None,
             )
         )
     return {"books": books}
@@ -362,6 +373,7 @@ def get_book(
             "featured": book.featured,
             "visibility": book.visibility,
             "publisher_name": book.publisher.name,
+            "publisher_handle": book.publisher.handle if book.publisher else None,
             "publisher_id": book.publisher_id,
             "source_filename": book.source_filename,
             "created_at": book.created_at.isoformat(),
@@ -727,6 +739,7 @@ def get_chapter(
             "title": book.title,
             "price_cents": book.price_cents,
             "publisher_name": book.publisher.name,
+            "publisher_handle": book.publisher.handle if book.publisher else None,
         },
         "chapter": {
             "id": chapter.id,

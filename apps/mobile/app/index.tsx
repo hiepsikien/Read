@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
@@ -58,10 +58,26 @@ export default function LibraryScreen() {
     return books.filter((book) => {
       if (categorySlug && book.category?.slug !== categorySlug) return false;
       if (!needle) return true;
-      const haystack = `${book.title} ${book.publisher_name || ""} ${book.category?.label || ""}`.toLowerCase();
+      const haystack = `${book.title} ${book.publisher_name || ""} ${book.publisher_handle || ""} ${book.category?.label || ""}`.toLowerCase();
       return haystack.includes(needle);
     });
   }, [books, categorySlug, query]);
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const book of books) {
+      const slug = book.category?.slug;
+      if (!slug) continue;
+      counts[slug] = (counts[slug] || 0) + 1;
+    }
+    return counts;
+  }, [books]);
+
+  useEffect(() => {
+    if (categorySlug && (categoryCounts[categorySlug] || 0) === 0) {
+      setCategorySlug(null);
+    }
+  }, [categorySlug, categoryCounts]);
 
   const tileWidth = useMemo(() => {
     const screen = Dimensions.get("window").width;
@@ -108,6 +124,9 @@ export default function LibraryScreen() {
           categories={categories}
           selected={categorySlug}
           onSelect={setCategorySlug}
+          countsBySlug={categoryCounts}
+          allCount={books.length}
+          hideEmpty
         />
       </ScrollView>
 
@@ -137,6 +156,11 @@ export default function LibraryScreen() {
               book={book}
               width={tileWidth}
               onPress={() => router.push(`/books/${book.id}`)}
+              onPressPublisher={
+                book.publisher_handle
+                  ? () => router.push(`/@${book.publisher_handle}`)
+                  : undefined
+              }
             />
           ))}
         </View>

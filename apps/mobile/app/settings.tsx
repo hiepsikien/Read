@@ -62,19 +62,26 @@ export default function SettingsScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Settings" }} />
-      <Text style={styles.eyebrow}>Preferences</Text>
-      <Text style={styles.title}>Settings</Text>
 
       <AccountSection
         name={user.name}
+        handle={user.handle}
         email={user.email}
+        role={user.role}
+        onOpenProfile={() => {
+          if (user.handle) router.push(`/@${user.handle}`);
+          else router.push("/claim-handle");
+        }}
+        onSignOut={() => void signOut().then(() => router.replace("/"))}
+      />
+
+      <WorkspaceSection
         role={user.role}
         authorBusy={authorBusy}
         authorError={authorError}
         onAdmin={() => router.push("/admin")}
         onPublisher={() => router.push("/publisher")}
         onBecomeAuthor={becomeAuthor}
-        onSignOut={() => void signOut().then(() => router.replace("/"))}
       />
 
       <LegalSection
@@ -94,23 +101,17 @@ export default function SettingsScreen() {
 
 function AccountSection({
   name,
+  handle,
   email,
   role,
-  authorBusy,
-  authorError,
-  onAdmin,
-  onPublisher,
-  onBecomeAuthor,
+  onOpenProfile,
   onSignOut,
 }: {
   name: string;
+  handle?: string | null;
   email: string;
   role: string;
-  authorBusy: boolean;
-  authorError: string;
-  onAdmin: () => void;
-  onPublisher: () => void;
-  onBecomeAuthor: () => void;
+  onOpenProfile: () => void;
   onSignOut: () => void;
 }) {
   return (
@@ -121,6 +122,14 @@ function AccountSection({
         <Text style={styles.kvValue}>{name}</Text>
       </View>
       <View style={styles.kvRow}>
+        <Text style={styles.kvKey}>Handle</Text>
+        <Pressable onPress={onOpenProfile}>
+          <Text style={[styles.kvValue, styles.linkValue]}>
+            {handle ? `@${handle}` : "Choose a handle"}
+          </Text>
+        </Pressable>
+      </View>
+      <View style={styles.kvRow}>
         <Text style={styles.kvKey}>Email</Text>
         <Text style={styles.kvValue}>{email}</Text>
       </View>
@@ -129,29 +138,72 @@ function AccountSection({
         <Text style={styles.kvValue}>{role}</Text>
       </View>
 
-      <View style={styles.accountActions}>
+      <Pressable style={styles.secondaryBtn} onPress={onSignOut}>
+        <Text style={styles.secondaryBtnText}>Sign out</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function WorkspaceSection({
+  role,
+  authorBusy,
+  authorError,
+  onAdmin,
+  onPublisher,
+  onBecomeAuthor,
+}: {
+  role: string;
+  authorBusy: boolean;
+  authorError: string;
+  onAdmin: () => void;
+  onPublisher: () => void;
+  onBecomeAuthor: () => void;
+}) {
+  return (
+    <View style={styles.workspaceCard}>
+      <Text style={styles.workspaceEyebrow}>Workspace</Text>
+      <Text style={styles.cardTitle}>Manage & publish</Text>
+      <Text style={styles.cardSub}>
+        Jump into the tools for your role. Admin and Publisher stay separate from account settings.
+      </Text>
+
+      <View style={styles.workspaceList}>
         {role === "admin" ? (
-          <Pressable style={styles.secondaryBtn} onPress={onAdmin}>
-            <Text style={styles.secondaryBtnText}>Admin center</Text>
+          <Pressable style={styles.workspaceRow} onPress={onAdmin}>
+            <View style={styles.workspaceCopy}>
+              <Text style={styles.workspaceTitle}>Admin center</Text>
+              <Text style={styles.workspaceHint}>Review queue, library, reports</Text>
+            </View>
+            <Text style={styles.workspaceChevron}>›</Text>
           </Pressable>
         ) : null}
+
         {role === "publisher" || role === "admin" ? (
-          <Pressable style={styles.secondaryBtn} onPress={onPublisher}>
-            <Text style={styles.secondaryBtnText}>Publisher</Text>
+          <Pressable style={styles.workspaceRow} onPress={onPublisher}>
+            <View style={styles.workspaceCopy}>
+              <Text style={styles.workspaceTitle}>Publisher workspace</Text>
+              <Text style={styles.workspaceHint}>Upload, edit drafts, submit for review</Text>
+            </View>
+            <Text style={styles.workspaceChevron}>›</Text>
           </Pressable>
         ) : (
-          <Pressable style={styles.secondaryBtn} onPress={onBecomeAuthor} disabled={authorBusy}>
-            <Text style={styles.secondaryBtnText}>
-              {authorBusy ? "Enabling…" : "Become author"}
-            </Text>
+          <Pressable
+            style={[styles.workspaceRow, authorBusy && styles.btnDisabled]}
+            onPress={onBecomeAuthor}
+            disabled={authorBusy}
+          >
+            <View style={styles.workspaceCopy}>
+              <Text style={styles.workspaceTitle}>
+                {authorBusy ? "Enabling…" : "Become an author"}
+              </Text>
+              <Text style={styles.workspaceHint}>Turn on publishing for your account</Text>
+            </View>
+            <Text style={styles.workspaceChevron}>›</Text>
           </Pressable>
         )}
       </View>
       {authorError ? <Text style={styles.errorInline}>{authorError}</Text> : null}
-
-      <Pressable style={styles.secondaryBtn} onPress={onSignOut}>
-        <Text style={styles.secondaryBtnText}>Sign out</Text>
-      </Pressable>
     </View>
   );
 }
@@ -443,14 +495,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.mist,
   },
-  eyebrow: {
-    fontSize: 12,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: colors.sage,
-    fontWeight: "600",
-  },
-  title: { fontSize: 32, fontWeight: "700", color: colors.ink, marginTop: 2 },
   card: {
     backgroundColor: colors.card,
     borderRadius: 16,
@@ -459,11 +503,43 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
+  workspaceCard: {
+    backgroundColor: colors.card,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: colors.sage,
+    padding: 16,
+    gap: 10,
+  },
+  workspaceEyebrow: {
+    fontSize: 11,
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
+    color: colors.sage,
+    fontWeight: "700",
+  },
+  workspaceList: { gap: 8, marginTop: 4 },
+  workspaceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(63,111,92,0.08)",
+  },
+  workspaceCopy: { flex: 1, gap: 2 },
+  workspaceTitle: { color: colors.ink, fontWeight: "700", fontSize: 16 },
+  workspaceHint: { color: colors.inkSoft, fontSize: 12, lineHeight: 17 },
+  workspaceChevron: { color: colors.sageDeep, fontSize: 24, fontWeight: "300", marginTop: -2 },
   cardTitle: { fontSize: 18, fontWeight: "600", color: colors.ink },
   cardSub: { fontSize: 13, color: colors.inkSoft, marginTop: -4 },
   kvRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
   kvKey: { color: colors.inkSoft },
   kvValue: { color: colors.ink, fontWeight: "500" },
+  linkValue: { color: colors.sage, textDecorationLine: "underline" },
   inlineRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -508,6 +584,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     borderRadius: 10,
     paddingVertical: 10,
+    paddingHorizontal: 14,
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.6)",
   },

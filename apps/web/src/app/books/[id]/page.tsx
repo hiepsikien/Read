@@ -34,9 +34,18 @@ export default async function BookDetailPage({ params }: Props) {
         ← Library
       </Link>
 
-      <p className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)]">
-        {book.publisher_name}
-      </p>
+      {book.publisher_handle ? (
+        <Link
+          href={`/@${book.publisher_handle}`}
+          className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)] underline-offset-4 hover:underline"
+        >
+          {book.publisher_name}
+        </Link>
+      ) : (
+        <p className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)]">
+          {book.publisher_name}
+        </p>
+      )}
       <h1 className="brand-mark mt-3 text-4xl font-semibold leading-tight text-[var(--ink)] sm:text-5xl">
         {book.title}
       </h1>

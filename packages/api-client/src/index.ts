@@ -17,10 +17,56 @@ export const SPLIT_LENGTH_OPTIONS: Array<{
   { value: "long", label: "Long", hint: "~20–25 min" },
 ];
 
+export const HANDLE_MIN_LENGTH = 3;
+export const HANDLE_MAX_LENGTH = 30;
+export const HANDLE_PATTERN = /^[a-z0-9_]{3,30}$/;
+
+const RESERVED_HANDLES = new Set([
+  "about",
+  "admin",
+  "api",
+  "assets",
+  "books",
+  "claim-handle",
+  "health",
+  "help",
+  "legal",
+  "login",
+  "me",
+  "null",
+  "publisher",
+  "read",
+  "settings",
+  "static",
+  "support",
+  "undefined",
+  "www",
+]);
+
+export function normalizeHandle(raw: string): string {
+  return raw.trim().replace(/^@+/, "").toLowerCase();
+}
+
+export function validateHandleInput(raw: string): string | null {
+  const handle = normalizeHandle(raw);
+  if (!HANDLE_PATTERN.test(handle)) {
+    return `Handle must be ${HANDLE_MIN_LENGTH}–${HANDLE_MAX_LENGTH} characters using lowercase letters, numbers, or underscores.`;
+  }
+  if (RESERVED_HANDLES.has(handle)) {
+    return "That handle is reserved.";
+  }
+  return null;
+}
+
+export function profilePath(handle: string): string {
+  return `/@${normalizeHandle(handle)}`;
+}
+
 export interface SessionUser {
   id: string;
   email: string;
   name: string;
+  handle?: string | null;
   role: UserRole;
   accepted_legal_version?: string | null;
   accepted_legal_at?: string | null;
@@ -46,6 +92,7 @@ export interface BookListItem {
   visibility_note?: string | null;
   report_count?: number;
   publisher_name?: string;
+  publisher_handle?: string | null;
   publisher_id?: string;
   source_filename?: string | null;
   chapter_count: number;
@@ -154,6 +201,7 @@ export interface BookDetail {
   report_count?: number;
   allowed_actions?: string[];
   publisher_name: string;
+  publisher_handle?: string | null;
   publisher_id: string;
   source_filename: string | null;
   created_at: string;
@@ -164,6 +212,13 @@ export interface BookDetail {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   cover_url?: string | null;
+}
+
+export interface PublicProfile {
+  id: string;
+  name: string;
+  handle: string;
+  role: UserRole;
 }
 
 export interface ModerationEvent {
@@ -359,6 +414,18 @@ export function createApiClient(options: ApiClientOptions) {
         body: JSON.stringify({ version }),
       });
     },
+    claimHandle(handle: string) {
+      return request<{ ok: boolean; user: SessionUser }>("/api/auth/claim-handle", {
+        method: "POST",
+        body: JSON.stringify({ handle }),
+      });
+    },
+    getProfile(handle: string) {
+      const normalized = handle.replace(/^@/, "");
+      return request<{ profile: PublicProfile; books: BookListItem[] }>(
+        `/api/profiles/${encodeURIComponent(normalized)}`
+      );
+    },
     listCategories() {
       return request<{ categories: Category[] }>("/api/books/categories/list");
     },
@@ -507,6 +574,25 @@ export function createApiClient(options: ApiClientOptions) {
     adminQueue() {
       return request<{ books: BookListItem[] }>("/api/admin/queue");
     },
+    adminSummary() {
+      return request<{
+        pending_count: number;
+        library_count: number;
+        report_count: number;
+        library_counts: {
+          listed: number;
+          featured: number;
+          rejected: number;
+          hidden: number;
+          removed: number;
+        };
+        report_counts: {
+          open: number;
+          resolved: number;
+          dismissed: number;
+        };
+      }>("/api/admin/summary");
+    },
     adminListBooks(options?: {
       status?: BookStatus;
       visibility?: BookVisibility;
@@ -529,6 +615,41 @@ export function createApiClient(options: ApiClientOptions) {
         chapters: ChapterListItem[];
         moderation_history: ModerationEvent[];
       }>(`/api/admin/books/${id}`);
+    },
+    adminUpdateBook(
+      id: string,
+      body: {
+        title?: string;
+        description?: string;
+        pricing?: "free" | "paid";
+        price?: number;
+        category_id?: string;
+      }
+    ) {
+      return request<{
+        ok: boolean;
+        book: {
+          id: string;
+          title: string;
+          description: string;
+          price_cents: number;
+          status: BookStatus;
+          visibility: BookVisibility;
+          featured: boolean;
+          category?: Category | null;
+          cover_url?: string | null;
+          updated_at: string;
+        };
+      }>(`/api/admin/books/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    adminUploadBookCover(id: string, form: FormData) {
+      return request<{ ok: boolean; cover_url: string }>(`/api/admin/books/${id}/cover`, {
+        method: "POST",
+        body: form,
+      });
     },
     adminApprove(id: string, featured = false) {
       return request<{

@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from nanoid import generate
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import (
@@ -17,6 +18,7 @@ from ..auth import (
 )
 from ..config import get_settings
 from ..db import get_db
+from ..handles import validate_handle
 from ..legal import CURRENT_LEGAL_VERSION, require_current_legal_acceptance
 from ..models import User
 
@@ -35,6 +37,10 @@ class EnableAuthorBody(BaseModel):
 
 class AcceptLegalBody(BaseModel):
     version: str = Field(min_length=1, max_length=32)
+
+
+class ClaimHandleBody(BaseModel):
+    handle: str = Field(min_length=1, max_length=32)
 
 
 @router.post("/dev-login")
@@ -136,5 +142,29 @@ def accept_legal(
     user.accepted_legal_version = CURRENT_LEGAL_VERSION
     user.accepted_legal_at = datetime.now(timezone.utc)
     db.commit()
+    db.refresh(user)
+    return {"ok": True, "user": session_user(user)}
+
+
+@router.post("/claim-handle")
+def claim_handle(
+    body: ClaimHandleBody,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    if user.handle:
+        raise HTTPException(status_code=400, detail="Handle is already set and cannot be changed.")
+
+    handle = validate_handle(body.handle)
+    taken = db.query(User).filter(User.handle == handle).one_or_none()
+    if taken:
+        raise HTTPException(status_code=409, detail="That handle is already taken.")
+
+    user.handle = handle
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="That handle is already taken.") from exc
     db.refresh(user)
     return {"ok": True, "user": session_user(user)}

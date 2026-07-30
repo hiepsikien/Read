@@ -30,6 +30,7 @@ type AuthContextValue = {
   signOut: () => Promise<void>;
   enableAuthor: () => Promise<SessionUser>;
   acceptLegal: (version: string) => Promise<SessionUser>;
+  claimHandle: (handle: string) => Promise<SessionUser>;
   usingFirebase: boolean;
 };
 
@@ -176,6 +177,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api]
   );
 
+  const claimHandle = useCallback(
+    async (handle: string) => {
+      const data = await api.claimHandle(handle);
+      setUser(data.user);
+      return data.user;
+    },
+    [api]
+  );
+
   const value = useMemo(
     () => ({
       user,
@@ -188,6 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       enableAuthor,
       acceptLegal,
+      claimHandle,
       usingFirebase,
     }),
     [
@@ -201,6 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       enableAuthor,
       acceptLegal,
+      claimHandle,
       usingFirebase,
     ]
   );

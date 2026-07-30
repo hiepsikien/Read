@@ -148,7 +148,13 @@ export default function BookDetailScreen() {
             </View>
           ) : null}
           <Text style={styles.title}>{book.title}</Text>
-          <Text style={styles.publisher}>{book.publisher_name}</Text>
+          {book.publisher_handle ? (
+            <Pressable onPress={() => router.push(`/@${book.publisher_handle}`)} hitSlop={6}>
+              <Text style={[styles.publisher, styles.publisherLink]}>{book.publisher_name}</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.publisher}>{book.publisher_name}</Text>
+          )}
           <View style={styles.metaRow}>
             <Text style={styles.meta}>{formatPrice(book.price_cents)}</Text>
             <Text style={styles.metaDot}>·</Text>
@@ -314,6 +320,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 26, fontWeight: "700", color: colors.ink, lineHeight: 30 },
   publisher: { color: colors.inkSoft, fontSize: 14 },
+  publisherLink: { color: colors.sage, textDecorationLine: "underline" },
   metaRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
   meta: { color: colors.inkSoft, fontSize: 13 },
   metaDot: { color: colors.line },

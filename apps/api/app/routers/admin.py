@@ -1,18 +1,25 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import require_admin
-from ..categories import category_payload
-from ..covers import cover_url_for
+from ..categories import category_payload, ensure_categories
+from ..config import get_settings
+from ..covers import (
+    ALLOWED_CONTENT_TYPES,
+    ALLOWED_EXT,
+    cover_url_for,
+    save_cover_bytes,
+)
 from ..db import get_db
-from ..models import Book, Chapter, ContentReport, ModerationEvent, User
+from ..models import Book, Category, Chapter, ContentReport, ModerationEvent, User
 from ..moderation import allowed_admin_actions, event_payload, record_moderation_event
-from ..tts_settings import get_active_tts, tts_settings_payload, upsert_tts_settings
+from ..tts_settings import tts_settings_payload, upsert_tts_settings
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -45,6 +52,14 @@ class TtsSettingsBody(BaseModel):
     chirp_persona: str = Field(default="", max_length=64)
 
 
+class AdminCatalogBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    pricing: Literal["free", "paid"] | None = None
+    price: float | None = None
+    category_id: str | None = None
+
+
 def _report_count(db: Session, book_id: str, status: str | None = "open") -> int:
     query = select(func.count()).select_from(ContentReport).where(
         ContentReport.book_id == book_id
@@ -52,6 +67,23 @@ def _report_count(db: Session, book_id: str, status: str | None = "open") -> int
     if status:
         query = query.where(ContentReport.status == status)
     return db.scalar(query) or 0
+
+
+def _assert_listed_published(book: Book) -> None:
+    if book.status != "published" or book.visibility != "listed":
+        raise HTTPException(
+            status_code=400,
+            detail="Only listed published books can be edited by admin.",
+        )
+
+
+def _get_category(db: Session, category_id: str | None) -> Category | None:
+    if not category_id:
+        return None
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=400, detail="Unknown category.")
+    return category
 
 
 def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
@@ -68,6 +100,7 @@ def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
         "chapter_count": chapter_count,
         "report_count": report_count,
         "publisher_name": book.publisher.name if book.publisher else "",
+        "publisher_handle": book.publisher.handle if book.publisher else None,
         "publisher_id": book.publisher_id,
         "category": category_payload(book.category),
         "source_filename": book.source_filename,
@@ -76,6 +109,110 @@ def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
         "updated_at": book.updated_at.isoformat(),
         "review_note": book.review_note,
         "cover_url": cover_url_for(book.id, book.cover_path),
+    }
+
+
+@router.get("/summary")
+def admin_summary(
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    pending_count = (
+        db.scalar(
+            select(func.count()).select_from(Book).where(Book.status == "pending_review")
+        )
+        or 0
+    )
+    listed_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Book)
+            .where(Book.status == "published", Book.visibility == "listed")
+        )
+        or 0
+    )
+    featured_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Book)
+            .where(
+                Book.status == "published",
+                Book.visibility == "listed",
+                Book.featured.is_(True),
+            )
+        )
+        or 0
+    )
+    rejected_count = (
+        db.scalar(
+            select(func.count()).select_from(Book).where(Book.status == "rejected")
+        )
+        or 0
+    )
+    hidden_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Book)
+            .where(Book.status == "published", Book.visibility == "hidden")
+        )
+        or 0
+    )
+    removed_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Book)
+            .where(Book.status == "published", Book.visibility == "removed")
+        )
+        or 0
+    )
+    library_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Book)
+            .where(Book.status.in_({"published", "rejected"}))
+        )
+        or 0
+    )
+    open_reports = (
+        db.scalar(
+            select(func.count())
+            .select_from(ContentReport)
+            .where(ContentReport.status == "open")
+        )
+        or 0
+    )
+    resolved_reports = (
+        db.scalar(
+            select(func.count())
+            .select_from(ContentReport)
+            .where(ContentReport.status == "resolved")
+        )
+        or 0
+    )
+    dismissed_reports = (
+        db.scalar(
+            select(func.count())
+            .select_from(ContentReport)
+            .where(ContentReport.status == "dismissed")
+        )
+        or 0
+    )
+    return {
+        "pending_count": pending_count,
+        "library_count": library_count,
+        "report_count": open_reports + resolved_reports + dismissed_reports,
+        "library_counts": {
+            "listed": listed_count,
+            "featured": featured_count,
+            "rejected": rejected_count,
+            "hidden": hidden_count,
+            "removed": removed_count,
+        },
+        "report_counts": {
+            "open": open_reports,
+            "resolved": resolved_reports,
+            "dismissed": dismissed_reports,
+        },
     }
 
 
@@ -202,6 +339,142 @@ def moderation_detail(
             )
         ],
     }
+
+
+@router.patch("/books/{book_id}")
+def admin_update_book_catalog(
+    book_id: str,
+    body: AdminCatalogBody,
+    db: Annotated[Session, Depends(get_db)],
+    admin: Annotated[User, Depends(require_admin)],
+):
+    ensure_categories(db)
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.category))
+        .filter(Book.id == book_id)
+        .one_or_none()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_listed_published(book)
+
+    previous = {
+        "title": book.title,
+        "description": book.description,
+        "price_cents": book.price_cents,
+        "category_id": book.category_id,
+    }
+
+    title = body.title.strip() if body.title is not None else book.title
+    description = (
+        body.description.strip() if body.description is not None else book.description
+    )
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required.")
+
+    price_cents = book.price_cents
+    if body.pricing == "free":
+        price_cents = 0
+    elif body.pricing == "paid" or body.price is not None:
+        dollars = body.price if body.price is not None else price_cents / 100
+        price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
+
+    if body.category_id is not None:
+        category = _get_category(db, body.category_id.strip() or None)
+        if not category:
+            raise HTTPException(status_code=400, detail="Category is required.")
+        book.category_id = category.id
+
+    book.title = title
+    book.description = description
+    book.price_cents = price_cents
+    book.updated_at = datetime.now(timezone.utc)
+
+    changes = {}
+    if previous["title"] != book.title:
+        changes["title"] = {"from": previous["title"], "to": book.title}
+    if previous["description"] != book.description:
+        changes["description"] = {
+            "from": previous["description"],
+            "to": book.description,
+        }
+    if previous["price_cents"] != book.price_cents:
+        changes["price_cents"] = {
+            "from": previous["price_cents"],
+            "to": book.price_cents,
+        }
+    if previous["category_id"] != book.category_id:
+        changes["category_id"] = {
+            "from": previous["category_id"],
+            "to": book.category_id,
+        }
+
+    if changes:
+        record_moderation_event(
+            db,
+            book=book,
+            actor=admin,
+            action="edit_catalog",
+            payload={"changes": changes},
+        )
+    db.commit()
+    db.refresh(book)
+    return {
+        "ok": True,
+        "book": {
+            "id": book.id,
+            "title": book.title,
+            "description": book.description,
+            "price_cents": book.price_cents,
+            "status": book.status,
+            "visibility": book.visibility,
+            "featured": book.featured,
+            "category": category_payload(book.category),
+            "cover_url": cover_url_for(book.id, book.cover_path),
+            "updated_at": book.updated_at.isoformat(),
+        },
+    }
+
+
+@router.post("/books/{book_id}/cover")
+async def admin_upload_book_cover(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    admin: Annotated[User, Depends(require_admin)],
+    file: UploadFile = File(...),
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_listed_published(book)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A cover image is required.")
+    ext = Path(file.filename).suffix.lower()
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if ext not in ALLOWED_EXT and content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="Cover must be a JPEG, PNG, or WebP image.")
+
+    raw = await file.read()
+    settings = get_settings()
+    try:
+        cover_path = save_cover_bytes(settings.upload_dir, book.id, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    previous_cover = book.cover_path
+    book.cover_path = cover_path
+    book.updated_at = datetime.now(timezone.utc)
+    record_moderation_event(
+        db,
+        book=book,
+        actor=admin,
+        action="replace_cover",
+        payload={"from": previous_cover, "to": cover_path},
+    )
+    db.commit()
+    return {"ok": True, "cover_url": cover_url_for(book.id, cover_path)}
 
 
 @router.post("/books/{book_id}/approve")

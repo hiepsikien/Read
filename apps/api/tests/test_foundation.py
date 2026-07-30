@@ -12,7 +12,8 @@ from app.categories import CATEGORY_SEED, ensure_categories
 from app.db import Base, get_db
 from app.legal import CURRENT_LEGAL_VERSION
 from app.main import app
-from app.models import Book, Chapter, User
+from app.models import Book, Chapter, ModerationEvent, User
+from app.routers import admin as admin_router
 
 
 @pytest.fixture()
@@ -516,3 +517,254 @@ def test_report_flow_duplicate_and_hide_resolution(client, db_session, seeded):
     assert resolved.json()["book_visibility"] == "hidden"
     db_session.refresh(book)
     assert book.featured is False
+
+
+def test_admin_summary_pending_count(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    now = datetime.now(timezone.utc)
+
+    denied = client.get("/api/admin/summary")
+    assert denied.status_code in {401, 403}
+
+    reader_denied = client.get("/api/admin/summary", headers=auth_header(seeded["reader"]))
+    assert reader_denied.status_code == 403
+
+    empty = client.get("/api/admin/summary", headers=auth_header(admin))
+    assert empty.status_code == 200
+    assert empty.json()["pending_count"] == 0
+    assert empty.json()["library_count"] == 0
+    assert empty.json()["report_count"] == 0
+    assert empty.json()["library_counts"] == {
+        "listed": 0,
+        "featured": 0,
+        "rejected": 0,
+        "hidden": 0,
+        "removed": 0,
+    }
+    assert empty.json()["report_counts"] == {
+        "open": 0,
+        "resolved": 0,
+        "dismissed": 0,
+    }
+
+    db_session.add(
+        Book(
+            id=generate(),
+            publisher_id=publisher.id,
+            category_id=fiction.id,
+            title="Waiting",
+            description="",
+            price_cents=0,
+            status="pending_review",
+            created_at=now,
+            updated_at=now,
+            submitted_at=now,
+        )
+    )
+    db_session.add(
+        Book(
+            id=generate(),
+            publisher_id=publisher.id,
+            category_id=fiction.id,
+            title="Also waiting",
+            description="",
+            price_cents=0,
+            status="pending_review",
+            created_at=now,
+            updated_at=now,
+            submitted_at=now,
+        )
+    )
+    db_session.add(
+        Book(
+            id=generate(),
+            publisher_id=publisher.id,
+            category_id=fiction.id,
+            title="Live",
+            description="",
+            price_cents=0,
+            status="published",
+            visibility="listed",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.commit()
+
+    summary = client.get("/api/admin/summary", headers=auth_header(admin))
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["pending_count"] == 2
+    assert body["library_count"] == 1
+    assert body["library_counts"]["listed"] == 1
+    assert body["library_counts"]["featured"] == 0
+    assert body["report_count"] == 0
+
+
+def test_admin_listed_filter_and_catalog_edit(client, db_session, seeded, tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from app.config import Settings
+
+    publisher = seeded["publisher"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    nonfiction = next(c for c in seeded["categories"] if c.slug == "essays")
+    now = datetime.now(timezone.utc)
+
+    listed = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Listed Title",
+        description="Old description",
+        price_cents=0,
+        status="published",
+        visibility="listed",
+        featured=True,
+        featured_at=now,
+        featured_by=admin.id,
+        created_at=now,
+        updated_at=now,
+    )
+    hidden = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Hidden Title",
+        description="",
+        price_cents=0,
+        status="published",
+        visibility="hidden",
+        created_at=now,
+        updated_at=now,
+    )
+    pending = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Pending Title",
+        description="",
+        price_cents=0,
+        status="pending_review",
+        created_at=now,
+        updated_at=now,
+        submitted_at=now,
+    )
+    db_session.add_all([listed, hidden, pending])
+    db_session.commit()
+
+    listed_only = client.get(
+        "/api/admin/books?status=published&visibility=listed",
+        headers=auth_header(admin),
+    )
+    assert listed_only.status_code == 200
+    listed_ids = {item["id"] for item in listed_only.json()["books"]}
+    assert listed.id in listed_ids
+    assert hidden.id not in listed_ids
+    assert pending.id not in listed_ids
+
+    publisher_blocked = client.patch(
+        f"/api/books/{listed.id}",
+        headers=auth_header(publisher),
+        json={"title": "Publisher rewrite"},
+    )
+    assert publisher_blocked.status_code == 400
+
+    reader_blocked = client.patch(
+        f"/api/admin/books/{listed.id}",
+        headers=auth_header(seeded["reader"]),
+        json={"title": "Reader rewrite"},
+    )
+    assert reader_blocked.status_code == 403
+
+    pending_blocked = client.patch(
+        f"/api/admin/books/{pending.id}",
+        headers=auth_header(admin),
+        json={"title": "Should fail"},
+    )
+    assert pending_blocked.status_code == 400
+
+    hidden_blocked = client.patch(
+        f"/api/admin/books/{hidden.id}",
+        headers=auth_header(admin),
+        json={"title": "Should fail"},
+    )
+    assert hidden_blocked.status_code == 400
+
+    updated = client.patch(
+        f"/api/admin/books/{listed.id}",
+        headers=auth_header(admin),
+        json={
+            "title": "Updated Title",
+            "description": "Fresh blurb",
+            "pricing": "paid",
+            "price": 6.5,
+            "category_id": nonfiction.id,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    payload = updated.json()["book"]
+    assert payload["title"] == "Updated Title"
+    assert payload["description"] == "Fresh blurb"
+    assert payload["price_cents"] == 650
+    assert payload["status"] == "published"
+    assert payload["visibility"] == "listed"
+    assert payload["featured"] is True
+    assert payload["category"]["id"] == nonfiction.id
+
+    db_session.refresh(listed)
+    assert listed.title == "Updated Title"
+    assert listed.price_cents == 650
+    assert listed.status == "published"
+    assert listed.visibility == "listed"
+    assert listed.featured is True
+    assert listed.category_id == nonfiction.id
+
+    events = (
+        db_session.query(ModerationEvent)
+        .filter(ModerationEvent.book_id == listed.id, ModerationEvent.action == "edit_catalog")
+        .all()
+    )
+    assert len(events) == 1
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    settings = Settings(upload_dir=str(upload_dir), auth_dev_mode=True)
+    monkeypatch.setattr(admin_router, "get_settings", lambda: settings)
+
+    image = Image.new("RGB", (700, 1000), (40, 90, 70))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+    cover = client.post(
+        f"/api/admin/books/{listed.id}/cover",
+        files={"file": ("cover.jpg", buffer.getvalue(), "image/jpeg")},
+        headers=auth_header(admin),
+    )
+    assert cover.status_code == 200, cover.text
+    assert cover.json()["cover_url"] == f"/api/books/{listed.id}/cover"
+
+    cover_events = (
+        db_session.query(ModerationEvent)
+        .filter(ModerationEvent.book_id == listed.id, ModerationEvent.action == "replace_cover")
+        .all()
+    )
+    assert len(cover_events) == 1
+
+    publisher_cover = client.post(
+        f"/api/books/{listed.id}/cover",
+        files={"file": ("cover.jpg", buffer.getvalue(), "image/jpeg")},
+        headers=auth_header(publisher),
+    )
+    assert publisher_cover.status_code == 400
+
+    hidden_cover = client.post(
+        f"/api/admin/books/{hidden.id}/cover",
+        files={"file": ("cover.jpg", buffer.getvalue(), "image/jpeg")},
+        headers=auth_header(admin),
+    )
+    assert hidden_cover.status_code == 400

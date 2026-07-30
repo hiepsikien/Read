@@ -86,6 +86,20 @@ export default function SettingsPage() {
               <dd className="mt-0.5 font-medium">{user.name}</dd>
             </div>
             <div>
+              <dt className="text-[var(--ink-soft)]">Handle</dt>
+              <dd className="mt-0.5 font-medium">
+                {user.handle ? (
+                  <Link href={`/@${user.handle}`} className="underline underline-offset-4">
+                    @{user.handle}
+                  </Link>
+                ) : (
+                  <Link href="/claim-handle" className="underline underline-offset-4">
+                    Choose a handle
+                  </Link>
+                )}
+              </dd>
+            </div>
+            <div>
               <dt className="text-[var(--ink-soft)]">Email</dt>
               <dd className="mt-0.5 font-medium">{user.email}</dd>
             </div>

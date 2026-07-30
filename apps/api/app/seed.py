@@ -94,6 +94,7 @@ def seed_if_empty(db: Session) -> None:
 
     count = db.scalar(select(func.count()).select_from(User)) or 0
     if count > 0:
+        ensure_demo_handles(db)
         return
 
     now = datetime.now(timezone.utc)
@@ -108,6 +109,7 @@ def seed_if_empty(db: Session) -> None:
         firebase_uid=f"dev-{publisher_id}",
         email="publisher@read.app",
         name="North Harbor Press",
+        handle="northharbor",
         role="publisher",
         password_hash=hash_password("publisher123"),
         created_at=now,
@@ -117,6 +119,7 @@ def seed_if_empty(db: Session) -> None:
         firebase_uid=f"dev-{reader_id}",
         email="reader@read.app",
         name="Alex Reader",
+        handle="alexreader",
         role="reader",
         password_hash=hash_password("reader123"),
         created_at=now,
@@ -126,6 +129,7 @@ def seed_if_empty(db: Session) -> None:
         firebase_uid=f"dev-{admin_id}",
         email="admin@read.app",
         name="Read Admin",
+        handle="readadmin",
         role="admin",
         password_hash=hash_password("admin123"),
         created_at=now,
@@ -196,3 +200,26 @@ def seed_if_empty(db: Session) -> None:
         )
 
     db.commit()
+
+
+DEMO_HANDLES = {
+    "publisher@read.app": "northharbor",
+    "reader@read.app": "alexreader",
+    "admin@read.app": "readadmin",
+}
+
+
+def ensure_demo_handles(db: Session) -> None:
+    """Backfill immutable handles for local demo accounts created before handles existed."""
+    changed = False
+    for email, handle in DEMO_HANDLES.items():
+        user = db.query(User).filter(User.email == email).one_or_none()
+        if not user or user.handle:
+            continue
+        taken = db.query(User).filter(User.handle == handle).one_or_none()
+        if taken:
+            continue
+        user.handle = handle
+        changed = True
+    if changed:
+        db.commit()

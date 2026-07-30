@@ -21,43 +21,87 @@ import { useAuth } from "../../lib/auth";
 import { colors, formatPrice, radii, space } from "../../lib/theme";
 
 type AdminTab = "queue" | "library" | "reports";
-type LibraryFilter = "published" | "featured" | "rejected" | "hidden" | "removed";
+type LibraryFilter = "listed" | "featured" | "rejected" | "hidden" | "removed";
+
+type AdminCounts = {
+  pending_count: number;
+  library_count: number;
+  report_count: number;
+  library_counts: Record<LibraryFilter, number>;
+  report_counts: Record<ReportStatus, number>;
+};
+
+const EMPTY_COUNTS: AdminCounts = {
+  pending_count: 0,
+  library_count: 0,
+  report_count: 0,
+  library_counts: {
+    listed: 0,
+    featured: 0,
+    rejected: 0,
+    hidden: 0,
+    removed: 0,
+  },
+  report_counts: {
+    open: 0,
+    resolved: 0,
+    dismissed: 0,
+  },
+};
 
 export default function AdminQueueScreen() {
   const router = useRouter();
   const { user, api, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [reports, setReports] = useState<ContentReport[]>([]);
+  const [counts, setCounts] = useState<AdminCounts>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<AdminTab>("queue");
-  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("published");
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("listed");
   const [reportStatus, setReportStatus] = useState<ReportStatus>("open");
   const [query, setQuery] = useState("");
 
   const load = useCallback(async () => {
     setError("");
     try {
+      const summaryPromise = api.adminSummary().catch(() => null);
       if (tab === "queue") {
-        const data = await api.adminQueue();
+        const [data, summary] = await Promise.all([api.adminQueue(), summaryPromise]);
         setBooks(data.books);
+        if (summary) setCounts(summary);
       } else if (tab === "library") {
         const options =
-          libraryFilter === "featured"
-            ? { status: "published" as const, visibility: "listed" as const, featured: true, q: query }
-            : libraryFilter === "hidden" || libraryFilter === "removed"
+          libraryFilter === "listed"
+            ? { status: "published" as const, visibility: "listed" as const, q: query }
+            : libraryFilter === "featured"
               ? {
                   status: "published" as const,
-                  visibility: libraryFilter,
+                  visibility: "listed" as const,
+                  featured: true,
                   q: query,
                 }
-              : { status: libraryFilter, q: query };
-        const data = await api.adminListBooks(options);
+              : libraryFilter === "hidden" || libraryFilter === "removed"
+                ? {
+                    status: "published" as const,
+                    visibility: libraryFilter,
+                    q: query,
+                  }
+                : { status: libraryFilter, q: query };
+        const [data, summary] = await Promise.all([
+          api.adminListBooks(options),
+          summaryPromise,
+        ]);
         setBooks(data.books);
+        if (summary) setCounts(summary);
       } else {
-        const data = await api.adminReports(reportStatus);
+        const [data, summary] = await Promise.all([
+          api.adminReports(reportStatus),
+          summaryPromise,
+        ]);
         setReports(data.reports);
+        if (summary) setCounts(summary);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load admin data.");
@@ -90,6 +134,12 @@ export default function AdminQueueScreen() {
     );
   }
 
+  const tabCounts: Record<AdminTab, number> = {
+    queue: counts.pending_count,
+    library: counts.library_count,
+    reports: counts.report_count,
+  };
+
   return (
     <ScrollView
       contentContainerStyle={styles.container}
@@ -119,7 +169,7 @@ export default function AdminQueueScreen() {
             }}
           >
             <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>
-              {item[0].toUpperCase() + item.slice(1)}
+              {item[0].toUpperCase() + item.slice(1)} ({tabCounts[item]})
             </Text>
           </Pressable>
         ))}
@@ -131,11 +181,11 @@ export default function AdminQueueScreen() {
         <>
           <SearchField value={query} onChangeText={setQuery} placeholder="Search title or publisher" />
           <View style={styles.filters}>
-            {(["published", "featured", "rejected", "hidden", "removed"] as LibraryFilter[]).map(
+            {(["listed", "featured", "rejected", "hidden", "removed"] as LibraryFilter[]).map(
               (item) => (
                 <FilterChip
                   key={item}
-                  label={item}
+                  label={`${item} (${counts.library_counts[item]})`}
                   active={libraryFilter === item}
                   onPress={() => {
                     setLoading(true);
@@ -153,7 +203,7 @@ export default function AdminQueueScreen() {
           {(["open", "resolved", "dismissed"] as ReportStatus[]).map((item) => (
             <FilterChip
               key={item}
-              label={item}
+              label={`${item} (${counts.report_counts[item]})`}
               active={reportStatus === item}
               onPress={() => {
                 setLoading(true);
@@ -310,13 +360,14 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: radii.sm,
     paddingVertical: 10,
+    paddingHorizontal: 4,
     alignItems: "center",
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.card,
   },
   tabActive: { backgroundColor: colors.sage, borderColor: colors.sage },
-  tabText: { color: colors.ink, fontWeight: "600" },
+  tabText: { color: colors.ink, fontWeight: "600", fontSize: 13 },
   tabTextActive: { color: colors.white },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   filter: {

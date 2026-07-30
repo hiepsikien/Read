@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
-import { ApiError } from "@read/api-client";
+import { ApiError, normalizeHandle, validateHandleInput } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi } from "@/lib/api";
@@ -35,6 +35,7 @@ export default function LoginPage() {
   const { setSession } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
+  const [handle, setHandle] = useState("");
   const [email, setEmail] = useState("reader@read.app");
   const [password, setPassword] = useState("reader123");
   const [error, setError] = useState("");
@@ -47,10 +48,18 @@ export default function LoginPage() {
       setError("Accept the Terms and Privacy Policy to create an account.");
       return;
     }
+    if (mode === "signup") {
+      const validationError = validateHandleInput(handle);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+    }
     setLoading(true);
     setError("");
     try {
-      const data = await createBrowserApi().login(
+      const api = createBrowserApi();
+      const data = await api.login(
         email,
         password,
         mode === "signup" ? name || email.split("@")[0] : undefined
@@ -63,6 +72,16 @@ export default function LoginPage() {
         );
         profile = accepted.user;
         setSession(profile);
+        if (!profile.handle) {
+          const claimed = await createBrowserApi().claimHandle(normalizeHandle(handle));
+          profile = claimed.user;
+          setSession(profile);
+        }
+      }
+      if (!profile.handle) {
+        router.push("/claim-handle");
+        router.refresh();
+        return;
       }
       router.push(profile.role === "publisher" ? "/publisher" : "/");
       router.refresh();
@@ -111,14 +130,38 @@ export default function LoginPage() {
 
       <form onSubmit={onSubmit} className="surface mt-4 space-y-4 rounded-2xl p-6">
         {mode === "signup" ? (
-          <label className="block text-sm">
-            <span className="mb-1.5 block text-[var(--ink-soft)]">Display name</span>
-            <input
-              className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
+          <>
+            <label className="block text-sm">
+              <span className="mb-1.5 block text-[var(--ink-soft)]">Display name</span>
+              <input
+                className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1.5 block text-[var(--ink-soft)]">Handle</span>
+              <div className="flex items-center rounded-lg border border-[var(--line)] bg-white/70 focus-within:ring-2 focus-within:ring-[var(--sage)]">
+                <span className="pl-3 text-[var(--ink-soft)]">@</span>
+                <input
+                  className="w-full bg-transparent px-2 py-2.5 outline-none"
+                  value={handle}
+                  onChange={(e) => setHandle(normalizeHandle(e.target.value))}
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  required
+                  minLength={3}
+                  maxLength={30}
+                  pattern="[a-z0-9_]{3,30}"
+                  placeholder="yourname"
+                />
+              </div>
+              <span className="mt-1.5 block text-xs text-[var(--ink-soft)]">
+                Public page at /@{handle || "yourname"}. Cannot be changed later.
+              </span>
+            </label>
+          </>
         ) : null}
         <label className="block text-sm">
           <span className="mb-1.5 block text-[var(--ink-soft)]">Email</span>

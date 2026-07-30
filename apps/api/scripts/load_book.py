@@ -41,12 +41,25 @@ def get_or_create_publisher(db: Session, email: str, name: str) -> User:
             user.role = "publisher"
         return user
 
+    from app.handles import normalize_handle
+
     user_id = generate()
+    base = normalize_handle(email.split("@")[0]) or "publisher"
+    if len(base) < 3:
+        base = f"{base}pub"
+    handle = base[:30]
+    suffix = 0
+    while db.scalar(select(User).where(User.handle == handle)):
+        suffix += 1
+        stem = base[: max(1, 30 - len(str(suffix)) - 1)]
+        handle = f"{stem}{suffix}"
+
     user = User(
         id=user_id,
         firebase_uid=f"dev-{user_id}",
         email=email,
         name=name,
+        handle=handle,
         role="publisher",
         password_hash=hash_password("publisher123"),
         created_at=datetime.now(timezone.utc),

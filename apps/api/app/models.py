@@ -13,6 +13,7 @@ class User(Base):
     firebase_uid: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    handle: Mapped[str | None] = mapped_column(String(30), unique=True, nullable=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     accepted_legal_version: Mapped[str | None] = mapped_column(String(32), nullable=True)

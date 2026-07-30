@@ -7,6 +7,7 @@ export function BookCard({
   description,
   price_cents,
   publisher_name,
+  publisher_handle,
   chapter_count,
 }: {
   id: string;
@@ -14,28 +15,38 @@ export function BookCard({
   description: string;
   price_cents: number;
   publisher_name: string;
+  publisher_handle?: string | null;
   chapter_count: number;
 }) {
   const isFree = price_cents <= 0;
 
   return (
-    <Link
-      href={`/books/${id}`}
-      className="group block border-b border-[var(--line)] py-6 transition first:pt-0 last:border-b-0 hover:opacity-95"
-    >
+    <article className="group border-b border-[var(--line)] py-6 transition first:pt-0 last:border-b-0 hover:opacity-95">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
-          <p className="text-xs uppercase tracking-[0.14em] text-[var(--sage)]">
-            {publisher_name}
-          </p>
-          <h2 className="brand-mark mt-1 text-2xl font-semibold leading-tight text-[var(--ink)] sm:text-3xl">
-            {title}
-          </h2>
-          <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-[var(--ink-soft)]">
-            {description}
-          </p>
+          {publisher_handle ? (
+            <Link
+              href={`/@${publisher_handle}`}
+              className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] underline-offset-4 hover:underline"
+            >
+              {publisher_name}
+            </Link>
+          ) : (
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--sage)]">{publisher_name}</p>
+          )}
+          <Link href={`/books/${id}`} className="block">
+            <h2 className="brand-mark mt-1 text-2xl font-semibold leading-tight text-[var(--ink)] sm:text-3xl">
+              {title}
+            </h2>
+            <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-[var(--ink-soft)]">
+              {description}
+            </p>
+          </Link>
         </div>
-        <div className="flex shrink-0 items-center gap-3 text-sm text-[var(--ink-soft)]">
+        <Link
+          href={`/books/${id}`}
+          className="flex shrink-0 items-center gap-3 text-sm text-[var(--ink-soft)]"
+        >
           <span>
             {chapter_count} chapter{chapter_count === 1 ? "" : "s"}
           </span>
@@ -51,8 +62,8 @@ export function BookCard({
           <span className="text-[var(--sage)] transition group-hover:translate-x-0.5">
             Read →
           </span>
-        </div>
+        </Link>
       </div>
-    </Link>
+    </article>
   );
 }

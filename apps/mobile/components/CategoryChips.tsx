@@ -6,20 +6,44 @@ type Props = {
   categories: Category[];
   selected: string | null;
   onSelect: (slug: string | null) => void;
+  /** Counts keyed by category slug. When set with hideEmpty, zero-count chips are omitted. */
+  countsBySlug?: Record<string, number>;
+  /** Total shown on the All chip, e.g. books.length */
+  allCount?: number;
+  hideEmpty?: boolean;
 };
 
-export function CategoryChips({ categories, selected, onSelect }: Props) {
+export function CategoryChips({
+  categories,
+  selected,
+  onSelect,
+  countsBySlug,
+  allCount,
+  hideEmpty = false,
+}: Props) {
+  const visible = hideEmpty
+    ? categories.filter((category) => (countsBySlug?.[category.slug] ?? 0) > 0)
+    : categories;
+
+  const allLabel =
+    allCount === undefined ? "All" : `All (${allCount})`;
+
   return (
     <View style={styles.row}>
-      <Chip label="All" active={!selected} onPress={() => onSelect(null)} />
-      {categories.map((category) => (
-        <Chip
-          key={category.id}
-          label={category.label}
-          active={selected === category.slug}
-          onPress={() => onSelect(category.slug)}
-        />
-      ))}
+      <Chip label={allLabel} active={!selected} onPress={() => onSelect(null)} />
+      {visible.map((category) => {
+        const count = countsBySlug?.[category.slug];
+        const label =
+          count === undefined ? category.label : `${category.label} (${count})`;
+        return (
+          <Chip
+            key={category.id}
+            label={label}
+            active={selected === category.slug}
+            onPress={() => onSelect(category.slug)}
+          />
+        );
+      })}
     </View>
   );
 }

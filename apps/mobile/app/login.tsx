@@ -8,7 +8,7 @@ import {
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { ApiError } from "@read/api-client";
+import { ApiError, normalizeHandle, validateHandleInput } from "@read/api-client";
 import { BrandLogo } from "../components/BrandLogo";
 import { FormScroll } from "../components/FormScroll";
 import { useAuth } from "../lib/auth";
@@ -23,9 +23,10 @@ const DEMOS = [
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { signIn, signUp, acceptLegal, usingFirebase } = useAuth();
+  const { signIn, signUp, acceptLegal, claimHandle, usingFirebase } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
+  const [handle, setHandle] = useState("");
   const [email, setEmail] = useState("reader@read.app");
   const [password, setPassword] = useState("reader123");
   const [error, setError] = useState("");
@@ -37,18 +38,33 @@ export default function LoginScreen() {
       setError("Accept the Terms and Privacy Policy to create an account.");
       return;
     }
+    if (mode === "signup") {
+      const validationError = validateHandleInput(handle);
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+    }
     setLoading(true);
     setError("");
     try {
+      let profile;
       if (mode === "signup") {
-        const profile = await signUp(
+        profile = await signUp(
           email.trim(),
           password,
           name.trim() || email.split("@")[0]
         );
-        await acceptLegal(profile.current_legal_version || CURRENT_LEGAL_VERSION);
+        profile = await acceptLegal(profile.current_legal_version || CURRENT_LEGAL_VERSION);
+        if (!profile.handle) {
+          profile = await claimHandle(normalizeHandle(handle));
+        }
       } else {
-        await signIn(email.trim(), password);
+        profile = await signIn(email.trim(), password);
+      }
+      if (!profile.handle) {
+        router.replace("/claim-handle");
+        return;
       }
       if (router.canGoBack()) router.back();
       else router.replace("/");
@@ -97,13 +113,30 @@ export default function LoginScreen() {
         </View>
 
         {mode === "signup" ? (
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            placeholder="Display name"
-            placeholderTextColor={colors.inkSoft}
-          />
+          <>
+            <TextInput
+              style={styles.input}
+              value={name}
+              onChangeText={setName}
+              placeholder="Display name"
+              placeholderTextColor={colors.inkSoft}
+            />
+            <View style={styles.handleRow}>
+              <Text style={styles.at}>@</Text>
+              <TextInput
+                style={styles.handleInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={handle}
+                onChangeText={(value) => setHandle(normalizeHandle(value))}
+                placeholder="handle"
+                placeholderTextColor={colors.inkSoft}
+              />
+            </View>
+            <Text style={styles.handleHint}>
+              Public page at /@{handle || "yourname"}. Cannot be changed later.
+            </Text>
+          </>
         ) : null}
 
         <TextInput
@@ -244,6 +277,22 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: colors.ink,
   },
+  handleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: radii.sm,
+    paddingHorizontal: 12,
+  },
+  at: { color: colors.inkSoft, fontSize: 16, marginRight: 2 },
+  handleInput: {
+    flex: 1,
+    paddingVertical: 12,
+    color: colors.ink,
+  },
+  handleHint: { color: colors.inkSoft, fontSize: 12, marginTop: -4 },
   button: {
     backgroundColor: colors.sage,
     borderRadius: radii.sm,
@@ -261,29 +310,24 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
+    marginTop: 1,
   },
   checkboxChecked: { backgroundColor: colors.sage },
-  checkmark: { color: colors.white, fontWeight: "700" },
-  legalText: { flex: 1, color: colors.inkSoft, fontSize: 13, lineHeight: 18 },
-  legalLinks: { flexDirection: "row", gap: 14, marginLeft: 32 },
-  legalLink: { color: colors.sageDeep, fontWeight: "600", textDecorationLine: "underline" },
+  checkmark: { color: "#fff", fontWeight: "700", fontSize: 12 },
+  legalText: { flex: 1, color: colors.inkSoft, lineHeight: 20 },
+  legalLinks: { flexDirection: "row", gap: 16, paddingLeft: 32 },
+  legalLink: { color: colors.sage, fontWeight: "600", textDecorationLine: "underline" },
+  error: { color: colors.danger },
   disabled: { opacity: 0.5 },
-  demoBlock: { gap: space.sm },
-  demoHeading: {
-    fontSize: 12,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: colors.inkSoft,
-    fontWeight: "700",
-  },
+  demoBlock: { gap: 8 },
+  demoHeading: { color: colors.inkSoft, fontSize: 12, fontWeight: "700", textTransform: "uppercase" },
   demo: {
     borderWidth: 1,
     borderColor: colors.line,
     borderRadius: radii.md,
-    padding: 14,
-    backgroundColor: "rgba(255,255,255,0.55)",
+    padding: 12,
+    backgroundColor: "rgba(255,255,255,0.45)",
   },
-  demoRole: { fontWeight: "700", color: colors.ink },
-  demoMeta: { color: colors.inkSoft, marginTop: 2, fontSize: 13 },
-  error: { color: colors.danger },
+  demoRole: { color: colors.ink, fontWeight: "700" },
+  demoMeta: { color: colors.inkSoft, marginTop: 2, fontSize: 12 },
 });
