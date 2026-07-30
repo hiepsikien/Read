@@ -1,6 +1,9 @@
 export type UserRole = "reader" | "publisher" | "admin";
 
 export type BookStatus = "draft" | "pending_review" | "published" | "rejected";
+export type BookVisibility = "listed" | "hidden" | "removed";
+export type ReportReason = "copyright" | "inappropriate" | "spam" | "misleading" | "other";
+export type ReportStatus = "open" | "resolved" | "dismissed";
 
 export type SplitLength = "short" | "standard" | "long";
 
@@ -19,6 +22,10 @@ export interface SessionUser {
   email: string;
   name: string;
   role: UserRole;
+  accepted_legal_version?: string | null;
+  accepted_legal_at?: string | null;
+  current_legal_version?: string;
+  needs_legal_acceptance?: boolean;
 }
 
 export interface Category {
@@ -33,6 +40,11 @@ export interface BookListItem {
   description: string;
   price_cents: number;
   status: BookStatus;
+  featured?: boolean;
+  featured_at?: string | null;
+  visibility?: BookVisibility;
+  visibility_note?: string | null;
+  report_count?: number;
   publisher_name?: string;
   publisher_id?: string;
   source_filename?: string | null;
@@ -43,6 +55,7 @@ export interface BookListItem {
   review_note?: string | null;
   submitted_at?: string | null;
   reviewed_at?: string | null;
+  cover_url?: string | null;
 }
 
 export interface ChapterListItem {
@@ -92,12 +105,54 @@ export interface TtsSettingsPayload {
   active: TtsActiveSettings;
 }
 
+export interface GlossaryEntryCompact {
+  id: string;
+  name: string;
+  aliases: string[];
+  episode_key: string;
+  group_label: string;
+  summary?: string;
+  episode_title?: string;
+}
+
+export interface ExplainCandidate {
+  id: string;
+  name: string;
+  episode_key: string;
+  group_label: string;
+  score?: number;
+}
+
+export interface ExplainCard {
+  title: string;
+  book_note: string;
+  ai_context: string;
+  sources: Array<"book" | "ai" | string>;
+  followups: string[];
+  glossary_entry: GlossaryEntryCompact | null;
+}
+
+export interface ExplainResponse {
+  status: "ok" | "candidates";
+  query: string;
+  candidates: ExplainCandidate[];
+  card: ExplainCard | null;
+  cache_hit: boolean;
+  ai_used: boolean;
+}
+
 export interface BookDetail {
   id: string;
   title: string;
   description: string;
   price_cents: number;
   status: BookStatus;
+  featured?: boolean;
+  featured_at?: string | null;
+  visibility?: BookVisibility;
+  visibility_note?: string | null;
+  report_count?: number;
+  allowed_actions?: string[];
   publisher_name: string;
   publisher_id: string;
   source_filename: string | null;
@@ -108,6 +163,37 @@ export interface BookDetail {
   review_note?: string | null;
   submitted_at?: string | null;
   reviewed_at?: string | null;
+  cover_url?: string | null;
+}
+
+export interface ModerationEvent {
+  id: string;
+  action: string;
+  actor_id?: string | null;
+  from_status?: BookStatus | null;
+  to_status?: BookStatus | null;
+  from_visibility?: BookVisibility | null;
+  to_visibility?: BookVisibility | null;
+  note?: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ContentReport {
+  id: string;
+  book_id: string;
+  book_title: string;
+  book_visibility: BookVisibility;
+  reporter_user_id?: string | null;
+  reporter_name: string;
+  reporter_email: string;
+  reason: ReportReason;
+  details: string;
+  status: ReportStatus;
+  created_at: string;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  resolution_note?: string | null;
 }
 
 export interface ApiClientOptions {
@@ -267,6 +353,12 @@ export function createApiClient(options: ApiClientOptions) {
         body: JSON.stringify({ enabled }),
       });
     },
+    acceptLegal(version: string) {
+      return request<{ ok: boolean; user: SessionUser }>("/api/auth/accept-legal", {
+        method: "POST",
+        body: JSON.stringify({ version }),
+      });
+    },
     listCategories() {
       return request<{ categories: Category[] }>("/api/books/categories/list");
     },
@@ -289,7 +381,21 @@ export function createApiClient(options: ApiClientOptions) {
       }>(`/api/books/${id}`);
     },
     createBook(form: FormData) {
-      return request<{ id: string }>("/api/books", { method: "POST", body: form });
+      return request<{ id: string; cover_url?: string | null }>("/api/books", {
+        method: "POST",
+        body: form,
+      });
+    },
+    uploadBookCover(id: string, form: FormData) {
+      return request<{ ok: boolean; cover_url: string }>(`/api/books/${id}/cover`, {
+        method: "POST",
+        body: form,
+      });
+    },
+    bookCoverUrl(coverUrl: string | null | undefined) {
+      if (!coverUrl) return null;
+      if (coverUrl.startsWith("http://") || coverUrl.startsWith("https://")) return coverUrl;
+      return `${baseUrl}${coverUrl}`;
     },
     updateBook(
       id: string,
@@ -331,6 +437,12 @@ export function createApiClient(options: ApiClientOptions) {
         amount_cents?: number;
       }>(`/api/books/${id}/purchase`, { method: "POST" });
     },
+    reportBook(id: string, body: { reason: ReportReason; details?: string }) {
+      return request<{ ok: boolean; report_id: string }>(`/api/books/${id}/report`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
     getChapter(bookId: string, chapterId: string) {
       return request<{
         book: {
@@ -349,6 +461,36 @@ export function createApiClient(options: ApiClientOptions) {
         chapters: ChapterListItem[];
       }>(`/api/books/${bookId}/chapters/${chapterId}`);
     },
+    listGlossary(bookId: string, options?: { episode?: string; compact?: boolean }) {
+      const params = new URLSearchParams();
+      if (options?.episode) params.set("episode", options.episode);
+      if (options?.compact === false) params.set("compact", "false");
+      const q = params.toString();
+      return request<{ count: number; entries: GlossaryEntryCompact[] }>(
+        `/api/books/${bookId}/glossary${q ? `?${q}` : ""}`
+      );
+    },
+    uploadGlossary(bookId: string, form: FormData) {
+      return request<{ ok: boolean; count: number; episodes: string[] }>(
+        `/api/books/${bookId}/glossary`,
+        { method: "POST", body: form }
+      );
+    },
+    explainChapter(
+      bookId: string,
+      chapterId: string,
+      body: {
+        query?: string;
+        paragraph_index?: number;
+        entry_id?: string;
+        need_context?: boolean;
+      }
+    ) {
+      return request<ExplainResponse>(`/api/books/${bookId}/chapters/${chapterId}/explain`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
     async prepareChapterAudio(bookId: string, chapterId: string) {
       const manifest = await request<ChapterAudioManifest>(
         `/api/books/${bookId}/chapters/${chapterId}/audio`,
@@ -365,15 +507,38 @@ export function createApiClient(options: ApiClientOptions) {
     adminQueue() {
       return request<{ books: BookListItem[] }>("/api/admin/queue");
     },
+    adminListBooks(options?: {
+      status?: BookStatus;
+      visibility?: BookVisibility;
+      featured?: boolean;
+      q?: string;
+    }) {
+      const params = new URLSearchParams();
+      if (options?.status) params.set("status", options.status);
+      if (options?.visibility) params.set("visibility", options.visibility);
+      if (options?.featured !== undefined) params.set("featured", options.featured ? "1" : "0");
+      if (options?.q) params.set("q", options.q);
+      const query = params.toString();
+      return request<{ books: BookListItem[] }>(
+        `/api/admin/books${query ? `?${query}` : ""}`
+      );
+    },
     adminBook(id: string) {
       return request<{
         book: BookDetail & { publisher_name: string };
         chapters: ChapterListItem[];
+        moderation_history: ModerationEvent[];
       }>(`/api/admin/books/${id}`);
     },
-    adminApprove(id: string) {
-      return request<{ ok: boolean; status: BookStatus }>(`/api/admin/books/${id}/approve`, {
+    adminApprove(id: string, featured = false) {
+      return request<{
+        ok: boolean;
+        status: BookStatus;
+        visibility: BookVisibility;
+        featured: boolean;
+      }>(`/api/admin/books/${id}/approve`, {
         method: "POST",
+        body: JSON.stringify({ featured }),
       });
     },
     adminReject(id: string, note: string) {
@@ -384,6 +549,38 @@ export function createApiClient(options: ApiClientOptions) {
           body: JSON.stringify({ note }),
         }
       );
+    },
+    adminSetFeatured(id: string, featured: boolean) {
+      return request<{ ok: boolean; featured: boolean }>(`/api/admin/books/${id}/feature`, {
+        method: "POST",
+        body: JSON.stringify({ featured }),
+      });
+    },
+    adminSetVisibility(id: string, visibility: BookVisibility, note = "") {
+      return request<{ ok: boolean; visibility: BookVisibility; featured: boolean }>(
+        `/api/admin/books/${id}/visibility`,
+        {
+          method: "POST",
+          body: JSON.stringify({ visibility, note }),
+        }
+      );
+    },
+    adminReports(status: ReportStatus = "open") {
+      return request<{ reports: ContentReport[] }>(`/api/admin/reports?status=${status}`);
+    },
+    adminResolveReport(
+      id: string,
+      action: "resolve" | "dismiss" | "hide",
+      note = ""
+    ) {
+      return request<{
+        ok: boolean;
+        status: ReportStatus;
+        book_visibility: BookVisibility;
+      }>(`/api/admin/reports/${id}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ action, note }),
+      });
     },
     adminGetTtsSettings() {
       return request<TtsSettingsPayload>("/api/admin/settings/tts");

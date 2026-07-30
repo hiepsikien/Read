@@ -25,12 +25,31 @@ const PREVIEW_TEXT =
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, signOut, enableAuthor } = useAuth();
+  const [authorBusy, setAuthorBusy] = useState(false);
+  const [authorError, setAuthorError] = useState("");
 
   useEffect(() => {
     if (authLoading) return;
     if (!user) router.replace("/login");
   }, [authLoading, user, router]);
+
+  async function becomeAuthor() {
+    setAuthorBusy(true);
+    setAuthorError("");
+    try {
+      await enableAuthor();
+      router.push("/publisher");
+    } catch (err) {
+      if (err instanceof ApiError && err.message === "terms_required") {
+        router.push("/legal/accept?action=author");
+        return;
+      }
+      setAuthorError(err instanceof Error ? err.message : "Could not enable author mode.");
+    } finally {
+      setAuthorBusy(false);
+    }
+  }
 
   if (authLoading || !user) {
     return (
@@ -50,7 +69,20 @@ export default function SettingsScreen() {
         name={user.name}
         email={user.email}
         role={user.role}
+        authorBusy={authorBusy}
+        authorError={authorError}
+        onAdmin={() => router.push("/admin")}
+        onPublisher={() => router.push("/publisher")}
+        onBecomeAuthor={becomeAuthor}
         onSignOut={() => void signOut().then(() => router.replace("/"))}
+      />
+
+      <LegalSection
+        acceptedVersion={user.accepted_legal_version}
+        currentVersion={user.current_legal_version}
+        needsAcceptance={Boolean(user.needs_legal_acceptance)}
+        onOpen={(docId) => router.push(`/legal/${docId}`)}
+        onAccept={() => router.push("/legal/accept")}
       />
 
       <ReadingSection />
@@ -64,11 +96,21 @@ function AccountSection({
   name,
   email,
   role,
+  authorBusy,
+  authorError,
+  onAdmin,
+  onPublisher,
+  onBecomeAuthor,
   onSignOut,
 }: {
   name: string;
   email: string;
   role: string;
+  authorBusy: boolean;
+  authorError: string;
+  onAdmin: () => void;
+  onPublisher: () => void;
+  onBecomeAuthor: () => void;
   onSignOut: () => void;
 }) {
   return (
@@ -86,9 +128,74 @@ function AccountSection({
         <Text style={styles.kvKey}>Role</Text>
         <Text style={styles.kvValue}>{role}</Text>
       </View>
+
+      <View style={styles.accountActions}>
+        {role === "admin" ? (
+          <Pressable style={styles.secondaryBtn} onPress={onAdmin}>
+            <Text style={styles.secondaryBtnText}>Admin center</Text>
+          </Pressable>
+        ) : null}
+        {role === "publisher" || role === "admin" ? (
+          <Pressable style={styles.secondaryBtn} onPress={onPublisher}>
+            <Text style={styles.secondaryBtnText}>Publisher</Text>
+          </Pressable>
+        ) : (
+          <Pressable style={styles.secondaryBtn} onPress={onBecomeAuthor} disabled={authorBusy}>
+            <Text style={styles.secondaryBtnText}>
+              {authorBusy ? "Enabling…" : "Become author"}
+            </Text>
+          </Pressable>
+        )}
+      </View>
+      {authorError ? <Text style={styles.errorInline}>{authorError}</Text> : null}
+
       <Pressable style={styles.secondaryBtn} onPress={onSignOut}>
         <Text style={styles.secondaryBtnText}>Sign out</Text>
       </Pressable>
+    </View>
+  );
+}
+
+function LegalSection({
+  acceptedVersion,
+  currentVersion,
+  needsAcceptance,
+  onOpen,
+  onAccept,
+}: {
+  acceptedVersion?: string | null;
+  currentVersion?: string;
+  needsAcceptance: boolean;
+  onOpen: (docId: string) => void;
+  onAccept: () => void;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>Legal</Text>
+      <Text style={styles.cardSub}>
+        {needsAcceptance
+          ? "The agreement has changed. Review and accept the current version."
+          : `Accepted ${acceptedVersion || currentVersion || ""}`}
+      </Text>
+      <View style={styles.accountActions}>
+        <Pressable style={styles.secondaryBtn} onPress={() => onOpen("terms")}>
+          <Text style={styles.secondaryBtnText}>Terms</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryBtn} onPress={() => onOpen("privacy")}>
+          <Text style={styles.secondaryBtnText}>Privacy</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryBtn} onPress={() => onOpen("publisher")}>
+          <Text style={styles.secondaryBtnText}>Publisher agreement</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryBtn} onPress={() => onOpen("community")}>
+          <Text style={styles.secondaryBtnText}>Guidelines</Text>
+        </Pressable>
+      </View>
+      {needsAcceptance ? (
+        <Pressable style={styles.primaryBtn} onPress={onAccept}>
+          <Text style={styles.primaryBtnText}>Review and accept</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -405,7 +512,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.6)",
   },
   secondaryBtnText: { color: colors.ink, fontWeight: "500" },
+  accountActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   meta: { color: colors.inkSoft, fontSize: 13 },
   error: { color: colors.danger },
+  errorInline: { color: colors.danger, fontSize: 13 },
   ok: { color: colors.sageDeep },
 });

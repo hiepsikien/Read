@@ -12,7 +12,8 @@ import { ApiError } from "@read/api-client";
 import { BrandLogo } from "../components/BrandLogo";
 import { FormScroll } from "../components/FormScroll";
 import { useAuth } from "../lib/auth";
-import { colors } from "../lib/theme";
+import { CURRENT_LEGAL_VERSION } from "../lib/legal";
+import { colors, radii, space } from "../lib/theme";
 
 const DEMOS = [
   { role: "Reader", email: "reader@read.app", password: "reader123" },
@@ -22,20 +23,30 @@ const DEMOS = [
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { signIn, signUp, usingFirebase } = useAuth();
+  const { signIn, signUp, acceptLegal, usingFirebase } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("reader@read.app");
   const [password, setPassword] = useState("reader123");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
 
   async function onSubmit() {
+    if (mode === "signup" && !acceptedLegal) {
+      setError("Accept the Terms and Privacy Policy to create an account.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       if (mode === "signup") {
-        await signUp(email.trim(), password, name.trim() || email.split("@")[0]);
+        const profile = await signUp(
+          email.trim(),
+          password,
+          name.trim() || email.split("@")[0]
+        );
+        await acceptLegal(profile.current_legal_version || CURRENT_LEGAL_VERSION);
       } else {
         await signIn(email.trim(), password);
       }
@@ -50,66 +61,112 @@ export default function LoginScreen() {
 
   return (
     <FormScroll style={styles.screen} contentContainerStyle={styles.container}>
-      <BrandLogo variant="mark" height={48} style={styles.mark} />
-      <Text style={styles.title}>{mode === "signin" ? "Sign in to Read" : "Create account"}</Text>
-      <Text style={styles.sub}>
-        Free books stay open without an account. Sign in to unlock paid titles, publish, or moderate.
-        {usingFirebase ? " Auth is powered by Firebase." : " Local auth is active until Firebase is configured."}
-      </Text>
+      <View style={styles.orb} />
+      <View style={styles.orbSecondary} />
 
-      <View style={styles.modeRow}>
+      <View style={styles.hero}>
+        <BrandLogo variant="mark" height={52} />
+        <Text style={styles.title}>{mode === "signin" ? "Welcome back" : "Join Read"}</Text>
+        <Text style={styles.sub}>
+          Free books stay open without an account. Sign in to unlock paid titles, publish, or
+          moderate.
+          {usingFirebase
+            ? " Auth is powered by Firebase."
+            : " Local auth is active until Firebase is configured."}
+        </Text>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.modeRow}>
+          <Pressable
+            style={[styles.modeChip, mode === "signin" && styles.modeChipActive]}
+            onPress={() => setMode("signin")}
+          >
+            <Text style={[styles.modeText, mode === "signin" && styles.modeTextActive]}>
+              Sign in
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modeChip, mode === "signup" && styles.modeChipActive]}
+            onPress={() => setMode("signup")}
+          >
+            <Text style={[styles.modeText, mode === "signup" && styles.modeTextActive]}>
+              Create account
+            </Text>
+          </Pressable>
+        </View>
+
+        {mode === "signup" ? (
+          <TextInput
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+            placeholder="Display name"
+            placeholderTextColor={colors.inkSoft}
+          />
+        ) : null}
+
+        <TextInput
+          style={styles.input}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          value={email}
+          onChangeText={setEmail}
+          placeholder="Email"
+          placeholderTextColor={colors.inkSoft}
+        />
+        <TextInput
+          style={styles.input}
+          secureTextEntry
+          value={password}
+          onChangeText={setPassword}
+          placeholder="Password"
+          placeholderTextColor={colors.inkSoft}
+        />
+        {mode === "signup" ? (
+          <View style={styles.legalBlock}>
+            <Pressable
+              style={styles.checkRow}
+              onPress={() => setAcceptedLegal((value) => !value)}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: acceptedLegal }}
+            >
+              <View style={[styles.checkbox, acceptedLegal && styles.checkboxChecked]}>
+                <Text style={styles.checkmark}>{acceptedLegal ? "✓" : ""}</Text>
+              </View>
+              <Text style={styles.legalText}>
+                I agree to the Terms and Privacy Policy and confirm I am old enough to enter this
+                agreement.
+              </Text>
+            </Pressable>
+            <View style={styles.legalLinks}>
+              <Pressable onPress={() => router.push("/legal/terms")}>
+                <Text style={styles.legalLink}>Terms</Text>
+              </Pressable>
+              <Pressable onPress={() => router.push("/legal/privacy")}>
+                <Text style={styles.legalLink}>Privacy</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
         <Pressable
-          style={[styles.modeChip, mode === "signin" && styles.modeChipActive]}
-          onPress={() => setMode("signin")}
+          style={[styles.button, mode === "signup" && !acceptedLegal && styles.disabled]}
+          onPress={onSubmit}
+          disabled={loading || (mode === "signup" && !acceptedLegal)}
         >
-          <Text style={[styles.modeText, mode === "signin" && styles.modeTextActive]}>Sign in</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.modeChip, mode === "signup" && styles.modeChipActive]}
-          onPress={() => setMode("signup")}
-        >
-          <Text style={[styles.modeText, mode === "signup" && styles.modeTextActive]}>Create account</Text>
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>
+              {mode === "signin" ? "Sign in" : "Create account"}
+            </Text>
+          )}
         </Pressable>
       </View>
 
-      {mode === "signup" ? (
-        <TextInput
-          style={styles.input}
-          value={name}
-          onChangeText={setName}
-          placeholder="Display name"
-          placeholderTextColor={colors.inkSoft}
-        />
-      ) : null}
-
-      <TextInput
-        style={styles.input}
-        autoCapitalize="none"
-        keyboardType="email-address"
-        value={email}
-        onChangeText={setEmail}
-        placeholder="Email"
-        placeholderTextColor={colors.inkSoft}
-      />
-      <TextInput
-        style={styles.input}
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-        placeholder="Password"
-        placeholderTextColor={colors.inkSoft}
-      />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Pressable style={styles.button} onPress={onSubmit} disabled={loading}>
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>{mode === "signin" ? "Sign in" : "Create account"}</Text>
-        )}
-      </Pressable>
-
       {!usingFirebase ? (
-        <>
+        <View style={styles.demoBlock}>
           <Text style={styles.demoHeading}>Demo accounts</Text>
           {DEMOS.map((demo) => (
             <Pressable
@@ -127,7 +184,7 @@ export default function LoginScreen() {
               </Text>
             </Pressable>
           ))}
-        </>
+        </View>
       ) : null}
     </FormScroll>
   );
@@ -135,16 +192,42 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.mist },
-  container: { padding: 20, gap: 12, paddingBottom: 48 },
-  mark: { marginBottom: 4 },
-  title: { fontSize: 28, fontWeight: "700", color: colors.ink, marginTop: 8 },
-  sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 20 },
+  container: { padding: space.xl, gap: space.lg, paddingBottom: 56 },
+  orb: {
+    position: "absolute",
+    top: -40,
+    right: -30,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "rgba(63,111,92,0.16)",
+  },
+  orbSecondary: {
+    position: "absolute",
+    top: 120,
+    left: -60,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(20,34,28,0.05)",
+  },
+  hero: { gap: space.sm, paddingTop: space.md },
+  title: { fontSize: 30, fontWeight: "700", color: colors.ink, marginTop: 4 },
+  sub: { color: colors.inkSoft, lineHeight: 21, maxWidth: 360 },
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: space.lg,
+    gap: space.md,
+  },
   modeRow: { flexDirection: "row", gap: 8 },
   modeChip: {
     flex: 1,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: 10,
+    borderRadius: radii.sm,
     paddingVertical: 10,
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.6)",
@@ -155,35 +238,52 @@ const styles = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    backgroundColor: "rgba(255,255,255,0.85)",
-    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: radii.sm,
     paddingHorizontal: 12,
     paddingVertical: 12,
     color: colors.ink,
   },
   button: {
     backgroundColor: colors.sage,
-    borderRadius: 10,
+    borderRadius: radii.sm,
     paddingVertical: 14,
     alignItems: "center",
   },
-  buttonText: { color: "#fff", fontWeight: "600" },
+  buttonText: { color: "#fff", fontWeight: "700" },
+  legalBlock: { gap: 8 },
+  checkRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderWidth: 1,
+    borderColor: colors.sage,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkboxChecked: { backgroundColor: colors.sage },
+  checkmark: { color: colors.white, fontWeight: "700" },
+  legalText: { flex: 1, color: colors.inkSoft, fontSize: 13, lineHeight: 18 },
+  legalLinks: { flexDirection: "row", gap: 14, marginLeft: 32 },
+  legalLink: { color: colors.sageDeep, fontWeight: "600", textDecorationLine: "underline" },
+  disabled: { opacity: 0.5 },
+  demoBlock: { gap: space.sm },
   demoHeading: {
-    marginTop: 16,
     fontSize: 12,
     letterSpacing: 1.4,
     textTransform: "uppercase",
     color: colors.inkSoft,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   demo: {
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: 12,
+    borderRadius: radii.md,
     padding: 14,
-    backgroundColor: "rgba(255,255,255,0.5)",
+    backgroundColor: "rgba(255,255,255,0.55)",
   },
-  demoRole: { fontWeight: "600", color: colors.ink },
+  demoRole: { fontWeight: "700", color: colors.ink },
   demoMeta: { color: colors.inkSoft, marginTop: 2, fontSize: 13 },
   error: { color: colors.danger },
 });

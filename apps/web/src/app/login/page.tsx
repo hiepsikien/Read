@@ -7,6 +7,7 @@ import { ApiError } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi } from "@/lib/api";
+import { CURRENT_LEGAL_VERSION } from "@/lib/legal";
 
 const DEMOS = [
   {
@@ -38,9 +39,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("reader123");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (mode === "signup" && !acceptedLegal) {
+      setError("Accept the Terms and Privacy Policy to create an account.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
@@ -50,7 +56,15 @@ export default function LoginPage() {
         mode === "signup" ? name || email.split("@")[0] : undefined
       );
       setSession(data.user, data.token);
-      router.push(data.user.role === "publisher" ? "/publisher" : "/");
+      let profile = data.user;
+      if (mode === "signup") {
+        const accepted = await createBrowserApi().acceptLegal(
+          data.user.current_legal_version || CURRENT_LEGAL_VERSION
+        );
+        profile = accepted.user;
+        setSession(profile);
+      }
+      router.push(profile.role === "publisher" ? "/publisher" : "/");
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not sign in.");
@@ -128,10 +142,31 @@ export default function LoginPage() {
             required
           />
         </label>
+        {mode === "signup" && (
+          <label className="flex items-start gap-3 text-sm text-[var(--ink-soft)]">
+            <input
+              type="checkbox"
+              checked={acceptedLegal}
+              onChange={(event) => setAcceptedLegal(event.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              I agree to the{" "}
+              <Link href="/legal/terms" className="underline">
+                Terms
+              </Link>{" "}
+              and{" "}
+              <Link href="/legal/privacy" className="underline">
+                Privacy Policy
+              </Link>
+              , and confirm I am old enough to enter this agreement.
+            </span>
+          </label>
+        )}
         {error && <p className="text-sm text-red-700">{error}</p>}
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || (mode === "signup" && !acceptedLegal)}
           className="w-full rounded-lg bg-[var(--sage)] px-4 py-2.5 font-medium text-white transition hover:bg-[var(--sage-deep)] disabled:opacity-60"
         >
           {loading ? "Working…" : mode === "signin" ? "Sign in" : "Create account"}

@@ -25,6 +25,7 @@ import {
   type ChapterListItem,
 } from "@read/api-client";
 import { BrandLogo } from "../../../components/BrandLogo";
+import { ExplainSheet } from "../../../components/ExplainSheet";
 import { useAuth } from "../../../lib/auth";
 import {
   FONT_SIZE_STEP,
@@ -57,6 +58,9 @@ export default function ReaderScreen() {
   const [error, setError] = useState("");
   const [tocOpen, setTocOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(false);
+  const [explainMode, setExplainMode] = useState<"ask" | "result">("ask");
+  const [explainParagraph, setExplainParagraph] = useState<number | null>(null);
   const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
 
   const scrollRef = useRef<ScrollView>(null);
@@ -255,6 +259,18 @@ export default function ReaderScreen() {
           <Pressable style={chip(palette.fg)} onPress={() => setTocOpen(true)}>
             <Text style={{ color: palette.fg, fontWeight: "600" }}>Contents</Text>
           </Pressable>
+          <Pressable
+            style={chip(palette.fg)}
+            accessibilityRole="button"
+            accessibilityLabel="Ask about a name in this chapter"
+            onPress={() => {
+              setExplainMode("ask");
+              setExplainParagraph(null);
+              setExplainOpen(true);
+            }}
+          >
+            <Text style={{ color: palette.fg, fontWeight: "600" }}>Ask</Text>
+          </Pressable>
         </View>
       </View>
 
@@ -369,9 +385,18 @@ export default function ReaderScreen() {
                   },
                 ]}
               >
-                <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
-                  <InlineMarkdown value={paragraph} />
-                </Text>
+                <Pressable
+                  onLongPress={() => {
+                    setExplainMode("result");
+                    setExplainParagraph(index);
+                    setExplainOpen(true);
+                  }}
+                  delayLongPress={350}
+                >
+                  <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
+                    <InlineMarkdown value={paragraph} />
+                  </Text>
+                </Pressable>
               </View>
             ))}
           </View>
@@ -409,6 +434,17 @@ export default function ReaderScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <ExplainSheet
+        visible={explainOpen}
+        mode={explainMode}
+        api={api}
+        bookId={bookId!}
+        chapterId={chapterId!}
+        palette={palette}
+        paragraphIndex={explainParagraph}
+        onClose={() => setExplainOpen(false)}
+      />
 
       <VoicePickerModal
         visible={voiceOpen}

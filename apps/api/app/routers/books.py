@@ -19,7 +19,17 @@ from ..categories import category_payload, ensure_categories
 from ..chapters import SPLIT_PROFILES, count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
-from ..models import Book, Category, Chapter, Purchase, User
+from ..legal import require_current_legal_acceptance
+from ..models import Book, Category, Chapter, ContentReport, Purchase, User
+from ..moderation import record_moderation_event
+from ..covers import (
+    ALLOWED_CONTENT_TYPES,
+    ALLOWED_EXT,
+    cover_absolute_path,
+    cover_url_for,
+    save_cover_bytes,
+    try_extract_and_save_cover,
+)
 from ..parse_docs import extract_text_from_file
 from ..tts_settings import get_active_tts
 from .. import tts
@@ -45,6 +55,15 @@ class SplitBookBody(BaseModel):
     length: Literal["short", "standard", "long"] = "standard"
 
 
+class ReportBookBody(BaseModel):
+    reason: Literal["copyright", "inappropriate", "spam", "misleading", "other"]
+    details: str = ""
+
+
+def _is_publicly_visible(book: Book) -> bool:
+    return book.status == "published" and book.visibility == "listed"
+
+
 def _chapter_list_item(chapter: Chapter, locked: bool | None = None) -> dict:
     item = {
         "id": chapter.id,
@@ -65,6 +84,8 @@ def _book_list_item(book: Book, *, chapter_count: int, publisher_name: str | Non
         "description": book.description,
         "price_cents": book.price_cents,
         "status": book.status,
+        "featured": book.featured,
+        "visibility": book.visibility,
         "chapter_count": chapter_count,
         "created_at": book.created_at.isoformat(),
         "updated_at": book.updated_at.isoformat(),
@@ -72,6 +93,7 @@ def _book_list_item(book: Book, *, chapter_count: int, publisher_name: str | Non
         "review_note": book.review_note,
         "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
         "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
+        "cover_url": cover_url_for(book.id, book.cover_path),
     }
     if publisher_name is not None:
         item["publisher_name"] = publisher_name
@@ -122,7 +144,7 @@ def _accessible_chapter(
         raise HTTPException(status_code=404, detail="Book not found.")
 
     is_manager = _can_manage_book(book, user)
-    if book.status != "published" and not is_manager:
+    if not _is_publicly_visible(book) and not is_manager:
         raise HTTPException(status_code=404, detail="Book not found.")
 
     chapter = next((item for item in book.chapters if item.id == chapter_id), None)
@@ -196,8 +218,8 @@ def list_books(
     query = (
         db.query(Book)
         .options(joinedload(Book.category), joinedload(Book.publisher))
-        .filter(Book.status == "published")
-        .order_by(Book.created_at.desc())
+        .filter(Book.status == "published", Book.visibility == "listed")
+        .order_by(Book.featured.desc(), Book.featured_at.desc(), Book.created_at.desc())
     )
     if category:
         query = query.join(Category, Category.id == Book.category_id).filter(
@@ -279,6 +301,8 @@ async def create_book(
         logger.exception("Text extraction failed for %s", original_name)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    cover_path = try_extract_and_save_cover(upload_dir, book_id, stored_path)
+
     now = datetime.now(timezone.utc)
     book = Book(
         id=book_id,
@@ -290,13 +314,17 @@ async def create_book(
         status="draft",
         source_filename=original_name,
         source_path=stored_name,
+        cover_path=cover_path,
         raw_text=raw_text,
         created_at=now,
         updated_at=now,
     )
     db.add(book)
     db.commit()
-    return {"id": book_id}
+    return {
+        "id": book_id,
+        "cover_url": cover_url_for(book_id, cover_path),
+    }
 
 
 @router.get("/{book_id}")
@@ -319,7 +347,7 @@ def get_book(
         raise HTTPException(status_code=404, detail="Book not found.")
 
     is_manager = _can_manage_book(book, user)
-    if book.status != "published" and not is_manager:
+    if not _is_publicly_visible(book) and not is_manager:
         raise HTTPException(status_code=404, detail="Book not found.")
 
     purchased = bool(user and _has_purchase(db, user.id, book.id))
@@ -331,6 +359,8 @@ def get_book(
             "description": book.description,
             "price_cents": book.price_cents,
             "status": book.status,
+            "featured": book.featured,
+            "visibility": book.visibility,
             "publisher_name": book.publisher.name,
             "publisher_id": book.publisher_id,
             "source_filename": book.source_filename,
@@ -341,6 +371,7 @@ def get_book(
             "review_note": book.review_note,
             "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
             "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
+            "cover_url": cover_url_for(book.id, book.cover_path),
         },
         "chapters": [_chapter_list_item(c) for c in chapters],
         "access": {
@@ -349,6 +380,69 @@ def get_book(
             "previewChapterId": chapters[0].id if chapters else None,
         },
     }
+
+
+@router.get("/{book_id}/cover")
+def get_book_cover(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+):
+    book = db.get(Book, book_id)
+    if not book or not book.cover_path:
+        raise HTTPException(status_code=404, detail="Cover not found.")
+
+    is_manager = _can_manage_book(book, user)
+    if not _is_publicly_visible(book) and not is_manager:
+        raise HTTPException(status_code=404, detail="Cover not found.")
+
+    settings = get_settings()
+    path = Path(settings.upload_dir) / book.cover_path
+    if not path.is_file():
+        # Fall back to canonical location if DB path is stale/relative-only.
+        path = cover_absolute_path(settings.upload_dir, book.id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Cover not found.")
+
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.post("/{book_id}/cover")
+async def upload_book_cover(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_publisher)],
+    file: UploadFile = File(...),
+):
+    book = db.get(Book, book_id)
+    if not book or book.publisher_id != user.id:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_editable(book)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A cover image is required.")
+    ext = Path(file.filename).suffix.lower()
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    if ext not in ALLOWED_EXT and content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="Cover must be a JPEG, PNG, or WebP image.")
+
+    raw = await file.read()
+    settings = get_settings()
+    try:
+        cover_path = save_cover_bytes(settings.upload_dir, book.id, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    book.cover_path = cover_path
+    if book.status == "rejected":
+        book.status = "draft"
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "cover_url": cover_url_for(book.id, cover_path)}
 
 
 @router.patch("/{book_id}")
@@ -452,6 +546,7 @@ def submit_review(
     )
     if not book or book.publisher_id != user.id:
         raise HTTPException(status_code=404, detail="Book not found.")
+    require_current_legal_acceptance(user)
     if book.status not in EDITABLE_STATUSES:
         raise HTTPException(status_code=400, detail="Only draft or rejected books can be submitted.")
     if not book.category_id:
@@ -463,12 +558,21 @@ def submit_review(
         raise HTTPException(status_code=400, detail="Split chapters before submitting for review.")
 
     now = datetime.now(timezone.utc)
+    previous_status = book.status
     book.status = "pending_review"
     book.submitted_at = now
     book.reviewed_at = None
     book.reviewed_by = None
     book.review_note = None
     book.updated_at = now
+    record_moderation_event(
+        db,
+        book=book,
+        actor=user,
+        action="submit_review",
+        from_status=previous_status,
+        to_status="pending_review",
+    )
     db.commit()
     return {"ok": True, "status": book.status}
 
@@ -490,7 +594,7 @@ def purchase_book(
     user: Annotated[User, Depends(get_current_user)],
 ):
     book = db.get(Book, book_id)
-    if not book or book.status != "published":
+    if not book or not _is_publicly_visible(book):
         raise HTTPException(status_code=404, detail="Book not found.")
     if book.price_cents <= 0:
         raise HTTPException(status_code=400, detail="This book is free.")
@@ -514,6 +618,52 @@ def purchase_book(
     return {"ok": True, "mock": True, "amount_cents": book.price_cents}
 
 
+@router.post("/{book_id}/report")
+def report_book(
+    book_id: str,
+    body: ReportBookBody,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    book = db.get(Book, book_id)
+    if not book or not _is_publicly_visible(book):
+        raise HTTPException(status_code=404, detail="Book not found.")
+    if book.publisher_id == user.id:
+        raise HTTPException(status_code=400, detail="You cannot report your own book.")
+    existing = db.scalar(
+        select(ContentReport.id).where(
+            ContentReport.reporter_user_id == user.id,
+            ContentReport.book_id == book.id,
+            ContentReport.status == "open",
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="You already have an open report for this book.")
+
+    details = body.details.strip()
+    if body.reason == "other" and len(details) < 3:
+        raise HTTPException(status_code=400, detail="Please describe the issue.")
+    report = ContentReport(
+        id=generate(),
+        reporter_user_id=user.id,
+        book_id=book.id,
+        reason=body.reason,
+        details=details[:4000],
+        status="open",
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(report)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="You already have an open report for this book.",
+        ) from exc
+    return {"ok": True, "report_id": report.id}
+
+
 @router.get("/{book_id}/chapters/{chapter_id}")
 def get_chapter(
     book_id: str,
@@ -531,7 +681,7 @@ def get_chapter(
         raise HTTPException(status_code=404, detail="Book not found.")
 
     is_manager = _can_manage_book(book, user)
-    if book.status != "published" and not is_manager:
+    if not _is_publicly_visible(book) and not is_manager:
         raise HTTPException(status_code=404, detail="Book not found.")
 
     chapter = next((c for c in book.chapters if c.id == chapter_id), None)

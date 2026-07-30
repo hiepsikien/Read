@@ -8,6 +8,8 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
 import {
   ApiError,
   SPLIT_LENGTH_OPTIONS,
@@ -16,6 +18,7 @@ import {
   type ChapterListItem,
   type SplitLength,
 } from "@read/api-client";
+import { BookCover } from "../../components/BookCover";
 import { FormScroll } from "../../components/FormScroll";
 import { useAuth } from "../../lib/auth";
 import { colors, formatPrice } from "../../lib/theme";
@@ -34,9 +37,10 @@ export default function ManageBookScreen() {
   const [price, setPrice] = useState("4.99");
   const [categoryId, setCategoryId] = useState("");
   const [splitLength, setSplitLength] = useState<SplitLength>("standard");
-  const [busy, setBusy] = useState<"" | "save" | "split" | "submit">("");
+  const [busy, setBusy] = useState<"" | "save" | "split" | "submit" | "cover" | "glossary">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [glossaryCount, setGlossaryCount] = useState<number | null>(null);
 
   const locked = book?.status === "pending_review" || book?.status === "published";
 
@@ -56,6 +60,12 @@ export default function ManageBookScreen() {
       setPricing(data.book.price_cents > 0 ? "paid" : "free");
       setPrice(((data.book.price_cents || 499) / 100).toFixed(2));
       setCategoryId(data.book.category?.id || categoryPayload.categories[0]?.id || "");
+      try {
+        const glossary = await api.listGlossary(id);
+        setGlossaryCount(glossary.count);
+      } catch {
+        setGlossaryCount(null);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
     }
@@ -112,7 +122,75 @@ export default function ManageBookScreen() {
       setMessage("Submitted for admin review.");
       await load();
     } catch (err) {
+      if (err instanceof ApiError && err.message === "terms_required") {
+        router.push(`/legal/accept?action=submit&bookId=${id}`);
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Submit failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function replaceCover() {
+    if (locked) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.9,
+      allowsEditing: true,
+      aspect: [2, 3],
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    setBusy("cover");
+    setMessage("");
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", {
+        uri: asset.uri,
+        name: asset.fileName || "cover.jpg",
+        type: asset.mimeType || "image/jpeg",
+      } as unknown as Blob);
+      await api.uploadBookCover(id!, form);
+      setMessage("Cover updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Cover upload failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function uploadGlossary() {
+    if (locked) return;
+    const result = await DocumentPicker.getDocumentAsync({
+      type: [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "org.openxmlformats.wordprocessingml.document",
+      ],
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setBusy("glossary");
+    setMessage("");
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("file", {
+        uri: asset.uri,
+        name: asset.name || "glossary.docx",
+        type:
+          asset.mimeType ||
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      } as unknown as Blob);
+      const payload = await api.uploadGlossary(id!, form);
+      setMessage(`Imported ${payload.count} character notes.`);
+      setGlossaryCount(payload.count);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Glossary upload failed.");
     } finally {
       setBusy("");
     }
@@ -129,12 +207,33 @@ export default function ManageBookScreen() {
   return (
     <FormScroll contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: book.title }} />
-      <Text style={styles.title}>{book.title}</Text>
-      <Text style={styles.sub}>
-        {book.status} · {formatPrice(book.price_cents)}
-        {book.category ? ` · ${book.category.label}` : ""}
-        {book.source_filename ? ` · ${book.source_filename}` : ""}
-      </Text>
+      <View style={styles.coverRow}>
+        <BookCover
+          title={book.title}
+          categorySlug={book.category?.slug}
+          categoryLabel={book.category?.label}
+          coverUrl={api.bookCoverUrl(book.cover_url)}
+          width={110}
+          height={165}
+        />
+        <View style={styles.coverMeta}>
+          <Text style={styles.title}>{book.title}</Text>
+          <Text style={styles.sub}>
+            {book.status} · {formatPrice(book.price_cents)}
+            {book.category ? ` · ${book.category.label}` : ""}
+            {book.source_filename ? ` · ${book.source_filename}` : ""}
+          </Text>
+          <Pressable
+            style={[styles.secondaryBtn, styles.coverBtn, locked && styles.disabled]}
+            onPress={replaceCover}
+            disabled={locked || busy === "cover"}
+          >
+            <Text style={styles.secondaryBtnText}>
+              {busy === "cover" ? "Uploading…" : book.cover_url ? "Replace cover" : "Upload cover"}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
       {book.status === "rejected" && book.review_note ? (
         <Text style={styles.rejectNote}>Rejected: {book.review_note}</Text>
       ) : null}
@@ -213,6 +312,30 @@ export default function ManageBookScreen() {
         disabled={locked || busy === "save"}
       >
         <Text style={styles.secondaryBtnText}>{busy === "save" ? "Saving…" : "Save details"}</Text>
+      </Pressable>
+
+      <Text style={styles.section}>Character notes</Text>
+      <Text style={styles.hint}>
+        Upload a NHÂN VẬT.docx glossary so readers can long-press names for book notes
+        without sending the whole chapter to AI.
+      </Text>
+      <Text style={styles.sub}>
+        {glossaryCount == null
+          ? "No glossary loaded yet."
+          : `${glossaryCount} character note${glossaryCount === 1 ? "" : "s"} imported.`}
+      </Text>
+      <Pressable
+        style={[styles.secondaryBtn, styles.saveBtn, locked && styles.disabled]}
+        onPress={uploadGlossary}
+        disabled={locked || busy === "glossary"}
+      >
+        <Text style={styles.secondaryBtnText}>
+          {busy === "glossary"
+            ? "Uploading…"
+            : glossaryCount
+              ? "Replace character notes"
+              : "Upload character notes"}
+        </Text>
       </Pressable>
 
       <Text style={styles.section}>Chapters</Text>
@@ -301,8 +424,11 @@ export default function ManageBookScreen() {
 const styles = StyleSheet.create({
   container: { padding: 20, gap: 8, paddingBottom: 60 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.mist },
-  title: { fontSize: 28, fontWeight: "700", color: colors.ink, marginTop: 4 },
-  sub: { color: colors.inkSoft, marginTop: 4 },
+  coverRow: { flexDirection: "row", gap: 14, alignItems: "flex-start", marginTop: 4 },
+  coverMeta: { flex: 1, gap: 8 },
+  coverBtn: { alignSelf: "flex-start", marginTop: 4 },
+  title: { fontSize: 24, fontWeight: "700", color: colors.ink },
+  sub: { color: colors.inkSoft, marginTop: 2 },
   rejectNote: {
     marginTop: 8,
     color: colors.danger,

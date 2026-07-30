@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +17,7 @@ from ..auth import (
 )
 from ..config import get_settings
 from ..db import get_db
+from ..legal import CURRENT_LEGAL_VERSION, require_current_legal_acceptance
 from ..models import User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -29,6 +31,10 @@ class DevLoginBody(BaseModel):
 
 class EnableAuthorBody(BaseModel):
     enabled: bool = True
+
+
+class AcceptLegalBody(BaseModel):
+    version: str = Field(min_length=1, max_length=32)
 
 
 @router.post("/dev-login")
@@ -46,8 +52,6 @@ def dev_login(body: DevLoginBody, db: Annotated[Session, Depends(get_db)]):
     name = (body.name or "").strip() or email.split("@")[0]
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required.")
-
-    from datetime import datetime, timezone
 
     user = db.query(User).filter(User.email == email).one_or_none()
     if user and user.password_hash:
@@ -106,7 +110,31 @@ def enable_author(
 ):
     if user.role == "admin":
         return {"user": session_user(user)}
+    if body.enabled:
+        require_current_legal_acceptance(user)
     user.role = "publisher" if body.enabled else "reader"
     db.commit()
     db.refresh(user)
     return {"user": session_user(user)}
+
+
+@router.post("/accept-legal")
+def accept_legal(
+    body: AcceptLegalBody,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    if body.version != CURRENT_LEGAL_VERSION:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "terms_required",
+                "message": "This policy version is no longer current.",
+                "current_legal_version": CURRENT_LEGAL_VERSION,
+            },
+        )
+    user.accepted_legal_version = CURRENT_LEGAL_VERSION
+    user.accepted_legal_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user)
+    return {"ok": True, "user": session_user(user)}

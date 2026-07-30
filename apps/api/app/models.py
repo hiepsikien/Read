@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -15,6 +15,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    accepted_legal_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    accepted_legal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     books: Mapped[list["Book"]] = relationship(
@@ -51,8 +53,22 @@ class Book(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    featured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    featured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    featured_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="listed")
+    visibility_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visibility_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    visibility_changed_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     source_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
     source_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    cover_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -68,11 +84,18 @@ class Book(Base):
     category: Mapped[Category | None] = relationship(back_populates="books")
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="book")
+    glossary_entries: Mapped[list["GlossaryEntry"]] = relationship(
+        back_populates="book", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint(
             "status IN ('draft', 'pending_review', 'published', 'rejected')",
             name="ck_books_status",
+        ),
+        CheckConstraint(
+            "visibility IN ('listed', 'hidden', 'removed')",
+            name="ck_books_visibility",
         ),
     )
 
@@ -105,6 +128,58 @@ class Purchase(Base):
     book: Mapped[Book] = relationship(back_populates="purchases")
 
 
+class ModerationEvent(Base):
+    __tablename__ = "moderation_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    book_id: Mapped[str] = mapped_column(
+        ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    from_visibility: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_visibility: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ContentReport(Base):
+    __tablename__ = "content_reports"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reporter_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    book_id: Mapped[str] = mapped_column(
+        ForeignKey("books.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "reason IN ('copyright', 'inappropriate', 'spam', 'misleading', 'other')",
+            name="ck_content_reports_reason",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'resolved', 'dismissed')",
+            name="ck_content_reports_status",
+        ),
+    )
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
@@ -114,3 +189,32 @@ class AppSetting(Base):
     updated_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class GlossaryEntry(Base):
+    __tablename__ = "glossary_entries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    episode_key: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    episode_title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    group_label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    aliases: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sort_key: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    book: Mapped[Book] = relationship(back_populates="glossary_entries")
+
+
+class ExplainCache(Base):
+    __tablename__ = "explain_cache"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    chapter_id: Mapped[str] = mapped_column(ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

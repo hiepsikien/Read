@@ -29,6 +29,7 @@ type AuthContextValue = {
   signUp: (email: string, password: string, name: string) => Promise<SessionUser>;
   signOut: () => Promise<void>;
   enableAuthor: () => Promise<SessionUser>;
+  acceptLegal: (version: string) => Promise<SessionUser>;
   usingFirebase: boolean;
 };
 
@@ -166,6 +167,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return data.user;
   }, [api]);
 
+  const acceptLegal = useCallback(
+    async (version: string) => {
+      const data = await api.acceptLegal(version);
+      setUser(data.user);
+      return data.user;
+    },
+    [api]
+  );
+
   const value = useMemo(
     () => ({
       user,
@@ -177,6 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       enableAuthor,
+      acceptLegal,
       usingFirebase,
     }),
     [
@@ -189,6 +200,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signOut,
       enableAuthor,
+      acceptLegal,
       usingFirebase,
     ]
   );

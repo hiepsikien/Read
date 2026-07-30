@@ -26,7 +26,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Read to choose a book cover from your photo library."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

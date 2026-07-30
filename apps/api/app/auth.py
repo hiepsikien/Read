@@ -210,11 +210,14 @@ def require_admin(
 
 
 def session_user(user: User) -> dict:
+    from .legal import legal_status_payload
+
     return {
         "id": user.id,
         "email": user.email,
         "name": user.name,
         "role": user.role,
+        **legal_status_payload(user),
     }
 
 

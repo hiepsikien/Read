@@ -98,6 +98,10 @@ export default function ManageBookPage() {
       setMessage("Submitted for admin review.");
       await load();
     } catch (err) {
+      if (err instanceof ApiError && err.message === "terms_required") {
+        router.push("/settings?legal=required");
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Submit failed.");
     } finally {
       setBusy("");

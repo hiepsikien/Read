@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { TtsSettingsPayload } from "@read/api-client";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getApiBaseUrl } from "@/lib/api";
 import { cn } from "@/lib/format";
+import { CURRENT_LEGAL_VERSION } from "@/lib/legal";
 
 type TabId = "account" | "narration";
 
@@ -13,10 +15,25 @@ const PREVIEW_TEXT =
   "Tàu chở dầu đi qua eo biển Hormuz mỗi ngày. Từ Washington đến eo biển Malacca, các tuyến đường này quyết định giá dầu toàn cầu.";
 
 export default function SettingsPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, refresh } = useAuth();
   const router = useRouter();
   const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<TabId>("account");
+  const [legalBusy, setLegalBusy] = useState(false);
+  const [legalError, setLegalError] = useState("");
+
+  async function acceptLegal() {
+    setLegalBusy(true);
+    setLegalError("");
+    try {
+      await createBrowserApi().acceptLegal(user?.current_legal_version || CURRENT_LEGAL_VERSION);
+      await refresh();
+    } catch (err) {
+      setLegalError(err instanceof Error ? err.message : "Could not save agreement.");
+    } finally {
+      setLegalBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!loading && !user) {
@@ -77,6 +94,31 @@ export default function SettingsPage() {
               <dd className="mt-0.5 font-medium capitalize">{user.role}</dd>
             </div>
           </dl>
+          <div className="mt-6 border-t border-[var(--line)] pt-5">
+            <h3 className="font-semibold">Legal</h3>
+            <div className="mt-2 flex flex-wrap gap-3 text-sm">
+              <Link href="/legal/terms" className="underline underline-offset-4">Terms</Link>
+              <Link href="/legal/privacy" className="underline underline-offset-4">Privacy</Link>
+              <Link href="/legal/publisher" className="underline underline-offset-4">Publisher agreement</Link>
+              <Link href="/legal/community" className="underline underline-offset-4">Guidelines</Link>
+            </div>
+            <p className="mt-3 text-sm text-[var(--ink-soft)]">
+              {user.needs_legal_acceptance
+                ? "Review and accept the current agreement before publishing."
+                : `Accepted ${user.accepted_legal_version || CURRENT_LEGAL_VERSION}`}
+            </p>
+            {user.needs_legal_acceptance && (
+              <button
+                type="button"
+                disabled={legalBusy}
+                onClick={() => void acceptLegal()}
+                className="mt-3 rounded-lg bg-[var(--sage)] px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {legalBusy ? "Saving…" : "Accept current agreement"}
+              </button>
+            )}
+            {legalError && <p className="mt-2 text-sm text-red-700">{legalError}</p>}
+          </div>
         </section>
       )}
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -9,6 +10,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { ApiError, type Category } from "@read/api-client";
 import { FormScroll } from "../../components/FormScroll";
 import { useAuth } from "../../lib/auth";
@@ -28,6 +30,7 @@ export default function NewBookScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState("");
   const [file, setFile] = useState<PickedFile | null>(null);
+  const [cover, setCover] = useState<PickedFile | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -63,6 +66,24 @@ export default function NewBookScreen() {
     setError("");
   }
 
+  async function pickCover() {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.9,
+      allowsEditing: true,
+      aspect: [2, 3],
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    const name = asset.fileName || `cover.${(asset.mimeType || "image/jpeg").split("/")[1] || "jpg"}`;
+    setCover({
+      uri: asset.uri,
+      name,
+      mimeType: asset.mimeType || "image/jpeg",
+    });
+    setError("");
+  }
+
   async function submit() {
     if (!title.trim()) {
       setError("Title is required.");
@@ -94,6 +115,15 @@ export default function NewBookScreen() {
 
     try {
       const data = await api.createBook(form);
+      if (cover) {
+        const coverForm = new FormData();
+        coverForm.append("file", {
+          uri: cover.uri,
+          name: cover.name,
+          type: cover.mimeType || "image/jpeg",
+        } as unknown as Blob);
+        await api.uploadBookCover(data.id, coverForm);
+      }
       router.replace(`/publisher/${data.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Upload failed.");
@@ -184,6 +214,17 @@ export default function NewBookScreen() {
         <Text style={styles.fileBtnText}>{file ? file.name : "Choose DOCX file"}</Text>
       </Pressable>
 
+      <Text style={styles.label}>Cover (optional)</Text>
+      <Text style={styles.hint}>
+        If the DOCX embeds a cover image we will try to use it. You can also upload one now.
+      </Text>
+      <Pressable style={styles.fileBtn} onPress={pickCover}>
+        <Text style={styles.fileBtnText}>{cover ? cover.name : "Choose cover image"}</Text>
+      </Pressable>
+      {cover ? (
+        <Image source={{ uri: cover.uri }} style={styles.coverPreview} resizeMode="cover" />
+      ) : null}
+
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <Pressable style={styles.submitBtn} onPress={submit} disabled={loading}>
@@ -257,6 +298,13 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.5)",
   },
   fileBtnText: { color: colors.sageDeep, fontWeight: "600" },
+  coverPreview: {
+    marginTop: 8,
+    width: 120,
+    height: 180,
+    borderRadius: 10,
+    backgroundColor: colors.sand,
+  },
   submitBtn: {
     marginTop: 20,
     backgroundColor: colors.sage,

@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth import hash_password, mint_dev_id_token, resolve_role_for_email, verify_id_token
 from app.categories import CATEGORY_SEED, ensure_categories
 from app.db import Base, get_db
+from app.legal import CURRENT_LEGAL_VERSION
 from app.main import app
 from app.models import Book, Chapter, User
 
@@ -56,6 +57,8 @@ def seeded(db_session):
         name="Author",
         role="publisher",
         password_hash=hash_password("password123"),
+        accepted_legal_version=CURRENT_LEGAL_VERSION,
+        accepted_legal_at=now,
         created_at=now,
     )
     admin = User(
@@ -74,6 +77,8 @@ def seeded(db_session):
         name="Reader",
         role="reader",
         password_hash=hash_password("reader123"),
+        accepted_legal_version=CURRENT_LEGAL_VERSION,
+        accepted_legal_at=now,
         created_at=now,
     )
     db_session.add_all([publisher, admin, reader])
@@ -295,3 +300,219 @@ def test_reject_requires_note(client, db_session, seeded):
     )
     assert ok.status_code == 200
     assert ok.json()["status"] == "rejected"
+
+
+def test_legal_acceptance_gate_and_version(client, db_session, seeded):
+    reader = seeded["reader"]
+    reader.accepted_legal_version = None
+    reader.accepted_legal_at = None
+    db_session.commit()
+
+    blocked = client.post(
+        "/api/auth/enable-author",
+        headers=auth_header(reader),
+        json={"enabled": True},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"] == "terms_required"
+
+    stale = client.post(
+        "/api/auth/accept-legal",
+        headers=auth_header(reader),
+        json={"version": "2025-01-01"},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["current_legal_version"] == CURRENT_LEGAL_VERSION
+
+    accepted = client.post(
+        "/api/auth/accept-legal",
+        headers=auth_header(reader),
+        json={"version": CURRENT_LEGAL_VERSION},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["user"]["needs_legal_acceptance"] is False
+
+    enabled = client.post(
+        "/api/auth/enable-author",
+        headers=auth_header(reader),
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["user"]["role"] == "publisher"
+
+
+def test_submit_review_requires_current_legal_acceptance(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    publisher.accepted_legal_version = None
+    publisher.accepted_legal_at = None
+    now = datetime.now(timezone.utc)
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=seeded["fiction"].id,
+        title="Agreement Gate",
+        description="",
+        price_cents=0,
+        status="draft",
+        raw_text="Body",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(book)
+    db_session.flush()
+    db_session.add(
+        Chapter(
+            id=generate(),
+            book_id=book.id,
+            position=1,
+            title="Chapter 1",
+            content="Body",
+            word_count=1,
+            group_index=1,
+        )
+    )
+    db_session.commit()
+
+    blocked = client.post(
+        f"/api/books/{book.id}/submit-review",
+        headers=auth_header(publisher),
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"] == "terms_required"
+
+    publisher.accepted_legal_version = CURRENT_LEGAL_VERSION
+    publisher.accepted_legal_at = now
+    db_session.commit()
+    submitted = client.post(
+        f"/api/books/{book.id}/submit-review",
+        headers=auth_header(publisher),
+    )
+    assert submitted.status_code == 200
+    assert submitted.json()["status"] == "pending_review"
+
+
+def test_feature_hide_relist_remove_and_library_order(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    now = datetime.now(timezone.utc)
+    normal = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Normal Book",
+        description="",
+        price_cents=0,
+        status="published",
+        featured=False,
+        visibility="listed",
+        created_at=now,
+        updated_at=now,
+    )
+    featured = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Featured Book",
+        description="",
+        price_cents=0,
+        status="published",
+        featured=True,
+        featured_at=now,
+        featured_by=admin.id,
+        visibility="listed",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([normal, featured])
+    db_session.commit()
+
+    library = client.get("/api/books").json()["books"]
+    ids = [item["id"] for item in library]
+    assert ids.index(featured.id) < ids.index(normal.id)
+
+    hidden = client.post(
+        f"/api/admin/books/{featured.id}/visibility",
+        headers=auth_header(admin),
+        json={"visibility": "hidden", "note": "Reviewing a report"},
+    )
+    assert hidden.status_code == 200
+    assert hidden.json()["featured"] is False
+    assert all(item["id"] != featured.id for item in client.get("/api/books").json()["books"])
+
+    relisted = client.post(
+        f"/api/admin/books/{featured.id}/visibility",
+        headers=auth_header(admin),
+        json={"visibility": "listed"},
+    )
+    assert relisted.status_code == 200
+    assert any(item["id"] == featured.id for item in client.get("/api/books").json()["books"])
+
+    removed = client.post(
+        f"/api/admin/books/{featured.id}/visibility",
+        headers=auth_header(admin),
+        json={"visibility": "removed", "note": "Confirmed policy violation"},
+    )
+    assert removed.status_code == 200
+    restore = client.post(
+        f"/api/admin/books/{featured.id}/visibility",
+        headers=auth_header(admin),
+        json={"visibility": "listed"},
+    )
+    assert restore.status_code == 400
+
+
+def test_report_flow_duplicate_and_hide_resolution(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    reader = seeded["reader"]
+    admin = seeded["admin"]
+    fiction = seeded["fiction"]
+    now = datetime.now(timezone.utc)
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=fiction.id,
+        title="Reported Book",
+        description="",
+        price_cents=0,
+        status="published",
+        featured=True,
+        featured_at=now,
+        visibility="listed",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(book)
+    db_session.commit()
+
+    report = client.post(
+        f"/api/books/{book.id}/report",
+        headers=auth_header(reader),
+        json={"reason": "misleading", "details": "Metadata does not match the content."},
+    )
+    assert report.status_code == 200
+    duplicate = client.post(
+        f"/api/books/{book.id}/report",
+        headers=auth_header(reader),
+        json={"reason": "other", "details": "Another reason"},
+    )
+    assert duplicate.status_code == 409
+    owner = client.post(
+        f"/api/books/{book.id}/report",
+        headers=auth_header(publisher),
+        json={"reason": "spam", "details": ""},
+    )
+    assert owner.status_code == 400
+
+    reports = client.get("/api/admin/reports", headers=auth_header(admin))
+    assert reports.status_code == 200
+    report_id = reports.json()["reports"][0]["id"]
+    resolved = client.post(
+        f"/api/admin/reports/{report_id}/resolve",
+        headers=auth_header(admin),
+        json={"action": "hide", "note": "Hidden while publisher responds."},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["book_visibility"] == "hidden"
+    db_session.refresh(book)
+    assert book.featured is False

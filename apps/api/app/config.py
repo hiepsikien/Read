@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     google_tts_voice: str = ""
     tts_cache_dir: str = ""
 
+    # Optional Gemini explain. The glossary-first path works with AI off.
+    ai_explain_enabled: bool = False
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_model: str = "gemini-3.5-flash-lite"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
