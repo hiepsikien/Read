@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #14221c;
+  --ink-soft: #2a3d34;
+  --mist: #e7eef0;
+  --mist-deep: #d5e2dd;
+  --paper: #f3f7f5;
+  --sage: #3f6f5c;
+  --sage-deep: #2c5344;
+  --sand: #c7b59a;
+  --line: rgba(20, 34, 28, 0.12);
+  --shadow: 0 18px 50px rgba(20, 34, 28, 0.08);
+  --font-display: "Fraunces", Georgia, serif;
+  --font-reader: "Source Serif 4", Georgia, serif;
+  --font-ui: "DM Sans", system-ui, sans-serif;
+}
+
+@theme inline {
+  --font-sans: var(--font-ui);
+  --color-ink: var(--ink);
+  --color-sage: var(--sage);
+  --color-paper: var(--paper);
+  --color-mist: var(--mist);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(63, 111, 92, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(199, 181, 154, 0.22), transparent 45%),
+    linear-gradient(165deg, var(--mist) 0%, var(--mist-deep) 48%, #edf3f1 100%);
+  background-attachment: fixed;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.brand-mark {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.03em;
+}
+
+.reader-serif {
+  font-family: var(--font-reader);
+}
+
+.surface {
+  background: color-mix(in srgb, var(--paper) 88%, white);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.fade-up {
+  animation: fadeUp 0.7s ease both;
+}
+
+.fade-up-delay {
+  animation: fadeUp 0.9s ease both;
+  animation-delay: 0.12s;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes softPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ambient-orb {
+  animation: softPulse 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-up,
+  .fade-up-delay,
+  .ambient-orb {
+    animation: none;
+  }
+}

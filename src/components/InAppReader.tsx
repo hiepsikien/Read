@@ -1,0 +1,370 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { estimateMinutes, formatPrice } from "@/lib/format";
+
+type ChapterMeta = {
+  id: string;
+  position: number;
+  title: string;
+  word_count: number;
+  locked: boolean;
+};
+
+type ReaderPayload = {
+  book: { id: string; title: string; price_cents: number; publisher_name: string };
+  chapter: {
+    id: string;
+    position: number;
+    title: string;
+    content: string;
+    word_count: number;
+  };
+  chapters: ChapterMeta[];
+};
+
+const THEMES = {
+  paper: {
+    label: "Paper",
+    bg: "#f3f7f5",
+    fg: "#14221c",
+    muted: "#2a3d34",
+  },
+  ink: {
+    label: "Ink",
+    bg: "#14221c",
+    fg: "#e8f0ec",
+    muted: "#b7c7bf",
+  },
+  sepia: {
+    label: "Sepia",
+    bg: "#efe6d6",
+    fg: "#2b2118",
+    muted: "#5c4d3d",
+  },
+} as const;
+
+type ThemeKey = keyof typeof THEMES;
+
+export function InAppReader({
+  bookId,
+  chapterId,
+}: {
+  bookId: string;
+  chapterId: string;
+}) {
+  const router = useRouter();
+  const [data, setData] = useState<ReaderPayload | null>(null);
+  const [error, setError] = useState("");
+  const [locked, setLocked] = useState(false);
+  const [priceCents, setPriceCents] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [chromeVisible, setChromeVisible] = useState(true);
+  const [fontSize, setFontSize] = useState(20);
+  const [theme, setTheme] = useState<ThemeKey>("paper");
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      setError("");
+      setLocked(false);
+      const response = await fetch(`/api/books/${bookId}/chapters/${chapterId}`);
+      const payload = await response.json();
+      if (cancelled) return;
+
+      if (response.status === 402) {
+        setLocked(true);
+        setPriceCents(payload.book?.price_cents || 0);
+        setError(payload.error || "Purchase required.");
+        setData(null);
+        setLoading(false);
+        return;
+      }
+
+      if (!response.ok) {
+        setError(payload.error || "Could not load chapter.");
+        setData(null);
+        setLoading(false);
+        return;
+      }
+
+      setData(payload);
+      setLoading(false);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, chapterId]);
+
+  useEffect(() => {
+    if (!data) return;
+    const key = `read:pos:${bookId}`;
+    localStorage.setItem(key, JSON.stringify({ chapterId, at: Date.now() }));
+  }, [bookId, chapterId, data]);
+
+  useEffect(() => {
+    let lastY = window.scrollY;
+    function onScroll() {
+      const y = window.scrollY;
+      setChromeVisible(y < 40 || y < lastY);
+      lastY = y;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      setProgress(max > 0 ? Math.min(100, (y / max) * 100) : 0);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const neighbors = useMemo(() => {
+    if (!data) return { prev: null as ChapterMeta | null, next: null as ChapterMeta | null };
+    const index = data.chapters.findIndex((c) => c.id === data.chapter.id);
+    return {
+      prev: index > 0 ? data.chapters[index - 1] : null,
+      next: index >= 0 && index < data.chapters.length - 1 ? data.chapters[index + 1] : null,
+    };
+  }, [data]);
+
+  const palette = THEMES[theme];
+
+  async function buy() {
+    const response = await fetch(`/api/books/${bookId}/purchase`, { method: "POST" });
+    if (response.status === 401) {
+      router.push("/login");
+      return;
+    }
+    if (response.ok) {
+      router.refresh();
+      router.push(`/read/${bookId}/${chapterId}`);
+      // force reload current chapter
+      window.location.reload();
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center text-[var(--ink-soft)]">
+        Opening chapter…
+      </div>
+    );
+  }
+
+  if (locked) {
+    return (
+      <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col justify-center px-4 text-center">
+        <p className="brand-mark text-3xl font-semibold text-[var(--ink)]">Read</p>
+        <h1 className="mt-4 text-2xl font-semibold text-[var(--ink)]">This chapter is locked</h1>
+        <p className="mt-3 text-[var(--ink-soft)]">
+          Chapter 1 is free. Unlock the full book with a mock purchase to keep reading in the app.
+        </p>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={buy}
+            className="rounded-lg bg-[var(--sage)] px-5 py-2.5 font-medium text-white"
+          >
+            Buy · {formatPrice(priceCents)}
+          </button>
+          <Link href={`/books/${bookId}`} className="rounded-lg border border-[var(--line)] px-5 py-2.5">
+            Book details
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="mx-auto max-w-lg px-4 py-20 text-center">
+        <p className="text-[var(--ink)]">{error || "Chapter unavailable."}</p>
+        <Link href="/" className="mt-4 inline-block text-[var(--sage)] underline underline-offset-4">
+          Back to library
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="min-h-screen transition-colors duration-300"
+      style={{ background: palette.bg, color: palette.fg }}
+    >
+      <div
+        className="fixed left-0 top-0 z-50 h-0.5 bg-[var(--sage)] transition-[width]"
+        style={{ width: `${progress}%` }}
+      />
+
+      <header
+        className={`sticky top-0 z-40 border-b transition-all duration-300 ${
+          chromeVisible ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0"
+        }`}
+        style={{
+          borderColor: "color-mix(in srgb, currentColor 12%, transparent)",
+          background: `color-mix(in srgb, ${palette.bg} 92%, transparent)`,
+          backdropFilter: "blur(10px)",
+        }}
+      >
+        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
+          <Link href={`/books/${bookId}`} className="brand-mark text-xl font-semibold">
+            Read
+          </Link>
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setFontSize((s) => Math.max(16, s - 2))}
+              className="rounded-md px-2 py-1"
+              style={{ background: "color-mix(in srgb, currentColor 8%, transparent)" }}
+              aria-label="Decrease font size"
+            >
+              A−
+            </button>
+            <button
+              type="button"
+              onClick={() => setFontSize((s) => Math.min(28, s + 2))}
+              className="rounded-md px-2 py-1"
+              style={{ background: "color-mix(in srgb, currentColor 8%, transparent)" }}
+              aria-label="Increase font size"
+            >
+              A+
+            </button>
+            <select
+              value={theme}
+              onChange={(e) => setTheme(e.target.value as ThemeKey)}
+              className="rounded-md border-0 px-2 py-1 text-sm"
+              style={{
+                background: "color-mix(in srgb, currentColor 8%, transparent)",
+                color: palette.fg,
+              }}
+              aria-label="Reading theme"
+            >
+              {Object.entries(THEMES).map(([key, value]) => (
+                <option key={key} value={key}>
+                  {value.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setTocOpen(true)}
+              className="rounded-md px-2 py-1 font-medium"
+              style={{ background: "color-mix(in srgb, currentColor 8%, transparent)" }}
+            >
+              Contents
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <article className="fade-up mx-auto max-w-2xl px-4 pb-28 pt-10 sm:px-6">
+        <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
+          {data.book.title}
+        </p>
+        <h1 className="brand-mark mt-3 text-3xl font-semibold leading-tight sm:text-4xl">
+          {data.chapter.title}
+        </h1>
+        <p className="mt-3 text-sm" style={{ color: palette.muted }}>
+          {estimateMinutes(data.chapter.word_count)} min · Chapter {data.chapter.position} of{" "}
+          {data.chapters.length}
+        </p>
+
+        <div
+          className="reader-serif mt-10 space-y-6 leading-[1.75]"
+          style={{ fontSize: `${fontSize}px` }}
+        >
+          {data.chapter.content.split(/\n\s*\n/).map((paragraph, index) => (
+            <p key={index} className="whitespace-pre-wrap">
+              {paragraph}
+            </p>
+          ))}
+        </div>
+
+        <nav className="mt-14 flex items-center justify-between gap-4 border-t pt-6"
+          style={{ borderColor: "color-mix(in srgb, currentColor 12%, transparent)" }}
+        >
+          {neighbors.prev && !neighbors.prev.locked ? (
+            <Link
+              href={`/read/${bookId}/${neighbors.prev.id}`}
+              className="text-sm underline underline-offset-4"
+            >
+              ← Previous
+            </Link>
+          ) : (
+            <span />
+          )}
+          {neighbors.next ? (
+            neighbors.next.locked ? (
+              <button type="button" onClick={buy} className="text-sm font-medium underline underline-offset-4">
+                Unlock next →
+              </button>
+            ) : (
+              <Link
+                href={`/read/${bookId}/${neighbors.next.id}`}
+                className="text-sm underline underline-offset-4"
+              >
+                Next →
+              </Link>
+            )
+          ) : (
+            <Link href={`/books/${bookId}`} className="text-sm underline underline-offset-4">
+              Done
+            </Link>
+          )}
+        </nav>
+      </article>
+
+      {tocOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 sm:items-center">
+          <button
+            type="button"
+            className="absolute inset-0 cursor-default"
+            aria-label="Close contents"
+            onClick={() => setTocOpen(false)}
+          />
+          <div
+            className="relative max-h-[80vh] w-full max-w-md overflow-auto rounded-t-2xl p-5 sm:rounded-2xl"
+            style={{ background: palette.bg, color: palette.fg }}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="font-semibold">Contents</h2>
+              <button type="button" onClick={() => setTocOpen(false)} className="text-sm">
+                Close
+              </button>
+            </div>
+            <ul className="space-y-1">
+              {data.chapters.map((chapter) => (
+                <li key={chapter.id}>
+                  {chapter.locked ? (
+                    <div className="rounded-lg px-3 py-2 opacity-55">
+                      <p>{chapter.title}</p>
+                      <p className="text-xs">Locked</p>
+                    </div>
+                  ) : (
+                    <Link
+                      href={`/read/${bookId}/${chapter.id}`}
+                      onClick={() => setTocOpen(false)}
+                      className="block rounded-lg px-3 py-2 transition hover:bg-black/5"
+                      style={{
+                        background:
+                          chapter.id === data.chapter.id
+                            ? "color-mix(in srgb, currentColor 8%, transparent)"
+                            : undefined,
+                      }}
+                    >
+                      {chapter.title}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
