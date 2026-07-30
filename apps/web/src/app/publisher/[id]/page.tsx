@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
-import { ApiError } from "@read/api-client";
+import { ApiError, SPLIT_LENGTH_OPTIONS, type SplitLength } from "@read/api-client";
 import { createBrowserApi } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 
@@ -28,6 +28,7 @@ export default function ManageBookPage() {
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [splitLength, setSplitLength] = useState<SplitLength>("standard");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -76,7 +77,9 @@ export default function ManageBookPage() {
     setMessage("");
     setError("");
     try {
-      const payload = await createBrowserApi().splitBook(params.id);
+      const payload = await createBrowserApi().splitBook(params.id, {
+        length: splitLength,
+      });
       setMessage(`Created ${payload.chapter_count} chapters.`);
       await load();
     } catch (err) {
@@ -187,8 +190,31 @@ export default function ManageBookPage() {
         </h2>
         <p className="mt-2 text-sm text-[var(--ink-soft)]">
           Detects existing chapters and sections, then packs them into comfortable
-          reading segments — without cutting a section across two units.
+          reading segments — without cutting a section across two units. Pick how
+          long each part should feel.
         </p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {SPLIT_LENGTH_OPTIONS.map((option) => {
+            const active = splitLength === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setSplitLength(option.value)}
+                className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                  active
+                    ? "border-[var(--sage)] bg-[var(--sage)] text-white"
+                    : "border-[var(--line)] bg-white/70 text-[var(--ink)]"
+                }`}
+              >
+                <span className="block font-medium">{option.label}</span>
+                <span className={`block text-xs ${active ? "text-white/85" : "text-[var(--ink-soft)]"}`}>
+                  {option.hint}
+                </span>
+              </button>
+            );
+          })}
+        </div>
         <button
           type="button"
           onClick={splitChapters}

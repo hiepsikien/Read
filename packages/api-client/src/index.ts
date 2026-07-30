@@ -2,6 +2,18 @@ export type UserRole = "reader" | "publisher";
 
 export type BookStatus = "draft" | "published";
 
+export type SplitLength = "short" | "standard" | "long";
+
+export const SPLIT_LENGTH_OPTIONS: Array<{
+  value: SplitLength;
+  label: string;
+  hint: string;
+}> = [
+  { value: "short", label: "Short", hint: "~5–8 min" },
+  { value: "standard", label: "Standard", hint: "~10–15 min" },
+  { value: "long", label: "Long", hint: "~20–25 min" },
+];
+
 export interface SessionUser {
   id: string;
   email: string;
@@ -236,10 +248,13 @@ export function createApiClient(options: ApiClientOptions) {
         body: JSON.stringify(body),
       });
     },
-    splitBook(id: string) {
+    splitBook(id: string, options?: { length?: SplitLength }) {
       return request<{ ok: boolean; chapter_count: number }>(
         `/api/books/${id}/split`,
-        { method: "POST" }
+        {
+          method: "POST",
+          body: JSON.stringify({ length: options?.length ?? "standard" }),
+        }
       );
     },
     publishBook(id: string) {

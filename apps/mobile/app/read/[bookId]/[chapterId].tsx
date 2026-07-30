@@ -23,11 +23,14 @@ import {
 } from "@read/api-client";
 import { useAuth } from "../../../lib/auth";
 import {
+  FONT_SIZE_STEP,
+  useReaderPreferences,
+} from "../../../lib/reader-preferences";
+import {
   colors,
   estimateMinutes,
   formatPrice,
   readerThemes,
-  type ReaderThemeKey,
 } from "../../../lib/theme";
 
 type ReaderPayload = {
@@ -47,8 +50,7 @@ export default function ReaderScreen() {
   const [priceCents, setPriceCents] = useState(0);
   const [error, setError] = useState("");
   const [tocOpen, setTocOpen] = useState(false);
-  const [fontSize, setFontSize] = useState(19);
-  const [theme, setTheme] = useState<ReaderThemeKey>("paper");
+  const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
 
   const load = useCallback(async () => {
     if (!bookId || !chapterId) return;
@@ -102,12 +104,6 @@ export default function ReaderScreen() {
   }, [data]);
 
   const palette = readerThemes[theme];
-
-  function cycleTheme() {
-    const keys = Object.keys(readerThemes) as ReaderThemeKey[];
-    const idx = keys.indexOf(theme);
-    setTheme(keys[(idx + 1) % keys.length]);
-  }
 
   if (loading) {
     return (
@@ -165,10 +161,10 @@ export default function ReaderScreen() {
           <Text style={[styles.barBrand, { color: palette.fg }]}>Read</Text>
         </Pressable>
         <View style={styles.barControls}>
-          <Pressable style={chip(palette.fg)} onPress={() => setFontSize((s) => Math.max(15, s - 2))}>
+          <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(-FONT_SIZE_STEP)}>
             <Text style={{ color: palette.fg }}>A−</Text>
           </Pressable>
-          <Pressable style={chip(palette.fg)} onPress={() => setFontSize((s) => Math.min(28, s + 2))}>
+          <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(FONT_SIZE_STEP)}>
             <Text style={{ color: palette.fg }}>A+</Text>
           </Pressable>
           <Pressable style={chip(palette.fg)} onPress={cycleTheme}>

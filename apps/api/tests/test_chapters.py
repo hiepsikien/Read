@@ -1,10 +1,12 @@
 from app.access import can_access_chapter
 from app.chapters import (
     MAX_WORDS,
+    SPLIT_PROFILES,
     TARGET_WORDS,
     count_words,
     normalize_document_text,
     plain_text,
+    resolve_split_profile,
     split_into_chapters,
 )
 from app.models import Book, Chapter
@@ -215,6 +217,31 @@ def test_segments_target_longer_reading_units():
     # Roughly TARGET_WORDS per unit rather than the old ~850.
     assert all(count_words(u.content) <= MAX_WORDS for u in units)
     assert max(count_words(u.content) for u in units) > 1200
+
+
+def test_split_length_presets_change_part_count():
+    text = "\n\n".join(para(500, f"blk{i}") + "." for i in range(10))
+
+    short = split_into_chapters(text, length="short")
+    standard = split_into_chapters(text, length="standard")
+    long = split_into_chapters(text, length="long")
+
+    assert len(short) > len(standard) > len(long)
+    assert all(
+        count_words(unit.content) <= SPLIT_PROFILES["short"].max_words for unit in short
+    )
+    assert all(
+        count_words(unit.content) <= SPLIT_PROFILES["long"].max_words for unit in long
+    )
+    assert resolve_split_profile("standard").target_words == TARGET_WORDS
+
+
+def test_unknown_split_length_is_rejected():
+    try:
+        resolve_split_profile("huge")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "huge" in str(exc)
 
 
 def test_can_access_chapter_rules():

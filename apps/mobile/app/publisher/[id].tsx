@@ -10,8 +10,10 @@ import {
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   ApiError,
+  SPLIT_LENGTH_OPTIONS,
   type BookDetail,
   type ChapterListItem,
+  type SplitLength,
 } from "@read/api-client";
 import { FormScroll } from "../../components/FormScroll";
 import { useAuth } from "../../lib/auth";
@@ -28,6 +30,7 @@ export default function ManageBookScreen() {
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [splitLength, setSplitLength] = useState<SplitLength>("standard");
   const [busy, setBusy] = useState<"" | "save" | "split" | "publish">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -74,7 +77,7 @@ export default function ManageBookScreen() {
     setMessage("");
     setError("");
     try {
-      const payload = await api.splitBook(id!);
+      const payload = await api.splitBook(id!, { length: splitLength });
       setMessage(`Created ${payload.chapter_count} chapters.`);
       await load();
     } catch (err) {
@@ -167,7 +170,27 @@ export default function ManageBookScreen() {
       <Text style={styles.section}>Chapters</Text>
       <Text style={styles.hint}>
         Detects chapters and sections, then packs them into comfortable reading segments.
+        Pick how long each part should feel.
       </Text>
+      <View style={styles.pricingRow}>
+        {SPLIT_LENGTH_OPTIONS.map((option) => {
+          const active = splitLength === option.value;
+          return (
+            <Pressable
+              key={option.value}
+              style={[styles.choice, active && styles.choiceActive]}
+              onPress={() => setSplitLength(option.value)}
+            >
+              <Text style={[styles.choiceText, active && styles.choiceTextActive]}>
+                {option.label}
+              </Text>
+              <Text style={[styles.choiceHint, active && styles.choiceHintActive]}>
+                {option.hint}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
       <Pressable
         style={[styles.primaryBtn, !book.has_raw_text && styles.disabled]}
         onPress={split}
@@ -256,6 +279,8 @@ const styles = StyleSheet.create({
   choiceActive: { backgroundColor: colors.sage, borderColor: colors.sage },
   choiceText: { color: colors.ink, fontWeight: "600" },
   choiceTextActive: { color: "#fff" },
+  choiceHint: { color: colors.inkSoft, fontSize: 11, marginTop: 2 },
+  choiceHintActive: { color: "rgba(255,255,255,0.85)" },
   hint: { color: colors.inkSoft, fontSize: 13, marginTop: 6 },
   primaryBtn: {
     marginTop: 12,

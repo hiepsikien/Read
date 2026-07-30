@@ -50,6 +50,15 @@ const THEMES = {
 
 type ThemeKey = keyof typeof THEMES;
 
+const DEFAULT_FONT_SIZE = 20;
+const MIN_FONT_SIZE = 16;
+const MAX_FONT_SIZE = 28;
+const PREFS_KEY = "read:reader-prefs";
+
+function isThemeKey(value: unknown): value is ThemeKey {
+  return typeof value === "string" && value in THEMES;
+}
+
 export function InAppReader({
   bookId,
   chapterId,
@@ -65,8 +74,9 @@ export function InAppReader({
   const [loading, setLoading] = useState(true);
   const [tocOpen, setTocOpen] = useState(false);
   const [chromeVisible, setChromeVisible] = useState(true);
-  const [fontSize, setFontSize] = useState(20);
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   const [theme, setTheme] = useState<ThemeKey>("paper");
+  const [prefsRestored, setPrefsRestored] = useState(false);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
@@ -121,6 +131,27 @@ export function InAppReader({
     const key = `read:pos:${bookId}`;
     localStorage.setItem(key, JSON.stringify({ chapterId, at: Date.now() }));
   }, [bookId, chapterId, data]);
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+      if (typeof stored.fontSize === "number") {
+        setFontSize(
+          Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, stored.fontSize))
+        );
+      }
+      if (isThemeKey(stored.theme)) setTheme(stored.theme);
+    } catch {
+      // Corrupt or unavailable storage just means we keep the defaults.
+    }
+    setPrefsRestored(true);
+  }, []);
+
+  useEffect(() => {
+    // Skip the first pass so defaults never overwrite what was just restored.
+    if (!prefsRestored) return;
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fontSize, theme }));
+  }, [fontSize, theme, prefsRestored]);
 
   useEffect(() => {
     let lastY = window.scrollY;
@@ -228,7 +259,7 @@ export function InAppReader({
           <div className="flex items-center gap-2 text-sm">
             <button
               type="button"
-              onClick={() => setFontSize((s) => Math.max(16, s - 2))}
+              onClick={() => setFontSize((s) => Math.max(MIN_FONT_SIZE, s - 2))}
               className="rounded-md px-2 py-1"
               style={{ background: "color-mix(in srgb, currentColor 8%, transparent)" }}
               aria-label="Decrease font size"
@@ -237,7 +268,7 @@ export function InAppReader({
             </button>
             <button
               type="button"
-              onClick={() => setFontSize((s) => Math.min(28, s + 2))}
+              onClick={() => setFontSize((s) => Math.min(MAX_FONT_SIZE, s + 2))}
               className="rounded-md px-2 py-1"
               style={{ background: "color-mix(in srgb, currentColor 8%, transparent)" }}
               aria-label="Increase font size"

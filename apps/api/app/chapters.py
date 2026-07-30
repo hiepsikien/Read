@@ -2,10 +2,40 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
-TARGET_WORDS = 2000
-MAX_WORDS = 3000
-MIN_WORDS = 650
+SplitLength = Literal["short", "standard", "long"]
+
+
+@dataclass(frozen=True)
+class SplitProfile:
+    target_words: int
+    max_words: int
+    min_words: int
+
+
+SPLIT_PROFILES: dict[str, SplitProfile] = {
+    "short": SplitProfile(target_words=900, max_words=1400, min_words=350),
+    "standard": SplitProfile(target_words=2000, max_words=3000, min_words=650),
+    "long": SplitProfile(target_words=3500, max_words=5000, min_words=1200),
+}
+DEFAULT_SPLIT_LENGTH: SplitLength = "standard"
+
+# Back-compat aliases — match the standard profile used by existing tests.
+TARGET_WORDS = SPLIT_PROFILES["standard"].target_words
+MAX_WORDS = SPLIT_PROFILES["standard"].max_words
+MIN_WORDS = SPLIT_PROFILES["standard"].min_words
+
+
+def resolve_split_profile(length: str | None = None) -> SplitProfile:
+    key = length or DEFAULT_SPLIT_LENGTH
+    profile = SPLIT_PROFILES.get(key)
+    if profile is None:
+        raise ValueError(
+            f"Unknown split length {length!r}. "
+            f"Expected one of: {', '.join(SPLIT_PROFILES)}."
+        )
+    return profile
 
 CHAPTER_HEADING = re.compile(
     r"^(?:chapter|chương|phần|part|book)\s+([0-9ivxlcdm]+|[a-z])\b(?:\s*[:.\-–—]\s*(.*))?$",
@@ -135,8 +165,12 @@ def normalize_document_text(
 
 
 def split_into_chapters(
-    raw_text: str, *, preserve_paragraphs: bool = False
+    raw_text: str,
+    *,
+    preserve_paragraphs: bool = False,
+    length: SplitLength | str | None = None,
 ) -> list[SplitChapter]:
+    profile = resolve_split_profile(length)
     normalized = normalize_document_text(
         raw_text, preserve_paragraphs=preserve_paragraphs
     )
@@ -148,7 +182,7 @@ def split_into_chapters(
     units: list[SplitChapter] = []
 
     for chapter_index, chapter in enumerate(logical_chapters):
-        packed = pack_sections_for_reading(chapter)
+        packed = pack_sections_for_reading(chapter, profile)
         for unit in packed:
             units.append(
                 SplitChapter(
@@ -304,7 +338,10 @@ def paragraphs_as_sections(text: str) -> list[SectionBlock]:
     return [SectionBlock(title=None, body=body) for body in paragraphs]
 
 
-def pack_sections_for_reading(chapter: LogicalChapter) -> list[dict[str, str]]:
+def pack_sections_for_reading(
+    chapter: LogicalChapter, profile: SplitProfile | None = None
+) -> list[dict[str, str]]:
+    limits = profile or SPLIT_PROFILES[DEFAULT_SPLIT_LENGTH]
     sections = chapter.sections or [SectionBlock(title=None, body="")]
     packs: list[dict] = []
     current: dict = {"sections": [], "words": 0}
@@ -318,10 +355,10 @@ def pack_sections_for_reading(chapter: LogicalChapter) -> list[dict[str, str]]:
 
     for section in sections:
         section_words = max(1, count_words(render_section(section)))
-        if section_words > MAX_WORDS:
+        if section_words > limits.max_words:
             if current["words"] > 0:
                 flush()
-            for piece in split_oversized_section(section):
+            for piece in split_oversized_section(section, limits):
                 packs.append(
                     {
                         "sections": [piece],
@@ -330,7 +367,10 @@ def pack_sections_for_reading(chapter: LogicalChapter) -> list[dict[str, str]]:
                 )
             continue
 
-        if current["words"] > 0 and current["words"] + section_words > TARGET_WORDS:
+        if (
+            current["words"] > 0
+            and current["words"] + section_words > limits.target_words
+        ):
             flush()
 
         current["sections"].append(section)
@@ -340,7 +380,10 @@ def pack_sections_for_reading(chapter: LogicalChapter) -> list[dict[str, str]]:
 
     i = len(packs) - 1
     while i > 0:
-        if packs[i]["words"] < MIN_WORDS and packs[i - 1]["words"] + packs[i]["words"] <= TARGET_WORDS:
+        if (
+            packs[i]["words"] < limits.min_words
+            and packs[i - 1]["words"] + packs[i]["words"] <= limits.target_words
+        ):
             packs[i - 1]["sections"].extend(packs[i]["sections"])
             packs[i - 1]["words"] += packs[i]["words"]
             packs.pop(i)
@@ -357,7 +400,10 @@ def pack_sections_for_reading(chapter: LogicalChapter) -> list[dict[str, str]]:
     ]
 
 
-def split_oversized_section(section: SectionBlock) -> list[SectionBlock]:
+def split_oversized_section(
+    section: SectionBlock, profile: SplitProfile | None = None
+) -> list[SectionBlock]:
+    limits = profile or SPLIT_PROFILES[DEFAULT_SPLIT_LENGTH]
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", section.body) if p.strip()]
     if len(paragraphs) <= 1:
         return [section]
@@ -381,7 +427,7 @@ def split_oversized_section(section: SectionBlock) -> list[SectionBlock]:
 
     for paragraph in paragraphs:
         w = count_words(paragraph)
-        if words > 0 and words + w > TARGET_WORDS:
+        if words > 0 and words + w > limits.target_words:
             flush()
         bucket.append(paragraph)
         words += w

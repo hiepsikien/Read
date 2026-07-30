@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from nanoid import generate
 from pydantic import BaseModel
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..access import can_access_chapter
 from ..auth import get_current_user, get_current_user_optional, require_publisher
-from ..chapters import count_words, split_into_chapters
+from ..chapters import SPLIT_PROFILES, count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
 from ..models import Book, Chapter, Purchase, User
@@ -29,6 +29,10 @@ class PatchBookBody(BaseModel):
     description: str | None = None
     pricing: str | None = None
     price: float | None = None
+
+
+class SplitBookBody(BaseModel):
+    length: Literal["short", "standard", "long"] = "standard"
 
 
 def _chapter_list_item(chapter: Chapter, locked: bool | None = None) -> dict:
@@ -270,6 +274,7 @@ def split_book(
     book_id: str,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_publisher)],
+    body: Annotated[SplitBookBody | None, Body()] = None,
 ):
     book = db.get(Book, book_id)
     if not book or book.publisher_id != user.id:
@@ -277,9 +282,16 @@ def split_book(
     if not (book.raw_text or "").strip():
         raise HTTPException(status_code=400, detail="No extracted text available to split.")
 
+    length = (body.length if body else "standard")
+    if length not in SPLIT_PROFILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid length. Expected one of: {', '.join(SPLIT_PROFILES)}.",
+        )
+
     is_docx = Path(book.source_filename or "").suffix.lower() == ".docx"
     units = split_into_chapters(
-        book.raw_text or "", preserve_paragraphs=is_docx
+        book.raw_text or "", preserve_paragraphs=is_docx, length=length
     )
     if not units:
         raise HTTPException(status_code=400, detail="Could not create chapters from this document.")
