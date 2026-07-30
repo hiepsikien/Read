@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Link, useFocusEffect, useRouter } from "expo-router";
 import type { BookListItem } from "@read/api-client";
+import { BrandLogo } from "../components/BrandLogo";
 import { useAuth } from "../lib/auth";
 import { colors, formatPrice } from "../lib/theme";
 
@@ -77,7 +78,7 @@ export default function LibraryScreen() {
       }
     >
       <Text style={styles.eyebrow}>In-app reading</Text>
-      <Text style={styles.brand}>Read</Text>
+      <BrandLogo variant="wordmark" height={44} style={styles.brandLogo} />
       <Text style={styles.sub}>
         Free titles open instantly. Paid titles unlock after sign-in and purchase. Authors publish
         original DOCX manuscripts for review.
@@ -151,7 +152,7 @@ const styles = StyleSheet.create({
     color: colors.sage,
     fontWeight: "600",
   },
-  brand: { fontSize: 44, fontWeight: "700", color: colors.ink, marginTop: 2 },
+  brandLogo: { marginTop: 6, marginBottom: 4 },
   sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 21 },
   authRow: { gap: 8 },
   authActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },

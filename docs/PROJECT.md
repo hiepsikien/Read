@@ -316,12 +316,21 @@ API tiêu biểu:
 - Tone màu ink / sage / mist — tránh purple generic và cream+terracotta cliché  
 - Reader full-screen trong app; chrome ẩn khi scroll  
 
-### Logo
-- PNG: `apps/web/public/brand/read-logo.png` (wordmark serif + open-book, ink/sage)
-- SVG: `apps/web/public/brand/read-logo.svg`
-- Preview trong docs: `docs/assets/read-logo.png`
-- App icon / favicon: `apps/web/src/app/icon.png`
-- Đã gắn vào header web và hero library
+### Logo & brand assets
+
+| Asset | Path | Dùng cho |
+|-------|------|----------|
+| Mark (SVG, transparent) | `apps/web/public/brand/read-mark.svg` | Favicon ý tưởng / icon-only UI |
+| Mark PNG | `apps/web/public/brand/read-mark.png` | Docs / export |
+| Wordmark (SVG) | `apps/web/public/brand/read-wordmark.svg` | Header, hero, reader chrome (web) |
+| App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon Next (đã bỏ `favicon.ico` cũ) |
+| Mobile icon/splash | `apps/mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png` | Expo `app.json` |
+| Mobile UI marks | `apps/mobile/assets/mark.png`, `wordmark.png` | Library / login / reader |
+
+**Quy ước UI**
+- **Wordmark** = chữ + sách → dùng **một mình**, không kèm text “Read”
+- **Mark** = chỉ icon sách → compact chrome, login accent, app icon
+- Component: `BrandLogo` (`apps/web/...`, `apps/mobile/components/BrandLogo.tsx`)
 
 ---
 

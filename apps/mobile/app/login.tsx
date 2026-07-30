@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { ApiError } from "@read/api-client";
+import { BrandLogo } from "../components/BrandLogo";
 import { FormScroll } from "../components/FormScroll";
 import { useAuth } from "../lib/auth";
 import { colors } from "../lib/theme";
@@ -49,6 +50,7 @@ export default function LoginScreen() {
 
   return (
     <FormScroll style={styles.screen} contentContainerStyle={styles.container}>
+      <BrandLogo variant="mark" height={48} style={styles.mark} />
       <Text style={styles.title}>{mode === "signin" ? "Sign in to Read" : "Create account"}</Text>
       <Text style={styles.sub}>
         Free books stay open without an account. Sign in to unlock paid titles, publish, or moderate.
@@ -134,6 +136,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.mist },
   container: { padding: 20, gap: 12, paddingBottom: 48 },
+  mark: { marginBottom: 4 },
   title: { fontSize: 28, fontWeight: "700", color: colors.ink, marginTop: 8 },
   sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 20 },
   modeRow: { flexDirection: "row", gap: 8 },

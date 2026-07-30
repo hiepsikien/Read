@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { ApiError } from "@read/api-client";
+import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi } from "@/lib/api";
 
@@ -60,7 +61,8 @@ export default function LoginPage() {
 
   return (
     <div className="mx-auto max-w-md fade-up">
-      <p className="text-xs uppercase tracking-[0.18em] text-[var(--sage)]">Welcome back</p>
+      <BrandLogo variant="mark" height={48} priority />
+      <p className="mt-5 text-xs uppercase tracking-[0.18em] text-[var(--sage)]">Welcome back</p>
       <h1 className="brand-mark mt-2 text-4xl font-semibold text-[var(--ink)]">
         {mode === "signin" ? "Sign in to Read" : "Create account"}
       </h1>

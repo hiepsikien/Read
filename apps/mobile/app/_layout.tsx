@@ -1,5 +1,6 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { BrandLogo } from "../components/BrandLogo";
 import { AuthProvider } from "../lib/auth";
 import { ReaderPreferencesProvider } from "../lib/reader-preferences";
 import { colors } from "../lib/theme";
@@ -17,7 +18,12 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: colors.mist },
           }}
         >
-          <Stack.Screen name="index" options={{ title: "Read" }} />
+          <Stack.Screen
+            name="index"
+            options={{
+              headerTitle: () => <BrandLogo variant="wordmark" height={24} />,
+            }}
+          />
           <Stack.Screen name="login" options={{ title: "Sign in", presentation: "modal" }} />
           <Stack.Screen name="books/[id]" options={{ title: "Book" }} />
           <Stack.Screen

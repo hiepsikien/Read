@@ -24,6 +24,7 @@ import {
   parseInlineMarkdown,
   type ChapterListItem,
 } from "@read/api-client";
+import { BrandLogo } from "../../../components/BrandLogo";
 import { useAuth } from "../../../lib/auth";
 import {
   FONT_SIZE_STEP,
@@ -205,7 +206,7 @@ export default function ReaderScreen() {
     return (
       <SafeAreaView style={[styles.lockedWrap, { backgroundColor: palette.bg }]}>
         <Stack.Screen options={{ headerShown: false }} />
-        <Text style={[styles.lockedBrand, { color: palette.fg }]}>Read</Text>
+        <BrandLogo variant="mark" height={52} style={{ tintColor: palette.fg, marginBottom: 8 }} />
         <Text style={[styles.lockedTitle, { color: palette.fg }]}>This chapter is locked</Text>
         <Text style={[styles.lockedBody, { color: palette.muted }]}>
           Chapter 1 is free. Unlock the full book with a mock purchase to keep reading.
@@ -237,8 +238,8 @@ export default function ReaderScreen() {
       <Stack.Screen options={{ headerShown: false }} />
 
       <View style={[styles.bar, { borderBottomColor: withAlpha(palette.fg, 0.12) }]}>
-        <Pressable onPress={leaveReader}>
-          <Text style={[styles.barBrand, { color: palette.fg }]}>Read</Text>
+        <Pressable onPress={leaveReader} accessibilityLabel="Back to book">
+          <BrandLogo variant="mark" height={26} style={{ tintColor: palette.fg }} />
         </Pressable>
         <View style={styles.barControls}>
           <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(-FONT_SIZE_STEP)}>
@@ -503,6 +504,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  barBrand: { fontSize: 18, fontWeight: "700" },
   barBrand: { fontSize: 18, fontWeight: "700" },
   barControls: { flexDirection: "row", alignItems: "center", gap: 6 },
   speechBar: {

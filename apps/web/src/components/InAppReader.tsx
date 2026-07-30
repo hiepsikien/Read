@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, parseInlineMarkdown } from "@read/api-client";
+import { BrandLogo } from "@/components/BrandLogo";
 import { createBrowserApi } from "@/lib/api";
 import { estimateMinutes, formatPrice } from "@/lib/format";
 
@@ -200,7 +201,9 @@ export function InAppReader({
   if (locked) {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-lg flex-col justify-center px-4 text-center">
-        <p className="brand-mark text-3xl font-semibold text-[var(--ink)]">Read</p>
+        <div className="mx-auto">
+          <BrandLogo variant="mark" height={56} />
+        </div>
         <h1 className="mt-4 text-2xl font-semibold text-[var(--ink)]">This chapter is locked</h1>
         <p className="mt-3 text-[var(--ink-soft)]">
           Chapter 1 is free. Unlock the full book with a mock purchase to keep reading in the app.
@@ -253,8 +256,8 @@ export function InAppReader({
         }}
       >
         <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
-          <Link href={`/books/${bookId}`} className="brand-mark text-xl font-semibold">
-            Read
+          <Link href={`/books/${bookId}`} className="flex items-center" aria-label="Back to book">
+            <BrandLogo variant="wordmark" height={24} />
           </Link>
           <div className="flex items-center gap-2 text-sm">
             <button

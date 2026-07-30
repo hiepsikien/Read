@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { SessionUser } from "@read/api-client";
+import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { cn } from "@/lib/format";
 
@@ -24,16 +24,8 @@ export function SiteHeader({ user }: { user: SessionUser | null }) {
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--mist)_82%,white)]/90 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link href="/" className="flex items-center gap-2" aria-label="Read home">
-          <Image
-            src="/brand/read-logo.png"
-            alt="Read"
-            width={120}
-            height={120}
-            className="h-10 w-10 rounded-lg object-cover"
-            priority
-          />
-          <span className="brand-mark text-2xl font-semibold text-[var(--ink)]">Read</span>
+        <Link href="/" className="flex items-center" aria-label="Read home">
+          <BrandLogo variant="wordmark" height={30} priority />
         </Link>
 
         <nav className="flex items-center gap-2 text-sm sm:gap-3">
