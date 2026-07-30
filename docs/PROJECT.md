@@ -5,8 +5,8 @@
 - **Repo:** https://github.com/hiepsikien/Read  
 - **Thương hiệu:** Read  
 - **Ngôn ngữ UI (MVP):** English  
-- **Trạng thái:** MVP+ (web đầy đủ; mobile reader + publisher + admin; Firebase auth thật; API tách riêng)  
-- **Nhánh đang làm tiếp:** `feature/ios-text-to-speech` — phần **audio / TTS** (xem §12 Bàn giao)  
+- **Trạng thái:** MVP+ (web đầy đủ; mobile reader + publisher + admin; Firebase auth thật; **cloud TTS narration**; API tách riêng)  
+- **Đã merge gần nhất:** cloud TTS narration + admin voice controls (commit `ea572e0`) — xem §4b và §12  
 
 ---
 
@@ -106,6 +106,34 @@ cd apps/api && .venv/bin/pytest -q
 
 ---
 
+## 4b. Audio / TTS narration (đã merge `main`)
+
+Đọc thành tiếng bằng **Google Cloud Text-to-Speech**, tổng hợp phía server, cache MP3 theo từng segment, phát trong in-app reader.
+
+**Backend** (`apps/api/app/tts.py`, `tts_settings.py`, `routers/tts.py`):
+
+- **Engine × giọng:** `standard` · `wavenet` · `neural2` · `chirp3` (Chirp3 HD có nhiều persona), mỗi engine có giọng **nam/nữ** tiếng Việt (`VOICE_CATALOG`). Chirp3 chọn persona riêng qua `google_tts_chirp_persona`.
+- **Admin đổi giọng động, không cần restart:** lưu ở bảng `app_settings` (model `AppSetting`); `get_active_tts` đọc DB trước, fallback về biến môi trường. `resolved_tts_voice` quy ra tên giọng cuối cùng.
+- **Chuẩn hoá text cho giọng đọc** (`normalize_for_speech`):
+  - **ALL CAPS → Title Case** để tên riêng (CALICUT, VASCO DA GAMA) đọc thành từ thay vì đánh vần từng chữ. **Giữ nguyên** viết tắt thật (`_SPELLED_ACRONYMS`: VOC, EIC, GDP…) và **số La Mã** (`_ROMAN_NUMERALS`: II, XVI…). Cố ý loại `DI`/`VI` khỏi số La Mã vì trong sách chúng là từ tiếng Việt (DI DÂN, NGOẠI VI).
+  - Bỏ markdown/URL/chú thích số; gộp khoảng trắng; chia theo giới hạn `MAX_TTS_INPUT_BYTES`.
+- **Hội thoại kịch bản → SSML:** dạng `NHÂN VẬT *(sắc thái)* Lời thoại` (và biến thể không có sắc thái, hoặc chỉ có chỉ dẫn đứng đầu) được dựng thành `<speak>` với `<break>` ngắt nhịp và `<prosody>` chỉnh `rate`/`pitch`/`volume` theo sắc thái (`_dialogue_prosody`: trầm/khàn, thì thầm, hét, run sợ, tức giận…). Prose thường (vd `AFONSO (58 tuổi) đứng trên boong`) **không** bị nhận nhầm thành thoại.
+- **Cache:** khoá = `sha256(version · voice · [ssml] · text-đã-chuẩn-hoá)`; file MP3 ở `uploads/tts-cache/<xx>/<hash>.mp3`. Khoá tính từ text đã chuẩn hoá nên chỉ đoạn thật sự đổi mới phải tổng hợp lại. Đổi `TTS_CACHE_VERSION` để vô hiệu toàn bộ cache khi cần.
+
+**API:**
+- `GET /api/tts/options` — liệt kê engine/gender/persona + giọng đang active
+- `GET /api/tts/preview` — nghe thử một đoạn với cấu hình bất kỳ
+- `GET /api/tts/compare` — trang HTML so sánh các giọng
+- `GET/PUT /api/admin/settings/tts` — admin xem/đổi giọng active (bảo vệ bởi `require_admin`)
+- `POST /api/books/{id}/chapters/{cid}/audio` — chuẩn bị segment audio; `GET …/audio/{index}` — stream MP3
+
+**Client:**
+- Web: trang `/settings` có tab **Narration** (chỉ admin) — chọn engine/gender/persona, nghe preview, lưu.
+- Mobile: `apps/mobile/app/settings.tsx` (Narration cho admin) + **voice picker ngay trong reader** (`lib/voice-picker.tsx`). Hook `lib/use-ios-narration.ts` phát audio cloud (fallback native), `reloadVoice()` đổi giọng mà giữ vị trí đang nghe, và **tự cuộn** theo paragraph đang đọc.
+- Chi phí tham khảo: Neural2 ~ **$16 / 1M ký tự**; sách V3 (~105k ký tự) ≈ $1.7/lượt, nằm trong hạn mức free 1M ký tự/tháng.
+
+---
+
 ## 5. Kiến trúc kỹ thuật
 
 ```
@@ -154,6 +182,7 @@ read/
 - **books** — title, description, `price_cents` (0 = free), `category_id`, status `draft|pending_review|published|rejected`, moderation fields (`submitted_at`, `reviewed_at`, `reviewed_by`, `review_note`), `raw_text`, file nguồn
 - **chapters** — reading segments: `position`, `title`, `content`, `word_count`, **`group_index`**
 - **purchases** — user ↔ book (mock)
+- **app_settings** — key/value cấu hình runtime (TTS engine/gender/persona); cho admin đổi giọng đọc không cần restart
 
 Schema migration: `apps/api/alembic/versions/0002_publishing_foundation.py` (idempotent — an toàn với DB đã `create_all`).
 
@@ -212,7 +241,7 @@ Dữ liệu runtime:
 - Upload: `uploads/` (relative keys trong DB)
 
 Biến môi trường:
-- API: `DATABASE_URL`, `UPLOAD_DIR`, `CORS_ORIGINS`, `AUTH_DEV_MODE`, `AUTH_DEV_SECRET`, `ADMIN_EMAILS`, `FIREBASE_PROJECT_ID`, `FIREBASE_CREDENTIALS_JSON`
+- API: `DATABASE_URL`, `UPLOAD_DIR`, `CORS_ORIGINS`, `AUTH_DEV_MODE`, `AUTH_DEV_SECRET`, `ADMIN_EMAILS`, `FIREBASE_PROJECT_ID`, `FIREBASE_CREDENTIALS_JSON`; TTS: `GOOGLE_TTS_ENABLED`, `GOOGLE_TTS_ENGINE`, `GOOGLE_TTS_GENDER`, `GOOGLE_TTS_CHIRP_PERSONA`, `GOOGLE_TTS_VOICE`, `TTS_CACHE_DIR` (xác thực Google qua Application Default Credentials)
 - Web: `NEXT_PUBLIC_API_URL`
 - Mobile: `EXPO_PUBLIC_API_URL` (dùng **LAN IP** khi test điện thoại thật, không dùng `localhost`), `EXPO_PUBLIC_FIREBASE_*`
 
@@ -228,6 +257,7 @@ Chi tiết Firebase: xem [docs/FIREBASE_SETUP.md](./FIREBASE_SETUP.md). Secrets 
 | `/login` | Đăng nhập demo |
 | `/books/[id]` | Chi tiết sách |
 | `/read/[bookId]/[chapterId]` | In-app reader |
+| `/settings` | Account + tab **Narration** (TTS, chỉ admin) |
 | `/publisher` | Danh sách sách của publisher |
 | `/publisher/new` | Upload sách mới |
 | `/publisher/[id]` | Quản lý / split / publish |
@@ -237,7 +267,8 @@ Mobile bổ sung: `/admin` (queue), `/admin/[id]` (review).
 API tiêu biểu:
 - Auth: `/api/auth/dev-login` (chỉ khi `AUTH_DEV_MODE`), `/api/auth/me`, `/api/auth/enable-author`
 - Books: `/api/books`, `/api/books/[id]/split`, `/api/books/[id]/submit-review`, `/api/books/categories/list`, `/api/books/[id]/purchase`, `/api/chapters/[chapterId]`
-- Admin: `/api/admin/queue`, `/api/admin/books/[id]/approve`, `/api/admin/books/[id]/reject`
+- Admin: `/api/admin/queue`, `/api/admin/books/[id]/approve`, `/api/admin/books/[id]/reject`, `/api/admin/settings/tts` (GET/PUT)
+- TTS: `/api/tts/options`, `/api/tts/preview`, `/api/tts/compare`, `/api/books/[id]/chapters/[cid]/audio` (POST prepare + GET segment)
 
 ---
 
@@ -255,7 +286,8 @@ API tiêu biểu:
 - Ask-this-chapter, define/explain (reader, gated theo quyền đọc)
 
 ### Trải nghiệm đọc
-- Focus mode, TTS, transition chapter tinh gọn hơn
+- ~~TTS đọc thành tiếng~~ ✅ cloud TTS (Google) + admin đổi giọng động, SSML cho hội thoại kịch bản, tự cuộn theo audio (xem §4b)
+- Còn lại: focus mode, tiếp tục audio sang chapter kế, lock-screen / background audio controls, transition chapter tinh gọn hơn
 
 ### Rich format
 - Đã giữ **bold / italic** từ DOCX trên mobile + web reader
@@ -269,7 +301,6 @@ API tiêu biểu:
 - ~~Admin moderation~~ ✅ đã xong
 
 ### Chưa làm (đã bàn trong roadmap, chưa code)
-- **Audio / TTS** — đang làm ở nhánh `feature/ios-text-to-speech` (xem §12)
 - Toggle đọc **cuộn (scroll)** vs **lật (flip)**
 - Reader cho chọn **font hỗ trợ đa ngôn ngữ** (default + 2 lựa chọn/ngôn ngữ)
 - Redesign **Library** chuyên nghiệp hơn
@@ -311,11 +342,41 @@ API tiêu biểu:
 - API nên chạy `--host 0.0.0.0` để điện thoại truy cập. Tránh chạy 2 uvicorn cùng lúc.
 - Test suite dùng `apps/api/tests/conftest.py` để pin `AUTH_DEV_MODE=true`, độc lập với `.env` thật. `27/27 pass`.
 
-**Nhánh `feature/ios-text-to-speech` (audio — việc tiếp theo):**
-- Đã có (trong nhánh này, chưa merge): hook `apps/mobile/lib/use-ios-speech.ts` + `speech-text.ts` (dùng `expo-speech`), **đã nối vào** in-app reader `apps/mobile/app/read/[bookId]/[chapterId].tsx`.
-- Đã chạy: play/pause/resume, đổi tốc độ (0.8/1/1.2), chọn giọng theo ngôn ngữ (ưu tiên Enhanced), highlight paragraph đang đọc, tự phát tiếp paragraph kế. `supported` giới hạn iOS.
-- Còn lại (gợi ý): hỗ trợ Android, tự cuộn theo paragraph đang đọc, tiếp tục sang chapter kế, lock screen / background audio controls, chọn giọng thủ công, xử lý ngôn ngữ khác ngoài vi/en trong `detectSpeechLanguage`.
-- Làm tiếp trên nhánh này rồi PR về `main` như commit vừa rồi.
+**Cloud TTS narration — đã merge `main`** (commit `ea572e0`, chi tiết §4b):
+- Google Cloud TTS phía server, cache MP3 theo segment (`apps/api/app/tts.py`, `tts_settings.py`, `routers/tts.py`).
+- Admin đổi engine/gender/persona động qua bảng `app_settings` — web `/settings` tab Narration, mobile settings + voice picker trong reader.
+- Chuẩn hoá ALL CAPS (giữ acronym thật + số La Mã), SSML cho hội thoại kịch bản (break + prosody theo sắc thái), tự cuộn theo audio, `reloadVoice()` giữ vị trí đang nghe.
+- Test: `apps/api/tests/test_tts.py`, toàn bộ suite pass (`38 passed`).
+
+**Cấu hình cần cho TTS chạy:**
+- Bật Cloud Text-to-Speech API; xác thực bằng **Application Default Credentials** cho local: `gcloud auth application-default login` rồi `gcloud auth application-default set-quota-project <project>`.
+- Env TTS (xem `apps/api/.env.example`): `GOOGLE_TTS_ENABLED`, `GOOGLE_TTS_ENGINE`, `GOOGLE_TTS_GENDER`, `GOOGLE_TTS_CHIRP_PERSONA` (tùy chọn), `GOOGLE_TTS_VOICE` (override cứng, tùy chọn), `TTS_CACHE_DIR`. Giọng active lưu ở DB sẽ override env khi admin đổi.
+
+**Hoàn thiện audio — kế hoạch (đã bàn, sẽ quay lại sau):**
+
+> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker.
+
+Còn lại, chia 4 nhóm theo thứ tự ưu tiên đề xuất **1 → 2 → 3** (4 xen kẽ):
+
+1. **Hỗ trợ Android** (dễ–trung bình, rủi ro thấp)
+   - Đang khóa cứng `supported: Platform.OS === "ios"`; audio mode chỉ set cho iOS; hook đặt tên `use-ios-*`.
+   - `expo-audio` (cloud) và `expo-speech` (fallback) vốn chạy được Android → việc chính: bỏ gate iOS, set audio mode cho Android, đổi tên hook cho trung tính, kiểm định giọng máy Android ở nhánh fallback. **Cần máy Android thật để test.**
+
+2. **Tự động sang chapter kế** (trung bình)
+   - Hiện hết segment trong chapter → về `idle`; audio bị `stop()` khi rời màn hình.
+   - Việc: khi manifest hết → load chapter kế (nếu không bị khóa) → fetch manifest mới → phát tiếp, đồng thời cập nhật route + lưu vị trí đọc. Chapter khóa (paid) thì dừng + gợi ý mua.
+
+3. **Background / lock-screen audio** (KHÓ nhất — **quyết định kiến trúc CHƯA CHỐT**)
+   - Hiện `shouldPlayInBackground: false`, và reader chủ động `stop()` khi rời màn → ngược với ý "nghe khi tắt màn".
+   - **Mức nhẹ:** bật `shouldPlayInBackground: true` + khai báo background mode (`UIBackgroundModes: ["audio"]` iOS, foreground service Android). Audio chạy nền khi khóa màn, **nhưng không có nút điều khiển trên lock-screen / Control Center**. Rẻ, vẫn dùng được Expo Go/dev build hiện tại.
+   - **Mức đầy đủ:** có điều khiển lock-screen + Now Playing (bìa, tên chương). `expo-audio` **không** cấp remote controls/now-playing → cần thư viện media session (vd `react-native-track-player`) hoặc module native → **phải dùng dev build (không chạy Expo Go), thêm dependency lớn, có thể viết lại pipeline phát** (track-player tự quản queue).
+   - → Cần chốt mức nhẹ hay đầy đủ trước khi làm nhóm này.
+
+4. **Chi tiết nhỏ (tùy chọn, xen kẽ)**
+   - Cho reader thường (không phải admin) tự chọn giọng (giờ voice picker chỉ admin).
+   - Mở rộng `detectSpeechLanguage` ngoài vi/en cho fallback giọng máy.
+   - Làm nhất quán mâu thuẫn "stop khi rời màn" vs "phát nền".
+   - Tinh chỉnh thêm `_dialogue_prosody`; mở rộng `_SPELLED_ACRONYMS` khi gặp viết tắt mới.
 
 ---
 
