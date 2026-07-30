@@ -1,42 +1,38 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { Link, useFocusEffect } from "expo-router";
-import type { BookListItem, SessionUser } from "@read/api-client";
-import { createMobileApi, getToken, setToken } from "../lib/api";
+import { Link, useFocusEffect, useRouter } from "expo-router";
+import type { BookListItem } from "@read/api-client";
+import { useAuth } from "../lib/auth";
+import { colors, formatPrice } from "../lib/theme";
 
 export default function LibraryScreen() {
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const router = useRouter();
+  const { user, api, signOut, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    setLoading(true);
     setError("");
     try {
-      const token = await getToken();
-      const api = createMobileApi(token);
-      if (token) {
-        const me = await api.me();
-        setUser(me.user);
-      } else {
-        setUser(null);
-      }
       const data = await api.listBooks();
       setBooks(data.books);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load library.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, []);
+  }, [api]);
 
   useFocusEffect(
     useCallback(() => {
@@ -44,103 +40,118 @@ export default function LibraryScreen() {
     }, [load])
   );
 
-  async function logout() {
-    await setToken(null);
-    setUser(null);
-  }
-
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator color="#3f6f5c" />
+        <ActivityIndicator color={colors.sage} />
       </View>
     );
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            void load();
+          }}
+          tintColor={colors.sage}
+        />
+      }
+    >
+      <Text style={styles.eyebrow}>In-app reading</Text>
       <Text style={styles.brand}>Read</Text>
       <Text style={styles.sub}>
-        Mobile scaffold (Expo) — same FastAPI backend as the web app.
+        A calm place for books — free titles open instantly, paid ones unlock after purchase.
       </Text>
 
       <View style={styles.authRow}>
         {user ? (
           <>
             <Text style={styles.meta}>Signed in as {user.name}</Text>
-            <Pressable onPress={logout} style={styles.secondaryBtn}>
+            <Pressable onPress={signOut} style={styles.secondaryBtn}>
               <Text style={styles.secondaryBtnText}>Sign out</Text>
             </Pressable>
           </>
         ) : (
-          <Link href="/login" asChild>
-            <Pressable style={styles.primaryBtn}>
-              <Text style={styles.primaryBtnText}>Sign in</Text>
-            </Pressable>
-          </Link>
+          <Pressable style={styles.primaryBtn} onPress={() => router.push("/login")}>
+            <Text style={styles.primaryBtnText}>Sign in</Text>
+          </Pressable>
         )}
       </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Text style={styles.section}>Library</Text>
+      <Text style={styles.section}>Library · {books.length} titles</Text>
       {books.map((book) => (
-        <View key={book.id} style={styles.card}>
-          <Text style={styles.cardTitle}>{book.title}</Text>
-          <Text style={styles.cardMeta}>
-            {book.publisher_name} · {book.price_cents <= 0 ? "Free" : `$${(book.price_cents / 100).toFixed(2)}`} ·{" "}
-            {book.chapter_count} chapters
-          </Text>
-          <Text style={styles.cardBody}>{book.description}</Text>
-        </View>
+        <Link key={book.id} href={`/books/${book.id}`} asChild>
+          <Pressable style={styles.card}>
+            <Text style={styles.cardTitle}>{book.title}</Text>
+            <Text style={styles.cardMeta}>
+              {book.publisher_name} · {formatPrice(book.price_cents)} · {book.chapter_count} chapters
+            </Text>
+            <Text style={styles.cardBody} numberOfLines={3}>
+              {book.description}
+            </Text>
+          </Pressable>
+        </Link>
       ))}
+      {books.length === 0 ? <Text style={styles.meta}>No published books yet.</Text> : null}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 12 },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  brand: { fontSize: 40, fontWeight: "700", color: "#14221c" },
-  sub: { color: "#2a3d34", marginBottom: 8 },
-  authRow: { gap: 8, marginBottom: 8 },
-  meta: { color: "#2a3d34" },
-  section: {
-    marginTop: 8,
+  container: { padding: 20, gap: 12, paddingBottom: 48 },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.mist },
+  eyebrow: {
     fontSize: 12,
-    letterSpacing: 1.5,
+    letterSpacing: 1.6,
     textTransform: "uppercase",
-    color: "#3f6f5c",
+    color: colors.sage,
+    fontWeight: "600",
+  },
+  brand: { fontSize: 44, fontWeight: "700", color: colors.ink, marginTop: 2 },
+  sub: { color: colors.inkSoft, marginBottom: 8, lineHeight: 21 },
+  authRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  meta: { color: colors.inkSoft },
+  section: {
+    marginTop: 12,
+    fontSize: 12,
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+    color: colors.inkSoft,
     fontWeight: "600",
   },
   card: {
-    backgroundColor: "rgba(255,255,255,0.7)",
+    backgroundColor: colors.card,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(20,34,28,0.08)",
+    borderColor: colors.line,
     gap: 6,
   },
-  cardTitle: { fontSize: 20, fontWeight: "600", color: "#14221c" },
-  cardMeta: { fontSize: 13, color: "#2a3d34" },
-  cardBody: { fontSize: 14, color: "#2a3d34", lineHeight: 20 },
+  cardTitle: { fontSize: 20, fontWeight: "600", color: colors.ink },
+  cardMeta: { fontSize: 13, color: colors.inkSoft },
+  cardBody: { fontSize: 14, color: colors.inkSoft, lineHeight: 20 },
   primaryBtn: {
-    backgroundColor: "#3f6f5c",
-    paddingVertical: 12,
+    backgroundColor: colors.sage,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,
-    alignSelf: "flex-start",
   },
   primaryBtnText: { color: "#fff", fontWeight: "600" },
   secondaryBtn: {
     borderWidth: 1,
-    borderColor: "rgba(20,34,28,0.15)",
-    paddingVertical: 10,
+    borderColor: colors.line,
+    paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 10,
-    alignSelf: "flex-start",
     backgroundColor: "rgba(255,255,255,0.6)",
   },
-  secondaryBtnText: { color: "#14221c" },
-  error: { color: "#9b1c1c" },
+  secondaryBtnText: { color: colors.ink },
+  error: { color: colors.danger },
 });

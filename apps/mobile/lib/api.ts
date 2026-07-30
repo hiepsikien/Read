@@ -3,13 +3,42 @@ import * as SecureStore from "expo-secure-store";
 import { createApiClient, type SessionUser } from "@read/api-client";
 
 const TOKEN_KEY = "read_token";
+const API_PORT = 8000;
+
+function hostFromExpo(): string | null {
+  const candidates = [
+    Constants.expoConfig?.hostUri,
+    Constants.expoGoConfig?.debuggerHost,
+    Constants.manifest2?.extra?.expoGo?.debuggerHost,
+    // Legacy Expo Go manifest
+    (Constants as { manifest?: { debuggerHost?: string } }).manifest?.debuggerHost,
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    const host = candidate.split(":")[0]?.trim();
+    if (host && host !== "localhost" && host !== "127.0.0.1") {
+      return host;
+    }
+  }
+  return null;
+}
 
 export function getApiBaseUrl() {
-  return (
-    process.env.EXPO_PUBLIC_API_URL ||
-    Constants.expoConfig?.extra?.apiUrl ||
-    "http://localhost:8000"
-  ).replace(/\/$/, "");
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL.replace(/\/$/, "");
+  }
+
+  const configured = Constants.expoConfig?.extra?.apiUrl as string | undefined;
+  if (configured && !/localhost|127\.0\.0\.1/.test(configured)) {
+    return configured.replace(/\/$/, "");
+  }
+
+  const lanHost = hostFromExpo();
+  if (lanHost) {
+    return `http://${lanHost}:${API_PORT}`;
+  }
+
+  return (configured || "http://localhost:8000").replace(/\/$/, "");
 }
 
 export async function getToken() {
@@ -24,10 +53,10 @@ export async function setToken(token: string | null) {
   }
 }
 
-export function createMobileApi(token?: string | null) {
+export function createMobileApi(getTokenFn?: () => string | null | undefined) {
   return createApiClient({
     baseUrl: getApiBaseUrl(),
-    getToken: () => token ?? null,
+    getToken: getTokenFn,
   });
 }
 

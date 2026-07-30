@@ -5,7 +5,7 @@
 - **Repo:** https://github.com/hiepsikien/Read  
 - **Thương hiệu:** Read  
 - **Ngôn ngữ UI (MVP):** English  
-- **Trạng thái:** MVP (web đầy đủ; mobile scaffold; API tách riêng)  
+- **Trạng thái:** MVP (web đầy đủ; mobile reader flow; API tách riêng)  
 
 ---
 
@@ -17,7 +17,7 @@ Cho phép:
 2. Tự động chia thành các **đoạn đọc (reading segments)** một cách thông minh
 3. Chọn sách **Free** hoặc **Paid**
 4. **Reader** đọc free ngay; sách trả phí phải mua (mock payment)
-5. Trải nghiệm đọc nằm **trong app Read** (web reader đầy đủ; native mobile đang scaffold → full UI phase sau)
+5. Trải nghiệm đọc nằm **trong app Read** (web + native mobile reader flow)
 
 ---
 
@@ -124,7 +124,7 @@ read/
 ├── apps/
 │   ├── web/                 # Next.js web-app (UI only)
 │   ├── api/                 # FastAPI + Alembic + pytest
-│   └── mobile/              # Expo React Native scaffold
+│   └── mobile/              # Expo React Native (reader MVP)
 ├── packages/
 │   └── api-client/          # typed fetch + DTOs
 ├── docker-compose.yml       # PostgreSQL
@@ -213,12 +213,12 @@ API tiêu biểu: `/api/auth/*`, `/api/books`, `/api/books/[id]/split`, `/publis
 
 ---
 
-## 9. Phase sau (chưa làm / đang scaffold)
+## 9. Phase sau
 
-### Native mobile đầy đủ
-- In-app reader (theme, font, TOC, progress) trên Expo
-- Book detail + purchase
-- Publisher upload / split / publish
+### Native mobile (đã có reader MVP)
+- Library → book detail → in-app reader (theme, font, TOC, prev/next)
+- Mock purchase + unlock chapter 402
+- Còn lại: publisher upload / split / publish trên mobile
 - EAS Build / store distribution
 
 ### AI (đã bàn, chưa code)

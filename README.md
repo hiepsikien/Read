@@ -10,7 +10,7 @@ Mobile-friendly book reading product with **web**, **native (Expo/React Native)*
 |-----|------|------|
 | Web | `apps/web` | Next.js — full MVP library / reader / publisher |
 | API | `apps/api` | FastAPI + PostgreSQL — auth, books, split, purchase |
-| Mobile | `apps/mobile` | Expo (iOS + Android) — scaffold: login + library |
+| Mobile | `apps/mobile` | Expo (iOS + Android) — library → detail → reader → purchase |
 
 Shared typed client: `packages/api-client`.
 
@@ -50,7 +50,7 @@ npm run dev:web
 
 Open http://localhost:3000.
 
-### 4. Mobile (scaffold)
+### 4. Mobile (reader MVP)
 
 ```bash
 cd apps/mobile
