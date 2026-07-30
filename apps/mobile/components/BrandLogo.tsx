@@ -12,7 +12,7 @@ const SOURCES = {
 } as const;
 
 const ASPECT = {
-  wordmark: 320 / 96,
+  wordmark: 823 / 354,
   mark: 1,
 } as const;
 

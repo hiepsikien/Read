@@ -9,15 +9,19 @@ type BrandLogoProps = {
   alt?: string;
 };
 
+/**
+ * Aspect based on the restored original raster wordmark (~823×354)
+ * and square mark (1024×1024).
+ */
 const ASPECT = {
-  wordmark: 320 / 96,
+  wordmark: 823 / 354,
   mark: 1,
 } as const;
 
 /**
- * Brand asset helper.
+ * Brand asset helper — uses the original designed PNG (not the Georgia SVG stand-in).
  * - wordmark: full "Read" + book (use alone — do not also render text "Read")
- * - mark: book-only icon for compact chrome / locked states
+ * - mark: book-only icon for compact chrome / app icons
  */
 export function BrandLogo({
   variant = "wordmark",
@@ -28,10 +32,9 @@ export function BrandLogo({
 }: BrandLogoProps) {
   const width = Math.round(height * ASPECT[variant]);
   const src =
-    variant === "wordmark" ? "/brand/read-wordmark.svg" : "/brand/read-mark.svg";
+    variant === "wordmark" ? "/brand/read-wordmark.png" : "/brand/read-mark.png";
 
   return (
-    // SVG brand marks — <img> keeps vectors crisp without next/image SVG config.
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src}

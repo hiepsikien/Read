@@ -320,19 +320,19 @@ API tiêu biểu:
 
 | Asset | Path | Dùng cho |
 |-------|------|----------|
-| Mark (SVG, transparent) | `apps/web/public/brand/read-mark.svg` | Compact UI / export vector |
-| Mark PNG | `apps/web/public/brand/read-mark.png` | Docs / raster export |
-| Wordmark (SVG) | `apps/web/public/brand/read-wordmark.svg` | Header, hero, reader chrome (web) |
-| Wordmark PNG | `apps/web/public/brand/read-wordmark.png` | Docs / places needing raster |
-| App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon / Apple touch (Next) |
+| **Original showcase** | `apps/web/public/brand/read-wordmark-hero.png` / `docs/assets/read-wordmark-original.png` | Bản gốc đẹp (có nền mist) — nguồn sự thật |
+| Wordmark PNG (transparent) | `apps/web/public/brand/read-wordmark.png` | Header, hero, reader — **dùng cái này trên UI** |
+| Mark PNG (transparent) | `apps/web/public/brand/read-mark.png` | Icon-only UI |
+| App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon / Apple touch |
 | Mobile icon/splash | `apps/mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png` | Expo `app.json` |
-| Mobile UI marks | `apps/mobile/assets/mark.png`, `wordmark.png` | Library / login / reader |
+| Mobile UI | `apps/mobile/assets/mark.png`, `wordmark.png` | Library / login / reader |
+
+> SVG `read-*.svg` chỉ còn dự phòng; UI ưu tiên PNG từ bản logo gốc (serif swash R), không dùng bản Georgia generate lại.
 
 **Quy ước UI**
 - **Wordmark** = chữ + sách → dùng **một mình**, không kèm text “Read”
 - **Mark** = chỉ icon sách → compact chrome, login accent, app icon
 - Component: `BrandLogo` (`apps/web/...`, `apps/mobile/components/BrandLogo.tsx`)
-- Không giữ alias `read-logo.*` — dùng `read-wordmark.*` / `read-mark.*` trực tiếp
 
 ---
 

@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="Read">
-  <title>Read</title>
-  <!-- Open-book mark only, transparent background -->
-  <g stroke="#3f6f5c" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M64 28c18 14 30 30 30 52-16-8-30-11-30-11s-14 3-30 11c0-22 12-38 30-52z"/>
-    <path d="M64 40v40"/>
-  </g>
-</svg>
