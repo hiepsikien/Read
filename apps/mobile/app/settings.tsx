@@ -246,7 +246,14 @@ function LegalSection({
 }
 
 function ReadingSection() {
-  const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
+  const {
+    fontSize,
+    theme,
+    readingMode,
+    changeFontSize,
+    cycleTheme,
+    cycleReadingMode,
+  } = useReaderPreferences();
 
   return (
     <View style={styles.card}>
@@ -278,6 +285,15 @@ function ReadingSection() {
         <Text style={styles.kvKey}>Theme</Text>
         <Pressable style={styles.chip} onPress={cycleTheme}>
           <Text style={styles.chipText}>{readerThemes[theme].label}</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.inlineRow}>
+        <Text style={styles.kvKey}>Layout</Text>
+        <Pressable style={styles.chip} onPress={cycleReadingMode}>
+          <Text style={styles.chipText}>
+            {readingMode === "pages" ? "Pages" : "Scroll"}
+          </Text>
         </Pressable>
       </View>
     </View>

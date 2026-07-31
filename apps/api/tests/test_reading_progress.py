@@ -296,3 +296,161 @@ def test_progress_falls_back_to_chapter_position_after_delete(client, seeded, db
     assert progress is not None
     assert progress["chapter_id"] == replacement.id
     assert progress["paragraph_index"] == 1
+
+
+def test_complete_and_list_reading_shelf(client, seeded, db_session):
+    reader = seeded["reader"]
+    book = seeded["free_book"]
+    first = seeded["free_chapters"][0]
+    last = seeded["free_chapters"][-1]
+    headers = auth_header(reader)
+
+    mid = client.put(
+        f"/api/books/{book.id}/progress",
+        headers=headers,
+        json={"chapter_id": first.id, "paragraph_index": 0, "scroll_fraction": 0.2},
+    )
+    assert mid.status_code == 200
+    assert mid.json()["progress"].get("completed_at") is None
+
+    shelf = client.get("/api/reading", headers=headers)
+    assert shelf.status_code == 200
+    items = shelf.json()["items"]
+    assert len(items) == 1
+    assert items[0]["book"]["id"] == book.id
+    assert items[0]["progress"]["chapter_id"] == first.id
+    assert items[0]["progress"]["chapter_title"]
+    assert items[0]["progress"]["chapter_count"] >= 1
+
+    bad = client.put(
+        f"/api/books/{book.id}/progress",
+        headers=headers,
+        json={
+            "chapter_id": first.id,
+            "paragraph_index": 0,
+            "scroll_fraction": 1,
+            "completed": True,
+        },
+    )
+    assert bad.status_code == 400
+
+    done = client.put(
+        f"/api/books/{book.id}/progress",
+        headers=headers,
+        json={
+            "chapter_id": last.id,
+            "paragraph_index": 0,
+            "scroll_fraction": 1,
+            "completed": True,
+        },
+    )
+    assert done.status_code == 200
+    assert done.json()["progress"]["completed_at"] is not None
+
+    empty = client.get("/api/reading", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["items"] == []
+
+    restart = client.put(
+        f"/api/books/{book.id}/progress",
+        headers=headers,
+        json={
+            "chapter_id": first.id,
+            "paragraph_index": 0,
+            "scroll_fraction": 0,
+            "completed": False,
+        },
+    )
+    assert restart.status_code == 200
+    assert restart.json()["progress"]["completed_at"] is None
+
+    again = client.get("/api/reading", headers=headers)
+    assert again.status_code == 200
+    assert len(again.json()["items"]) == 1
+
+
+def test_list_reading_requires_auth(client):
+    assert client.get("/api/reading").status_code == 401
+
+
+def test_list_reading_skips_removed_even_for_publisher(client, db_session, seeded):
+    publisher = seeded["publisher"]
+    now = datetime.now(timezone.utc)
+    category_id = seeded["free_book"].category_id
+    listed = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=category_id,
+        title="S1E2 Listed",
+        description="",
+        price_cents=0,
+        status="published",
+        visibility="listed",
+        created_at=now,
+        updated_at=now,
+    )
+    # Same title pattern as a re-upload that was taken down.
+    removed = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=category_id,
+        title="S1E2 Removed",
+        description="",
+        price_cents=0,
+        status="published",
+        visibility="removed",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([listed, removed])
+    db_session.flush()
+    listed_ch = Chapter(
+        id=generate(),
+        book_id=listed.id,
+        position=1,
+        title="Ch 1",
+        content="Hello.",
+        word_count=1,
+        group_index=1,
+    )
+    removed_ch = Chapter(
+        id=generate(),
+        book_id=removed.id,
+        position=1,
+        title="Ch 1",
+        content="Hello.",
+        word_count=1,
+        group_index=1,
+    )
+    db_session.add_all([listed_ch, removed_ch])
+    db_session.add_all(
+        [
+            ReadingProgress(
+                id=generate(),
+                user_id=publisher.id,
+                book_id=listed.id,
+                chapter_id=listed_ch.id,
+                chapter_position=1,
+                paragraph_index=0,
+                scroll_fraction=0.2,
+                updated_at=now,
+            ),
+            ReadingProgress(
+                id=generate(),
+                user_id=publisher.id,
+                book_id=removed.id,
+                chapter_id=removed_ch.id,
+                chapter_position=1,
+                paragraph_index=0,
+                scroll_fraction=0.5,
+                updated_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    shelf = client.get("/api/reading", headers=auth_header(publisher))
+    assert shelf.status_code == 200
+    ids = [item["book"]["id"] for item in shelf.json()["items"]]
+    assert listed.id in ids
+    assert removed.id not in ids

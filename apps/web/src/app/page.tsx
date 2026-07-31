@@ -1,11 +1,26 @@
+import Link from "next/link";
+import type { ReadingShelfItem } from "@read/api-client";
 import { BookCard } from "@/components/BookCard";
 import { createServerApi } from "@/lib/api-server";
+import { formatProgressLabel } from "@/lib/reading-progress";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const api = await createServerApi();
   const { books } = await api.listBooks();
+  let continueItems: ReadingShelfItem[] = [];
+  try {
+    const reading = await api.listReading();
+    const seen = new Set<string>();
+    continueItems = reading.items.filter((item) => {
+      if (seen.has(item.book.id)) return false;
+      seen.add(item.book.id);
+      return true;
+    });
+  } catch {
+    continueItems = [];
+  }
 
   return (
     <div className="relative">
@@ -25,6 +40,45 @@ export default async function HomePage() {
           Everything stays inside the app.
         </p>
       </section>
+
+      {continueItems.length > 0 ? (
+        <section className="surface fade-up mb-8 rounded-2xl px-5 py-2 sm:px-8">
+          <div className="border-b border-[var(--line)] py-5">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
+              Continue reading
+            </h2>
+          </div>
+          <ul className="divide-y divide-[var(--line)]">
+            {continueItems.map((item) => (
+              <li key={item.book.id} className="flex items-center justify-between gap-4 py-5">
+                <div className="min-w-0">
+                  <Link
+                    href={`/read/${item.book.id}/${item.progress.chapter_id}`}
+                    className="brand-mark text-xl font-semibold text-[var(--ink)] hover:underline"
+                  >
+                    {item.book.title}
+                  </Link>
+                  <p className="mt-1 text-xs font-medium text-[var(--sage-deep)]">
+                    {formatProgressLabel(
+                      item.progress.chapter_position,
+                      item.progress.chapter_count,
+                      item.progress.scroll_fraction
+                    )}
+                    {" · "}
+                    {item.progress.chapter_title}
+                  </p>
+                </div>
+                <Link
+                  href={`/read/${item.book.id}/${item.progress.chapter_id}`}
+                  className="shrink-0 text-sm text-[var(--sage)]"
+                >
+                  Resume →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="surface fade-up rounded-2xl px-5 py-2 sm:px-8">
         <div className="flex items-baseline justify-between gap-3 border-b border-[var(--line)] py-5">

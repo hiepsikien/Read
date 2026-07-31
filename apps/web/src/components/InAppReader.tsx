@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, parseContentBlocks, parseInlineMarkdown, type ReadingProgress } from "@read/api-client";
+import { ApiError, parseContentBlocks, parseInlineMarkdown, type BookListItem, type ReadingProgress } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getStoredToken } from "@/lib/api";
 import { estimateMinutes, formatPrice } from "@/lib/format";
 import {
   nearestParagraphIndex,
+  pickNewerProgress,
   readLocalProgress,
   writeLocalProgress,
 } from "@/lib/reading-progress";
@@ -87,6 +88,11 @@ export function InAppReader({
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [progress, setProgress] = useState(0);
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
+  const [finishedOpen, setFinishedOpen] = useState(false);
+  const [finishedRecs, setFinishedRecs] = useState<{
+    same_author: BookListItem[];
+    related: BookListItem[];
+  }>({ same_author: [], related: [] });
   const restoredKeyRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestScrollRef = useRef({ fraction: 0, paragraphIndex: 0 });
@@ -116,15 +122,30 @@ export function InAppReader({
         const serverProgress =
           payload.progress?.chapter_id === chapterId ? payload.progress : null;
         const local = readLocalProgress(bookId);
-        const localProgress =
+        const picked =
           local?.chapterId === chapterId
+            ? pickNewerProgress(serverProgress, local)
+            : serverProgress
+              ? {
+                  chapterId: serverProgress.chapter_id,
+                  paragraphIndex: serverProgress.paragraph_index,
+                  scrollFraction: serverProgress.scroll_fraction,
+                  updatedAt: serverProgress.updated_at,
+                  completedAt: serverProgress.completed_at,
+                  source: "server" as const,
+                }
+              : null;
+        setResumeProgress(
+          picked
             ? {
-                chapter_id: local.chapterId,
-                paragraph_index: local.paragraphIndex,
-                scroll_fraction: local.scrollFraction,
+                chapter_id: picked.chapterId,
+                paragraph_index: picked.paragraphIndex,
+                scroll_fraction: picked.scrollFraction,
+                updated_at: picked.updatedAt,
+                completed_at: picked.completedAt,
               }
-            : null;
-        setResumeProgress(serverProgress ?? localProgress);
+            : null
+        );
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
@@ -292,6 +313,58 @@ export function InAppReader({
       next: index >= 0 && index < data.chapters.length - 1 ? data.chapters[index + 1] : null,
     };
   }, [data]);
+
+  async function markFinished() {
+    const latest = latestScrollRef.current;
+    writeLocalProgress(bookId, {
+      chapterId,
+      paragraphIndex: latest.paragraphIndex,
+      scrollFraction: 1,
+      completedAt: new Date().toISOString(),
+    });
+    if (getStoredToken() || user) {
+      try {
+        await createBrowserApi().saveReadingProgress(bookId, {
+          chapter_id: chapterId,
+          paragraph_index: latest.paragraphIndex,
+          scroll_fraction: 1,
+          completed: true,
+        });
+      } catch {
+        // Local flag still set.
+      }
+    }
+    const recs = await createBrowserApi()
+      .getBookRecommendations(bookId)
+      .catch(() => ({ same_author: [] as BookListItem[], related: [] as BookListItem[] }));
+    setFinishedRecs(recs);
+    setFinishedOpen(true);
+  }
+
+  async function readAgain() {
+    const first = data?.chapters[0];
+    if (!first) return;
+    writeLocalProgress(bookId, {
+      chapterId: first.id,
+      paragraphIndex: 0,
+      scrollFraction: 0,
+      completedAt: null,
+    });
+    if (getStoredToken() || user) {
+      try {
+        await createBrowserApi().saveReadingProgress(bookId, {
+          chapter_id: first.id,
+          paragraph_index: 0,
+          scroll_fraction: 0,
+          completed: false,
+        });
+      } catch {
+        // Ignore.
+      }
+    }
+    setFinishedOpen(false);
+    router.replace(`/read/${bookId}/${first.id}`);
+  }
 
   const palette = THEMES[theme];
   const brandTone = theme === "ink" ? "white" : "color";
@@ -500,12 +573,83 @@ export function InAppReader({
               </Link>
             )
           ) : (
-            <Link href={`/books/${bookId}`} className="text-sm underline underline-offset-4">
+            <button
+              type="button"
+              onClick={() => void markFinished()}
+              className="text-sm underline underline-offset-4"
+            >
               Done
-            </Link>
+            </button>
           )}
         </nav>
       </article>
+
+      {finishedOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 sm:items-center">
+          <div
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl p-6 sm:rounded-2xl"
+            style={{ background: palette.bg, color: palette.fg }}
+          >
+            <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
+              Finished
+            </p>
+            <h2 className="brand-mark mt-2 text-3xl font-semibold">
+              You finished {data.book.title}
+            </h2>
+            <p className="mt-3 text-sm" style={{ color: palette.muted }}>
+              Nice work. Pick another title, or start this one again.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link
+                href={`/books/${bookId}`}
+                className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white"
+              >
+                Back to book
+              </Link>
+              <button
+                type="button"
+                onClick={() => void readAgain()}
+                className="rounded-lg border px-4 py-2.5 text-sm font-medium"
+                style={{ borderColor: "color-mix(in srgb, currentColor 18%, transparent)" }}
+              >
+                Read again
+              </button>
+            </div>
+            {finishedRecs.same_author.length > 0 ? (
+              <div className="mt-8">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: palette.muted }}>
+                  More by this author
+                </p>
+                <ul className="mt-3 space-y-2">
+                  {finishedRecs.same_author.slice(0, 4).map((book) => (
+                    <li key={book.id}>
+                      <Link href={`/books/${book.id}`} className="underline underline-offset-4">
+                        {book.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {finishedRecs.related.length > 0 ? (
+              <div className="mt-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: palette.muted }}>
+                  Related
+                </p>
+                <ul className="mt-3 space-y-2">
+                  {finishedRecs.related.slice(0, 4).map((book) => (
+                    <li key={book.id}>
+                      <Link href={`/books/${book.id}`} className="underline underline-offset-4">
+                        {book.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {tocOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 sm:items-center">

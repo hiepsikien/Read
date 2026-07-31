@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Modal,
   Pressable,
@@ -29,12 +30,15 @@ import {
 import { AuthenticatedImage } from "../../../components/AuthenticatedImage";
 import { BrandLogo } from "../../../components/BrandLogo";
 import { ExplainSheet } from "../../../components/ExplainSheet";
+import { FinishedBookOverlay } from "../../../components/FinishedBookOverlay";
+import { ReaderPagesView } from "../../../components/ReaderPagesView";
 import { useAuth } from "../../../lib/auth";
 import {
   FONT_SIZE_STEP,
   useReaderPreferences,
 } from "../../../lib/reader-preferences";
 import {
+  pickNewerProgress,
   readLocalProgress,
   writeLocalProgress,
 } from "../../../lib/reading-progress";
@@ -70,7 +74,24 @@ export default function ReaderScreen() {
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainMode, setExplainMode] = useState<"ask" | "result">("ask");
   const [explainParagraph, setExplainParagraph] = useState<number | null>(null);
-  const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
+  const { fontSize, theme, readingMode, changeFontSize, cycleTheme, cycleReadingMode } =
+    useReaderPreferences();
+
+  const toggleReadingMode = useCallback(() => {
+    const { paragraphIndex, scrollFraction } = latestProgressRef.current;
+    setModeAnchorParagraph(paragraphIndex);
+    if (chapterId) {
+      const snapshot: ReadingProgress = {
+        chapter_id: chapterId,
+        paragraph_index: paragraphIndex,
+        scroll_fraction: scrollFraction,
+      };
+      resumeProgressRef.current = snapshot;
+      setResumeProgress(snapshot);
+    }
+    restoredKeyRef.current = null;
+    cycleReadingMode();
+  }, [chapterId, cycleReadingMode]);
 
   const scrollRef = useRef<ScrollView>(null);
   const tocListRef = useRef<FlatList<ChapterListItem>>(null);
@@ -86,6 +107,8 @@ export default function ReaderScreen() {
   const latestProgressRef = useRef({ paragraphIndex: 0, scrollFraction: 0 });
   const resumeProgressRef = useRef<ReadingProgress | null>(null);
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
+  const [finishedOpen, setFinishedOpen] = useState(false);
+  const [modeAnchorParagraph, setModeAnchorParagraph] = useState(0);
 
   const persistProgress = useCallback(
     async (paragraphIndex: number, scrollFraction: number) => {
@@ -124,24 +147,39 @@ export default function ReaderScreen() {
       const server =
         payload.progress?.chapter_id === chapterId ? payload.progress : null;
       const local = await readLocalProgress(bookId);
-      const localProgress =
+      const picked =
         local?.chapterId === chapterId
-          ? {
-              chapter_id: local.chapterId,
-              paragraph_index: local.paragraphIndex,
-              scroll_fraction: local.scrollFraction,
-            }
-          : null;
-      const resolved = server ?? localProgress;
+          ? pickNewerProgress(server, local)
+          : server
+            ? {
+                chapterId: server.chapter_id,
+                paragraphIndex: server.paragraph_index,
+                scrollFraction: server.scroll_fraction,
+                updatedAt: server.updated_at,
+                completedAt: server.completed_at,
+                source: "server" as const,
+              }
+            : null;
+      const resolved = picked
+        ? {
+            chapter_id: picked.chapterId,
+            paragraph_index: picked.paragraphIndex,
+            scroll_fraction: picked.scrollFraction,
+            updated_at: picked.updatedAt,
+            completed_at: picked.completedAt,
+          }
+        : null;
       setResumeProgress(resolved);
       resumeProgressRef.current = resolved;
       const paragraphIndex = resolved?.paragraph_index ?? 0;
       const scrollFraction = resolved?.scroll_fraction ?? 0;
       latestProgressRef.current = { paragraphIndex, scrollFraction };
+      setModeAnchorParagraph(paragraphIndex);
       await writeLocalProgress(bookId, {
         chapterId,
         paragraphIndex,
         scrollFraction,
+        completedAt: resolved?.completed_at ?? null,
       });
       if (user) {
         void api
@@ -199,6 +237,55 @@ export default function ReaderScreen() {
     if (router.canGoBack()) router.back();
     else router.replace(`/books/${bookId}`);
   }, [router, bookId]);
+
+  const markFinished = useCallback(async () => {
+    if (!bookId || !chapterId) return;
+    const latest = latestProgressRef.current;
+    await writeLocalProgress(bookId, {
+      chapterId,
+      paragraphIndex: latest.paragraphIndex,
+      scrollFraction: 1,
+      completedAt: new Date().toISOString(),
+    });
+    if (user) {
+      try {
+        await api.saveReadingProgress(bookId, {
+          chapter_id: chapterId,
+          paragraph_index: latest.paragraphIndex,
+          scroll_fraction: 1,
+          completed: true,
+        });
+      } catch {
+        // Local completed flag still set.
+      }
+    }
+    setFinishedOpen(true);
+  }, [api, bookId, chapterId, user]);
+
+  const readAgain = useCallback(async () => {
+    if (!bookId || !data?.chapters[0]) return;
+    const first = data.chapters[0];
+    await writeLocalProgress(bookId, {
+      chapterId: first.id,
+      paragraphIndex: 0,
+      scrollFraction: 0,
+      completedAt: null,
+    });
+    if (user) {
+      try {
+        await api.saveReadingProgress(bookId, {
+          chapter_id: first.id,
+          paragraph_index: 0,
+          scroll_fraction: 0,
+          completed: false,
+        });
+      } catch {
+        // Ignore; local cleared.
+      }
+    }
+    setFinishedOpen(false);
+    router.replace(`/read/${bookId}/${first.id}`);
+  }, [api, bookId, data?.chapters, router, user]);
 
   const neighbors = useMemo(() => {
     if (!data) return { prev: null as ChapterListItem | null, next: null as ChapterListItem | null };
@@ -312,10 +399,16 @@ export default function ReaderScreen() {
   }, [bookId, chapterId, data]);
 
   useEffect(() => {
+    if (readingMode === "pages") return;
     if (speech.playbackState !== "speaking") return;
     if (speech.currentParagraph === null) return;
     scrollSpokenParagraphIntoView(speech.currentParagraph);
-  }, [speech.currentParagraph, speech.playbackState, scrollSpokenParagraphIntoView]);
+  }, [
+    readingMode,
+    speech.currentParagraph,
+    speech.playbackState,
+    scrollSpokenParagraphIntoView,
+  ]);
 
   const onReaderScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -349,11 +442,11 @@ export default function ReaderScreen() {
   );
 
   useEffect(() => {
-    if (!data || loading) return;
+    if (!data || loading || readingMode !== "scroll") return;
     // Give paragraph refs a tick to attach before measuring.
     const timer = setTimeout(() => restoreReadingPosition(), 50);
     return () => clearTimeout(timer);
-  }, [data, loading, resumeProgress, restoreReadingPosition]);
+  }, [data, loading, resumeProgress, readingMode, restoreReadingPosition]);
 
   const palette = readerThemes[theme];
   const activeChapterIndex = data
@@ -419,6 +512,11 @@ export default function ReaderScreen() {
           <Pressable style={chip(palette.fg)} onPress={cycleTheme}>
             <Text style={{ color: palette.fg }}>{palette.label}</Text>
           </Pressable>
+          <Pressable style={chip(palette.fg)} onPress={toggleReadingMode}>
+            <Text style={{ color: palette.fg, fontWeight: "600" }}>
+              {readingMode === "pages" ? "Pages" : "Scroll"}
+            </Text>
+          </Pressable>
           <Pressable style={chip(palette.fg)} onPress={() => setTocOpen(true)}>
             <Text style={{ color: palette.fg, fontWeight: "600" }}>Contents</Text>
           </Pressable>
@@ -468,7 +566,9 @@ export default function ReaderScreen() {
               style={chip(palette.fg)}
               onPress={() => {
                 followNarrationRef.current = true;
-                void speech.togglePlayback();
+                void speech.togglePlayback({
+                  fromParagraphIndex: latestProgressRef.current.paragraphIndex,
+                });
               }}
             >
               <Text style={{ color: palette.fg, fontWeight: "600" }}>
@@ -516,6 +616,122 @@ export default function ReaderScreen() {
         </View>
       ) : null}
 
+      {readingMode === "pages" ? (
+        <View style={{ flex: 1 }}>
+          <ReaderPagesView
+            key={`pages-${chapterId}-${modeAnchorParagraph}-${fontSize}-${theme}`}
+            blockCount={blocks.length}
+            pageWidth={Dimensions.get("window").width}
+            pageHeight={Math.max(320, Dimensions.get("window").height - 200)}
+            mutedColor={palette.muted}
+            firstPageHeader={
+              <View style={{ gap: 6, marginBottom: 8 }}>
+                <Text style={[styles.readerEyebrow, { color: palette.muted }]}>
+                  {data.book.title}
+                </Text>
+                <Text style={[styles.readerTitle, { color: palette.fg }]}>
+                  {data.chapter.title}
+                </Text>
+                <Text style={[styles.readerMeta, { color: palette.muted }]}>
+                  {estimateMinutes(data.chapter.word_count)} min · Chapter{" "}
+                  {data.chapter.position} of {data.chapters.length}
+                </Text>
+              </View>
+            }
+            followParagraphIndex={
+              speech.playbackState === "speaking" || speech.playbackState === "paused"
+                ? speech.currentParagraph
+                : null
+            }
+            followEnabled={
+              speech.playbackState === "speaking" || speech.playbackState === "paused"
+            }
+            initialParagraphIndex={modeAnchorParagraph}
+            onPageChange={(pageIndex, page, pageCount) => {
+              const paragraphIndex = page.startIndex;
+              const scrollFraction =
+                pageCount > 1 ? pageIndex / (pageCount - 1) : pageCount === 1 ? 1 : 0;
+              latestProgressRef.current = { paragraphIndex, scrollFraction };
+              if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+              saveTimerRef.current = setTimeout(() => {
+                void persistProgress(paragraphIndex, scrollFraction);
+              }, 1500);
+            }}
+            renderBlock={(index) => {
+              const block = blocks[index];
+              if (!block) return null;
+              return (
+                <View
+                  key={index}
+                  ref={(node) => {
+                    paragraphRefs.current[index] = node;
+                  }}
+                  collapsable={false}
+                  style={[
+                    styles.paragraph,
+                    speech.currentParagraph === index && {
+                      backgroundColor: withAlpha(palette.fg, 0.08),
+                    },
+                  ]}
+                >
+                  {block.type === "figure" ? (
+                    <View style={styles.figure}>
+                      {api.mediaUrl(block.src) ? (
+                        <AuthenticatedImage
+                          url={api.mediaUrl(block.src)!}
+                          style={styles.figureImage}
+                          fillWidth
+                          accessibilityLabel={block.caption || "Illustration"}
+                        />
+                      ) : null}
+                      {block.caption ? (
+                        <Text
+                          style={[
+                            styles.figureCaption,
+                            { color: palette.muted, fontSize: Math.max(13, fontSize * 0.85) },
+                          ]}
+                        >
+                          {block.caption}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : (
+                    <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
+                      <InlineMarkdown value={block.value} />
+                    </Text>
+                  )}
+                </View>
+              );
+            }}
+          />
+          <View style={[styles.nav, styles.pagesNav, { borderTopColor: withAlpha(palette.fg, 0.12) }]}>
+            {neighbors.prev && !neighbors.prev.locked ? (
+              <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.prev!.id}`)}>
+                <Text style={[styles.navText, { color: palette.fg }]}>← Previous</Text>
+              </Pressable>
+            ) : (
+              <View />
+            )}
+            {neighbors.next ? (
+              neighbors.next.locked ? (
+                <Pressable onPress={buy}>
+                  <Text style={[styles.navText, { color: palette.fg, fontWeight: "600" }]}>
+                    Unlock next →
+                  </Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.next!.id}`)}>
+                  <Text style={[styles.navText, { color: palette.fg }]}>Next →</Text>
+                </Pressable>
+              )
+            ) : (
+              <Pressable onPress={() => void markFinished()}>
+                <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      ) : (
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={styles.readerBody}
@@ -620,13 +836,30 @@ export default function ReaderScreen() {
                 </Pressable>
               )
             ) : (
-              <Pressable onPress={leaveReader}>
+              <Pressable onPress={() => void markFinished()}>
                 <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
               </Pressable>
             )}
           </View>
         </View>
       </ScrollView>
+      )}
+
+      <FinishedBookOverlay
+        visible={finishedOpen}
+        bookId={bookId!}
+        bookTitle={data.book.title}
+        firstChapterId={data.chapters[0]?.id ?? null}
+        onClose={() => {
+          setFinishedOpen(false);
+          leaveReader();
+        }}
+        onReadAgain={() => void readAgain()}
+        onOpenBook={(id) => {
+          setFinishedOpen(false);
+          router.replace(`/books/${id}`);
+        }}
+      />
 
       <ExplainSheet
         visible={explainOpen}
@@ -797,6 +1030,11 @@ const styles = StyleSheet.create({
     marginTop: 40,
     paddingTop: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  pagesNav: {
+    marginTop: 0,
+    marginHorizontal: 20,
+    marginBottom: 8,
   },
   navText: { fontSize: 15 },
   lockedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 10 },

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { BookListItem } from "@read/api-client";
 import { BookCard } from "@/components/BookCard";
+import { BookChapterList } from "@/components/BookChapterList";
 import { ContinueReadingButton } from "@/components/ContinueReadingButton";
 import { PurchaseButton } from "@/components/PurchaseButton";
 import { createServerApi } from "@/lib/api-server";
@@ -105,6 +106,7 @@ export default async function BookDetailPage({ params }: Props) {
             firstChapterId={firstChapter.id}
             serverProgress={access.progress}
             owned={owned}
+            chapters={chapters}
           />
         )}
         {!owned && book.price_cents > 0 && (
@@ -131,31 +133,13 @@ export default async function BookDetailPage({ params }: Props) {
         <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
           Chapters
         </h2>
-        <ol className="mt-4 divide-y divide-[var(--line)]">
-          {chapters.map((chapter) => {
-            const locked = !owned && book.price_cents > 0 && chapter.group_index > 1;
-            return (
-              <li key={chapter.id} className="flex items-center justify-between gap-4 py-3">
-                {locked ? (
-                  <div className="min-w-0">
-                    <p className="truncate text-[var(--ink)]">{chapter.title}</p>
-                    <p className="text-xs text-[var(--ink-soft)]">Locked · purchase to read</p>
-                  </div>
-                ) : (
-                  <Link
-                    href={`/read/${book.id}/${chapter.id}`}
-                    className="min-w-0 truncate text-[var(--ink)] underline decoration-transparent underline-offset-4 transition hover:decoration-[var(--sage)]"
-                  >
-                    {chapter.title}
-                  </Link>
-                )}
-                <span className="shrink-0 text-xs text-[var(--ink-soft)]">
-                  {estimateMinutes(chapter.word_count)} min
-                </span>
-              </li>
-            );
-          })}
-        </ol>
+        <BookChapterList
+          bookId={book.id}
+          chapters={chapters}
+          owned={owned}
+          priceCents={book.price_cents}
+          serverProgress={access.progress}
+        />
       </section>
 
       <RecommendationSection title="More by this author" books={recommendations.same_author} />

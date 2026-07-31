@@ -158,6 +158,7 @@ class ReadingProgress(Base):
     chapter_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     paragraph_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scroll_fraction: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     user: Mapped[User] = relationship(back_populates="reading_progress")

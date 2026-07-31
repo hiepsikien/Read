@@ -93,6 +93,7 @@ class SaveProgressBody(BaseModel):
     chapter_id: str
     paragraph_index: int = 0
     scroll_fraction: float = 0.0
+    completed: bool | None = None
 
 
 def _is_publicly_visible(book: Book) -> bool:
@@ -273,6 +274,7 @@ def _progress_payload(
         "paragraph_index": max(0, int(row.paragraph_index or 0)),
         "scroll_fraction": max(0.0, min(1.0, float(row.scroll_fraction or 0.0))),
         "updated_at": row.updated_at.isoformat(),
+        "completed_at": row.completed_at.isoformat() if row.completed_at else None,
     }
 
 
@@ -1160,6 +1162,14 @@ def save_reading_progress(
     scroll_fraction = max(0.0, min(1.0, float(body.scroll_fraction)))
     now = datetime.now(timezone.utc)
 
+    chapters = sorted(book.chapters, key=lambda c: c.position)
+    is_last_chapter = bool(chapters) and chapters[-1].id == chapter.id
+    if body.completed is True and not is_last_chapter:
+        raise HTTPException(
+            status_code=400,
+            detail="Only the last chapter can mark a book completed.",
+        )
+
     row = (
         db.query(ReadingProgress)
         .filter(ReadingProgress.user_id == user.id, ReadingProgress.book_id == book.id)
@@ -1171,6 +1181,10 @@ def save_reading_progress(
         row.paragraph_index = paragraph_index
         row.scroll_fraction = scroll_fraction
         row.updated_at = now
+        if body.completed is True:
+            row.completed_at = now
+        elif body.completed is False:
+            row.completed_at = None
     else:
         row = ReadingProgress(
             id=generate(),
@@ -1180,6 +1194,7 @@ def save_reading_progress(
             chapter_position=chapter.position,
             paragraph_index=paragraph_index,
             scroll_fraction=scroll_fraction,
+            completed_at=now if body.completed is True else None,
             updated_at=now,
         )
         db.add(row)
@@ -1192,6 +1207,7 @@ def save_reading_progress(
             "paragraph_index": row.paragraph_index,
             "scroll_fraction": row.scroll_fraction,
             "updated_at": row.updated_at.isoformat(),
+            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
         },
     }
 

@@ -9,20 +9,23 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import type { BookListItem, Category } from "@read/api-client";
+import type { BookListItem, Category, ReadingShelfItem } from "@read/api-client";
 import { BookTile } from "../components/BookTile";
 import { CategoryChips } from "../components/CategoryChips";
 import { SearchField } from "../components/SearchField";
 import { useAuth } from "../lib/auth";
+import { formatProgressLabel } from "../lib/reading-progress";
 import { colors, radii, space } from "../lib/theme";
 
 const H_PAD = 20;
 const GAP = 14;
+const CONTINUE_TILE = Math.min(120, Math.round(Dimensions.get("window").width * 0.32));
 
 export default function LibraryScreen() {
   const router = useRouter();
-  const { api, loading: authLoading } = useAuth();
+  const { api, user, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
+  const [continueItems, setContinueItems] = useState<ReadingShelfItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -33,19 +36,28 @@ export default function LibraryScreen() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [bookPayload, categoryPayload] = await Promise.all([
+      const [bookPayload, categoryPayload, readingPayload] = await Promise.all([
         api.listBooks(),
         api.listCategories(),
+        user
+          ? api.listReading().catch(() => ({ items: [] as ReadingShelfItem[] }))
+          : Promise.resolve({ items: [] as ReadingShelfItem[] }),
       ]);
       setBooks(bookPayload.books);
       setCategories(categoryPayload.categories);
+      setContinueItems(
+        readingPayload.items.filter(
+          (item, index, all) =>
+            all.findIndex((other) => other.book.id === item.book.id) === index
+        )
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load library.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [api]);
+  }, [api, user]);
 
   useFocusEffect(
     useCallback(() => {
@@ -112,6 +124,36 @@ export default function LibraryScreen() {
           Browse published titles. Free books open instantly; paid books unlock after purchase.
         </Text>
       </View>
+
+      {continueItems.length > 0 ? (
+        <View style={styles.continueBlock}>
+          <Text style={styles.section}>Continue reading</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.continueRow}
+          >
+            {continueItems.map((item) => (
+              <View key={item.book.id} style={{ width: CONTINUE_TILE, gap: 6 }}>
+                <BookTile
+                  book={item.book}
+                  width={CONTINUE_TILE}
+                  onPress={() =>
+                    router.push(`/read/${item.book.id}/${item.progress.chapter_id}`)
+                  }
+                />
+                <Text style={styles.continueMeta} numberOfLines={1}>
+                  {formatProgressLabel(
+                    item.progress.chapter_position,
+                    item.progress.chapter_count,
+                    item.progress.scroll_fraction
+                  )}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
 
       <SearchField value={query} onChangeText={setQuery} />
 
@@ -191,6 +233,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   sub: { color: colors.inkSoft, lineHeight: 21, maxWidth: 340 },
+  continueBlock: { gap: space.md },
+  continueRow: { gap: space.md, paddingRight: space.lg },
+  continueMeta: { color: colors.sageDeep, fontSize: 11, fontWeight: "600" },
   chipScroll: { paddingRight: space.lg },
   sectionRow: {
     flexDirection: "row",

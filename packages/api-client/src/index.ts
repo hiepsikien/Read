@@ -173,6 +173,16 @@ export interface ReadingProgress {
   paragraph_index: number;
   scroll_fraction: number;
   updated_at?: string;
+  completed_at?: string | null;
+}
+
+export interface ReadingShelfItem {
+  book: BookListItem;
+  progress: ReadingProgress & {
+    chapter_title: string;
+    chapter_position: number;
+    chapter_count: number;
+  };
 }
 
 export interface ChapterAudioSegment {
@@ -558,6 +568,9 @@ export function createApiClient(options: ApiClientOptions) {
         related: BookListItem[];
       }>(`/api/books/${id}/recommendations`);
     },
+    listReading() {
+      return request<{ items: ReadingShelfItem[] }>("/api/reading");
+    },
     createBook(form: FormData) {
       return request<{ id: string; cover_url?: string | null }>("/api/books", {
         method: "POST",
@@ -713,6 +726,7 @@ export function createApiClient(options: ApiClientOptions) {
         chapter_id: string;
         paragraph_index?: number;
         scroll_fraction?: number;
+        completed?: boolean;
       }
     ) {
       return request<{ ok: boolean; progress: ReadingProgress }>(

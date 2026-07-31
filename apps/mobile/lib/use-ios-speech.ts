@@ -98,24 +98,36 @@ export function useIosSpeech(paragraphs: string[]) {
     setCurrentParagraph(null);
   }, [entries]);
 
-  const togglePlayback = useCallback(async () => {
-    setError("");
-    if (playbackState === "speaking") {
-      await Speech.pause();
-      setPlaybackState("paused");
-      return;
-    }
-    if (playbackState === "paused") {
-      await Speech.resume();
-      setPlaybackState("speaking");
-      return;
-    }
-    if (entries.length === 0) return;
+  const togglePlayback = useCallback(
+    async (options?: { fromParagraphIndex?: number }) => {
+      setError("");
+      if (playbackState === "speaking") {
+        await Speech.pause();
+        setPlaybackState("paused");
+        return;
+      }
+      if (playbackState === "paused") {
+        await Speech.resume();
+        setPlaybackState("speaking");
+        return;
+      }
+      if (entries.length === 0) return;
 
-    const generation = ++generationRef.current;
-    await Speech.stop();
-    speakAt(0, generation);
-  }, [entries.length, playbackState, speakAt]);
+      const fromParagraphIndex = Math.max(0, options?.fromParagraphIndex ?? 0);
+      let queueIndex = entries.findIndex(
+        (entry) => entry.paragraphIndex >= fromParagraphIndex
+      );
+      if (queueIndex < 0) {
+        // Past the last speakable paragraph — start at the last entry.
+        queueIndex = Math.max(0, entries.length - 1);
+      }
+
+      const generation = ++generationRef.current;
+      await Speech.stop();
+      speakAt(queueIndex, generation);
+    },
+    [entries, playbackState, speakAt]
+  );
 
   const cycleRate = useCallback(async () => {
     const nextRate = SPEECH_RATES[(SPEECH_RATES.indexOf(rateRef.current) + 1) % SPEECH_RATES.length];

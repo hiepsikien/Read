@@ -22,7 +22,7 @@ import {
 import { BookCover } from "../../components/BookCover";
 import { BookTile } from "../../components/BookTile";
 import { useAuth } from "../../lib/auth";
-import { readLocalProgress } from "../../lib/reading-progress";
+import { readLocalProgress, pickNewerProgress, formatProgressLabel } from "../../lib/reading-progress";
 import { colors, coverHeightForWidth, estimateMinutes, formatPrice, radii, shadows, space } from "../../lib/theme";
 
 type Access = {
@@ -42,6 +42,8 @@ export default function BookDetailScreen() {
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [access, setAccess] = useState<Access | null>(null);
   const [resumeChapterId, setResumeChapterId] = useState<string | null>(null);
+  const [resumeScrollFraction, setResumeScrollFraction] = useState(0);
+  const [hasRealProgress, setHasRealProgress] = useState(false);
   const [sameAuthor, setSameAuthor] = useState<BookListItem[]>([]);
   const [related, setRelated] = useState<BookListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,11 +67,16 @@ export default function BookDetailScreen() {
       setAccess(data.access);
       setSameAuthor(recommendations.same_author);
       setRelated(recommendations.related);
-      if (data.access.progress?.chapter_id) {
-        setResumeChapterId(data.access.progress.chapter_id);
+      const local = await readLocalProgress(id);
+      const resolved = pickNewerProgress(data.access.progress, local);
+      if (resolved && !resolved.completedAt) {
+        setResumeChapterId(resolved.chapterId);
+        setResumeScrollFraction(resolved.scrollFraction);
+        setHasRealProgress(true);
       } else {
-        const local = await readLocalProgress(id);
-        setResumeChapterId(local?.chapterId ?? null);
+        setResumeChapterId(null);
+        setResumeScrollFraction(0);
+        setHasRealProgress(false);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
@@ -143,15 +150,27 @@ export default function BookDetailScreen() {
 
   const owned = access.owned;
   const firstChapter = chapters[0];
-  const targetChapterId = resumeChapterId ?? firstChapter?.id ?? null;
-  const hasProgress = Boolean(resumeChapterId);
+  const targetChapterId = hasRealProgress
+    ? resumeChapterId
+    : firstChapter?.id ?? null;
+  const resumeChapter = chapters.find((c) => c.id === resumeChapterId);
+  const progressSubtitle =
+    hasRealProgress && resumeChapter
+      ? formatProgressLabel(
+          resumeChapter.position,
+          chapters.length,
+          resumeScrollFraction
+        )
+      : null;
   const totalWords = chapters.reduce((sum, c) => sum + c.word_count, 0);
   const coverUrl = api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at });
   const readLabel = !firstChapter
     ? "No chapters yet"
-    : hasProgress || owned
+    : hasRealProgress
       ? "Continue reading"
-      : "Read chapter 1 free";
+      : book.price_cents > 0 && !owned
+        ? "Read chapter 1 free"
+        : "Start reading";
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -190,6 +209,7 @@ export default function BookDetailScreen() {
             <Text style={styles.metaDot}>·</Text>
             <Text style={styles.meta}>~{estimateMinutes(totalWords)} min</Text>
           </View>
+          {progressSubtitle ? <Text style={styles.progressHint}>{progressSubtitle}</Text> : null}
           {book.status === "draft" ? <Text style={styles.draft}>Draft</Text> : null}
         </View>
       </View>
@@ -296,7 +316,11 @@ export default function BookDetailScreen() {
             <Pressable
               key={chapter.id}
               disabled={locked}
-              style={[styles.chapterRow, index === chapters.length - 1 && styles.chapterRowLast]}
+              style={[
+                styles.chapterRow,
+                index === chapters.length - 1 && styles.chapterRowLast,
+                chapter.id === resumeChapterId && styles.chapterRowResume,
+              ]}
               onPress={() => router.push(`/read/${book.id}/${chapter.id}`)}
             >
               <View style={styles.chapterInfo}>
@@ -401,6 +425,7 @@ const styles = StyleSheet.create({
   meta: { color: colors.inkSoft, fontSize: 13 },
   metaDot: { color: colors.line },
   draft: { color: "#9a6a00", fontSize: 13, fontWeight: "600" },
+  progressHint: { color: colors.sageDeep, fontSize: 13, fontWeight: "600" },
   description: { color: colors.inkSoft, lineHeight: 22 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 4 },
   primaryBtn: {
@@ -493,6 +518,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
+  },
+  chapterRowResume: {
+    backgroundColor: "rgba(63,111,92,0.08)",
   },
   chapterRowLast: { borderBottomWidth: 0 },
   chapterInfo: { gap: 3 },

@@ -104,52 +104,68 @@ export function useIosNarration({
     [rate, runOnPlayer, sourceFor]
   );
 
-  const startCloudPlayback = useCallback(async () => {
-    if (!bookId || !chapterId) return;
-    const generation = ++requestGenerationRef.current;
-    setPlaybackState("preparing");
-    setError("");
+  const startCloudPlayback = useCallback(
+    async (fromParagraphIndex = 0) => {
+      if (!bookId || !chapterId) return;
+      const generation = ++requestGenerationRef.current;
+      setPlaybackState("preparing");
+      setError("");
 
-    try {
-      const [audioManifest, token] = await Promise.all([
-        manifest ?? api.prepareChapterAudio(bookId, chapterId),
-        getToken(),
-      ]);
-      if (generation !== requestGenerationRef.current) return;
-      if (audioManifest.segments.length === 0) {
-        throw new Error("No narration segments were generated.");
+      try {
+        const [audioManifest, token] = await Promise.all([
+          manifest ?? api.prepareChapterAudio(bookId, chapterId),
+          getToken(),
+        ]);
+        if (generation !== requestGenerationRef.current) return;
+        if (audioManifest.segments.length === 0) {
+          throw new Error("No narration segments were generated.");
+        }
+
+        authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
+        setManifest(audioManifest);
+
+        let startIndex = 0;
+        for (let i = 0; i < audioManifest.segments.length; i += 1) {
+          const paragraphIndex = audioManifest.segments[i].paragraph_index;
+          if (paragraphIndex <= fromParagraphIndex) startIndex = i;
+          if (paragraphIndex >= fromParagraphIndex) {
+            startIndex = i;
+            break;
+          }
+        }
+        playSegment(audioManifest, startIndex);
+      } catch {
+        if (generation !== requestGenerationRef.current) return;
+        setProvider("native");
+        setPlaybackState("idle");
+        setError("Cloud voice unavailable. Using the offline device voice.");
+        await nativeSpeech.togglePlayback({ fromParagraphIndex });
       }
+    },
+    [api, bookId, chapterId, manifest, nativeSpeech, playSegment]
+  );
 
-      authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
-      setManifest(audioManifest);
-      playSegment(audioManifest, 0);
-    } catch {
-      if (generation !== requestGenerationRef.current) return;
-      setProvider("native");
-      setPlaybackState("idle");
-      setError("Cloud voice unavailable. Using the offline device voice.");
-      await nativeSpeech.togglePlayback();
-    }
-  }, [api, bookId, chapterId, manifest, nativeSpeech, playSegment]);
-
-  const togglePlayback = useCallback(async () => {
-    if (provider === "native") {
-      await nativeSpeech.togglePlayback();
-      return;
-    }
-    if (playbackState === "preparing") return;
-    if (playbackState === "speaking") {
-      runOnPlayer((instance) => instance.pause());
-      setPlaybackState("paused");
-      return;
-    }
-    if (playbackState === "paused") {
-      runOnPlayer((instance) => instance.play());
-      setPlaybackState("speaking");
-      return;
-    }
-    await startCloudPlayback();
-  }, [nativeSpeech, playbackState, provider, runOnPlayer, startCloudPlayback]);
+  const togglePlayback = useCallback(
+    async (options?: { fromParagraphIndex?: number }) => {
+      if (provider === "native") {
+        await nativeSpeech.togglePlayback(options);
+        return;
+      }
+      if (playbackState === "preparing") return;
+      if (playbackState === "speaking") {
+        runOnPlayer((instance) => instance.pause());
+        setPlaybackState("paused");
+        return;
+      }
+      if (playbackState === "paused") {
+        runOnPlayer((instance) => instance.play());
+        setPlaybackState("speaking");
+        return;
+      }
+      await startCloudPlayback(Math.max(0, options?.fromParagraphIndex ?? 0));
+    },
+    [nativeSpeech, playbackState, provider, runOnPlayer, startCloudPlayback]
+  );
 
   const stop = useCallback(async () => {
     requestGenerationRef.current += 1;
