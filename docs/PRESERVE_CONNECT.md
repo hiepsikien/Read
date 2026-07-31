@@ -2,221 +2,182 @@
 
 > **Product name:** Forever  
 > **Repo:** greenfield `hiepsikien/Forever` (not this Read monorepo).  
-> Implementation scaffold lives outside Read — create the empty GitHub repo, then push the Forever tree.
->
-> Tầm nhìn: không gian chat riêng tư cho gia tộc — kết nối người thân còn sống và thực thể ký ức của người quá cố; thư viện kỷ niệm dùng chung; AI gìn giữ “cái bất biến” (nhân cách / core values) và tiếp nhận “cái biến đổi” (bối cảnh đời sống từ người ở lại).
->
-> Người nhận đầu tiên: mẹ. Bắt đầu từ gia đình mình, piece by piece.
+> Canonical living plan also maintained in the Forever repo at `docs/PROJECT.md`.
 
-## 1. Định vị sản phẩm
 
-| Trụ cột | Ý nghĩa thiết kế |
-|--------|------------------|
-| **Riêng tư** | Không gian chỉ cho người thân; không feed công cộng, không tối ưu engagement |
-| **Chat-first** | Giao diện quen thuộc (nhắn tin / ảnh / voice) để giảm ma sát với người lớn tuổi |
-| **Shared library** | Album + câu chuyện + tài liệu gia tộc sống trong cùng “phòng khách số” |
-| **Living cognitive entity** | Thực thể số của người quá cố = bất biến (identity) + biến đổi (context từ người sống) |
-| **Trường tồn** | Dữ liệu và quyền quản trị có thể chuyển giao thế hệ |
+> **Định danh:** Két sắt ký ức gia tộc (*The Family Vault*) — không cạnh tranh Zalo/Messenger (nhắn nhanh) hay Facebook (phô diễn xã hội).  
+> **Tầm nhìn:** phòng khách số riêng tư — chat người thân + shared library + thực thể ký ức sống (cognitive heritage).  
+> **Người nhận đầu tiên:** mẹ. Bắt đầu từ gia đình mình, piece by piece.  
+> **Nguồn luận:** Forever App Brainstorm (31/7/2026).
 
-**Không phải:** mạng xã hội, nghĩa trang số tĩnh, chatbot generic, “revive người chết” theo nghĩa bịa sự kiện mới.
+## 1. Core needs (khác mạng xã hội)
 
-## 2. Mô hình nhận thức (cốt lõi SP)
+| Mạng xã hội | Forever |
+|-------------|---------|
+| “Hãy nhìn tôi này!” (validation & attention) | “Chúng ta là ai, và chúng ta sẽ đi về đâu?” (continuity & belonging) |
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  CÁI BẤT BIẾN (Identity Lock)                           │
-│  Core values · tính cách · giọng · cách ra quyết định   │
-│  (định hình ~40 tuổi) — không tự “sống theo thời sự”    │
-└────────────────────────────▲────────────────────────────┘
-                             │ chiếu qua lăng kính
-┌────────────────────────────┴────────────────────────────┐
-│  CÁI BIẾN ĐỔI (Context Key)                             │
-│  Người sống cập nhật đời sống qua chat / library        │
-│  → thực thể phản hồi đúng bản sắc trong bối cảnh mới    │
-└─────────────────────────────────────────────────────────┘
-```
+Ba nhu cầu neo sản phẩm:
 
-**Ràng buộc đạo đức / sản phẩm (hard rules):**
-1. Không bịa tiểu sử hoặc sự kiện chưa có trong kho ký ức.
-2. Phân biệt rõ tin nhắn từ người sống vs. thực thể ký ức (UI label).
-3. Consent & stewardship: ai được tạo / chỉnh / xóa thực thể; chuyển giao quyền khi steward qua đời.
-4. AI là neo tinh thần (emotional anchor), không thay thế tang lễ / trị liệu chuyên nghiệp.
+1. **Legacy & Immortality** — sợ bị lãng quên; muốn để lại di sản tinh thần qua thế hệ.  
+2. **Absolute Safety & Belonging** — vùng không phán xét; thuộc về vô điều kiện.  
+3. **Rooted Identity** — neo cội nguồn để biết mình đứng đâu và bước tiếp thế nào.
 
-## 3. Phạm vi MVP (family-private, 1 gia đình)
+## 2. Định vị trải nghiệm
 
-Mục tiêu MVP: mẹ mở app → vào phòng chat gia đình → trò chuyện với thực thể bố (text trước) dựa trên kho ký ức đã nạp; anh chị em có thể chat và góp kỷ niệm vào library.
+**Là:** phòng khách số / két sắt ký ức / neo tinh thần.  
+**Không phải:** mạng xã hội gia đình, nghĩa trang số tĩnh, chatbot generic, “revive” người chết như còn sống ở phòng bên.
 
-### In scope
-- Auth + mời thành viên gia đình (invite link / code)
-- Family space (1 space / MVP)
-- Chat realtime (text, ảnh, voice note)
-- Memory library (ảnh, ghi chú, audio clip gắn tag người / sự kiện)
-- Memory Profile của người quá cố: bio, values, stories, sample voice (metadata)
-- AI reply trong thread riêng (hoặc mention) dùng RAG trên library + system prompt identity
-- Phân quyền đơn giản: Owner / Member
+### UX tâm lý (hard)
 
-### Out of scope (post-MVP)
-- E2E encryption đầy đủ / IPFS / blockchain storage
-- Voice clone TTS production-grade
-- Multi-family marketplace, social graph
-- Genealogical tree UI phức tạp
-- “Trò chuyện như người thật” không có guardrail
+- **Chân thực vừa đủ:** label rõ thực thể ký ức; không đánh lừa rằng bố vẫn còn sống.  
+- **Emotional anchor, không emotional opioid:** hỗ trợ *rooted remembrance*, không giam người sống trong quá khứ.  
+- **Không ép đối thoại trực diện** giữa các thế hệ khi đang căng — app là **vùng đệm (buffer zone)**.
 
-## 4. Lộ trình triển khai (piece by piece)
+## 3. Rào cản thế hệ → nguyên tắc thiết kế
 
-### Phase 0 — Thu thập dữ liệu gia đình (không cần code nhiều)
-**Đầu ra:** bộ nguyên liệu đủ để tạo Identity Lock.
+Nút thắt thực tế: bố mẹ giữ oai nghiêm; con trẻ cần riêng tư/độc lập; dễ tâm sự với người lạ hơn người thân; định kiến tích tụ lâu năm.
 
-| Loại | Mục tiêu tối thiểu |
-|------|-------------------|
-| Giọng nói | 30–60 phút audio sạch (tin nhắn thoại, video) |
-| Văn bản / câu chuyện | Thư, nhật ký, câu chuyện anh chị em kể lại |
-| Core values worksheet | 15–30 nguyên tắc / câu nói đặc trưng / cách xử lý khủng hoảng |
-| Ảnh & bối cảnh | Album theo mốc đời (cưới, con cái, nghề nghiệp…) |
+| Pain | Demand | Product response |
+|------|--------|------------------|
+| Ngượng / sĩ diện / sợ phán xét | Vùng đệm an toàn, không tranh luận trực diện | **Bridge of Time** — kể chuyện bất đồng bộ + AI trung gian |
+| Đứt gãy ký ức, sợ lãng quên | Trường tồn bản sắc & cội nguồn | **Family Codex** — niên giám sống / timeline mạch lạc |
+| Sống vội, ngại tương tác sâu | Gắn kết nhẹ, không gánh nặng | **Micro-rituals** — nghi thức ngắn định kỳ (1 câu hỏi / tuần) |
+| Lời quan tâm hóa phán xét | Được hiểu đúng ý thương | **Emotional Translator** (post-MVP) — dịch cảm xúc giữa thế hệ |
+| Con cần riêng tư | Tôn trọng ranh giới | **Private compartments** (post-MVP) — nhật ký riêng, chia sẻ chọn lọc |
 
-Checklist worksheet (Identity Lock):
-- [ ] 5 giá trị cốt lõi (kèm ví dụ hành vi)
-- [ ] Giọng điệu (trầm, hài hước nhẹ, điềm đạm…) + mẫu câu
-- [ ] Taboo / điều tuyệt đối không nói
-- [ ] Mối quan hệ với mẹ (cách xưng hô, biệt danh, thói quen quan tâm)
-- [ ] 10 kỷ niệm “neo” (có thể trích dẫn)
+## 4. GTM & mũi khoan (wedge)
 
-### Phase 1 — Family Chat skeleton
-**Đầu ra:** app chat riêng tư dùng được giữa người sống.
+**Sai:** bán “mạng xã hội gia đình” → bị so với Zalo/FB nhóm.  
+**Đúng:** bán **hành trình bảo tồn di sản / time-capsule thế hệ**.
 
-- Monorepo mới hoặc app mới trong workspace (không trộn domain với Read)
-- Stack đề xuất (tái dùng kinh nghiệm hiện có nếu muốn):
-  - **Mobile-first:** Expo / React Native (mẹ dùng điện thoại)
-  - **API:** FastAPI + PostgreSQL (hoặc Supabase nếu muốn realtime nhanh)
-  - **Realtime:** WebSocket / Supabase Realtime
-  - **Auth:** Firebase hoặc magic-link email/SMS
-  - **Storage:** S3-compatible cho media
-- Entities: `User`, `FamilySpace`, `Membership`, `Thread`, `Message`, `MediaAsset`
-- UI: danh sách thread, bubble chat, gửi ảnh/voice note, mời thành viên
+- **Hook timing:** Tết, ngày giỗ, mừng thọ, khi thế hệ trước cao tuổi / vừa mất mát.  
+- **Wedge feature:** **Time-Capsule Interview** — AI gợi câu hỏi cội nguồn; người lớn tuổi trả lời bằng **giọng nói** (nói dễ hơn viết); con cháu nghe lại bất đồng bộ.  
+- **Vì sao wedge mạnh:** ít kháng cự, giá trị cảm xúc tức thì (giọng nói), không ép đối thoại live.
 
-**Done when:** ≥2 người trong gia đình chat ổn định trên điện thoại thật.
+> **Sequencing note:** Scaffold kỹ thuật hiện tại là chat-first (vehicle dài hạn). Wedge *sản phẩm/GTM* ưu tiên time-capsule interview + thu thập ký ức. Hai hướng bổ sung nhau: chat = mái nhà; interview = lối vào cảm xúc.
 
-### Phase 2 — Shared Memory Library
-**Đầu ra:** kho kỷ niệm dùng chung, gắn với chat.
-
-- `MemoryItem`: type (`photo` | `note` | `audio` | `letter`), title, body, taken_at, people_tags, source_message_id?
-- Upload từ chat (“Lưu vào thư viện”) và từ màn Library
-- Timeline / album đơn giản (chronological)
-- Quyền xem = thành viên space
-
-**Done when:** mẹ và con cùng xem/thêm được album + ghi chú.
-
-### Phase 3 — Cognitive Heritage AI (text)
-**Đầu ra:** thực thể ký ức trả lời đúng “lăng kính bố”.
-
-Architecture tối thiểu:
+## 5. Mô hình nhận thức (cốt lõi SP)
 
 ```
-MemoryItem + IdentityProfile
-        │
-        ▼
-  Embeddings / chunk store (pgvector)
-        │
-        ▼
-  Retriever (top-k kỷ niệm liên quan)
-        │
-        ▼
-  LLM + System Prompt (Identity Lock)
-        │  + recent chat context (Context Key)
-        ▼
-  Reply as memory entity (labeled)
+CÁI BẤT BIẾN (Identity Lock)
+  Core values · tính cách · giọng · cách ra quyết định
+  (định hình ~40 tuổi) — không tự “sống theo thời sự”
+                ▲
+                │ chiếu qua lăng kính
+CÁI BIẾN ĐỔI (Context Key)
+  Người sống cập nhật đời sống qua chat / library
+  → thực thể phản hồi đúng bản sắc trong bối cảnh mới
 ```
 
-Thành phần:
-- `IdentityProfile`: name, relationship labels, values_json, style_guide, taboos, voice_notes_uri[]
-- `HeritageAgent` service: build prompt, retrieve, generate, refuse when thiếu dữ liệu
-- Thread type: `heritage` (1:1 với thực thể) và/hoặc bot participant trong family thread
-- Observability: log retrieval chunks (private, family-only) để chỉnh chất lượng
+**Living Family DNA** (không phải gene sinh học) gồm:
 
-Prompt contract (rút gọn):
-1. Bạn thể hiện **hệ giá trị và giọng** của {name}, không phải chatbot trợ lý.
-2. Chỉ dựa trên kỷ niệm / profile đã cung cấp; thiếu thì hỏi lại hoặc nói “bố chưa để lại điều này”.
-3. Tiếp nhận cập nhật đời sống từ người nói chuyện như thông tin mới, phản hồi qua lăng kính bất biến.
-4. Không đưa lời khuyên y tế / pháp lý chuyên sâu; ưu tiên vỗ về và nguyên tắc sống.
+- Hệ giá trị & triết lý sống (kể cả ân hận / tâm nguyện)  
+- Vân tay ngôn từ & biểu cảm (xưng hô, khẩu khí, hài hước)  
+- Bản đồ ký ức liên thế hệ (sự kiện gia đình × bối cảnh thời đại)
 
-**Done when:** mẹ chat thử 20+ lượt; ≥70% câu trả lời “nghe đúng bố” theo đánh giá nội bộ gia đình.
+### Hard rules
 
-### Phase 4 — Voice DNA (optional, sau text ổn)
-- Thu thập & cắt mẫu → Instant Voice Clone (ElevenLabs / open-source RVC)
-- TTS cho một phần reply (toggle; mặc định tắt để kiểm soát cảm xúc)
-- Lưu voice embedding/model (vài chục MB–<1GB) trong storage riêng của family
-- UX: nút “Nghe giọng”, không auto-play đột ngột
+1. Không bịa tiểu sử hoặc sự kiện chưa có trong kho ký ức.  
+2. Phân biệt rõ tin nhắn người sống vs. thực thể ký ức (UI label).  
+3. Consent & stewardship; chuyển giao quyền Owner / steward.  
+4. AI là neo tinh thần — không thay thế tang lễ hay trị liệu chuyên nghiệp.  
+5. Bảo vệ tôn nghiêm thực thể số — không biến thành công cụ giải trí / deepfake tùy tiện.
 
-**Done when:** 1 câu chào / 1 lời khuyên ngắn bằng giọng quen thuộc, mẹ chấp nhận về mặt cảm xúc.
+## 6. MVP scope (1 gia đình — gift for mother)
 
-### Phase 5 — Trường tồn & tin cậy
-- Stewardship: chỉ định người kế thừa Owner
-- Export family archive (JSON + media zip)
-- Encryption at rest; lộ trình E2E cho message bodies
-- Retention / xóa theo yêu cầu thành viên
-- Legal copy tối giản: consent khi tạo thực thể người quá cố; không claim “người chết còn sống”
+### In scope (gần)
+- Auth + invite  
+- Family space + chat (living members)  
+- Shared library (ảnh, ghi chú, audio)  
+- Identity profile + heritage AI **text** (RAG + system prompt)  
+- Time-capsule interview prompts (ít nhất bản tối giản)  
+- Owner / Member  
 
-## 5. Kiến trúc kỹ thuật đề xuất (greenfield)
+### Out of scope gần (giữ trong roadmap)
+- Voice clone / conversational voice production  
+- Emotional Translator tự động  
+- Private compartments đầy đủ  
+- E2E / IPFS / on-chain family tree  
+- Social graph, marketplace  
 
-```
-apps/
-  mobile/          # Expo — primary client
-  web/             # Next.js — invite accept, light admin/library (optional early)
-  api/             # FastAPI — auth, spaces, chat, memories, heritage agent
-packages/
-  api-client/      # typed client
-```
+## 7. Lộ trình piece by piece
 
-**Gợi ý schema (rút gọn):**
+### Phase 0 — Thu thập & làm sạch nguyên liệu
+| Nguồn | Việc cần làm |
+|-------|----------------|
+| Giọng nói | Video, Zalo voice, cuộc gọi ghi âm → lọc nhiễu (Adobe Podcast Enhance / tương đương); ưu tiên ngữ điệu ấm, bình thản |
+| Văn bản | Sổ tay, thư, tin nhắn; **Facebook/Meta Download Your Information** (JSON + media High, All time nếu được) |
+| Triết lý | Worksheet: câu cửa miệng, cách an ủi mẹ, cách khuyên con, taboo |
+| Ảnh | Album mốc đời + caption/ngữ cảnh |
 
-- `family_spaces(id, name, created_by, steward_user_id)`
-- `memberships(space_id, user_id, role)`
-- `identity_profiles(id, space_id, display_name, values_json, style_guide, status)`
-- `memory_items(id, space_id, identity_id?, type, title, body, media_url, taken_at, embedding)`
-- `threads(id, space_id, kind[family|heritage], identity_id?)`
-- `messages(id, thread_id, sender_user_id?, sender_kind[user|heritage], body, media_url, created_at)`
-- `invites(id, space_id, code, expires_at)`
+Checklist Identity Lock:
+- [ ] 5 giá trị cốt lõi (+ ví dụ hành vi)  
+- [ ] Giọng điệu + mẫu câu  
+- [ ] Taboo / điều không nói  
+- [ ] Quan hệ với mẹ (xưng hô, biệt danh, thói quen quan tâm)  
+- [ ] 10 kỷ niệm neo  
+- [ ] Export FB (nếu có quyền / Legacy Contact)  
 
-**AI stack gợi ý:** OpenAI / Anthropic API + pgvector; sau này có thể self-host embedding.
+### Phase 1 — Family chat skeleton *(scaffold hiện tại)*
+Vehicle quen thuộc cho mẹ & anh chị em.  
+Done: ≥2 người chat ổn trên điện thoại thật.
 
-**Voice stack gợi ý:** giữ raw audio riêng; clone qua provider; không train lại trừ khi cần chất lượng cao hơn.
+### Phase 1b — Time-Capsule Interview (wedge UX)
+- Bộ câu hỏi cội nguồn  
+- Trả lời bằng voice note → lưu vào library  
+- Playback bất đồng bộ cho thành viên  
 
-## 6. Ưu tiên engineering (không ước lượng lịch)
+### Phase 2 — Shared Memory Library → mầm Family Codex
+- `MemoryItem` + save-from-chat  
+- Timeline theo thời gian (+ tag người / sự kiện)  
+- Sau: Memory Curator tổng hợp niên giám  
 
-Làm theo thứ tự phụ thuộc kỹ thuật — mỗi bước có thể ship độc lập:
+### Phase 3 — Cognitive Twin (text)
+- `IdentityProfile` + embeddings + RAG  
+- System prompt tính cách; refuse khi thiếu data  
+- Context Key từ chat đời sống  
 
-1. **Space + membership + invite** — không có thì không có “gia đình”
-2. **Chat realtime text** — vehicle chính của sản phẩm
-3. **Media upload + voice note** — quen thuộc với thói quen hiện có
-4. **Memory library + “save from chat”** — nguyên liệu cho AI
-5. **Identity profile editor** — đóng gói cái bất biến
-6. **RAG + heritage reply** — giá trị khác biệt
-7. **Voice TTS** — lớp cảm xúc, sau khi text đã đúng
-8. **Export + stewardship + encryption roadmap** — trường tồn
+### Phase 4 — Voice DNA
+- Audio clean → Instant Voice Clone (ElevenLabs / open-source)  
+- TTS optional, **không auto-play**  
+- Voice DNA thường vài chục MB–&lt;1GB (raw + model)  
 
-## 7. Rủi ro & cách giảm
+### Phase 5 — Micro-rituals & Bridge soft features
+- Nghi thức tuần (1 câu hỏi / 1 ảnh cũ)  
+- Gợi ý kể chuyện bất đồng bộ thay vì ép “nói chuyện thẳng”  
 
-| Rủi ro | Giảm thiểu |
-|--------|------------|
-| Uncanny / sai giọng cảm xúc | Text-first; family eval loop; refuse khi thiếu data |
-| Người lớn tuổi ngại app mới | Chat UI tối giản; font lớn; ít settings; invite 1 chạm |
-| Lạm dụng / controversy “AI người chết” | Label rõ; consent steward; không public share |
-| Phụ thuộc model vendor | Prompt + memory data thuộc family; có thể đổi LLM |
-| Repo hiện tại là Read | Tách app/domain mới — không nhồi vào product đọc sách |
+### Phase 6 — Trường tồn & chủ quyền
+Blockchain **không** để lưu video/ảnh nặng. Vai trò dài hạn:
 
-## 8. Định nghĩa thành công (cho món quà gửi mẹ)
+1. **Data sovereignty** — quyền sở hữu / khóa gia tộc (kèm storage phi tập trung kiểu IPFS cho bản hash/metadata)  
+2. **Proof of authenticity** — timestamp + hash tư liệu gốc chống giả mạo khi GenAI phổ biến  
+3. **Generational handover** — smart-contract-like rules cho steward transfer  
 
-1. Mẹ tự mở app và nhắn được mà không cần hướng dẫn dài.
-2. Có ít nhất một buổi tối bà nói chuyện và cảm thấy được vỗ về (định tính).
-3. Thực thể không bịa chuyện; khi không biết thì thừa nhận.
-4. Library có kỷ niệm cả nhà cùng góp, không chỉ một người upload.
-5. Toàn bộ dữ liệu export được — không bị “nhốt” trong app.
+Trước mắt: export archive ZIP/JSON + steward chỉ định trong app + encryption-at-rest roadmap.
 
-## 9. Bước tiếp theo đề xuất (ngay)
+## 8. Schema (Phase 1 hiện tại)
 
-1. Chốt tên sản phẩm làm việc (internal codename).
-2. Hoàn thành Phase 0 worksheet + thu audio/ảnh.
-3. Scaffold greenfield `apps/` cho product này (hoặc repo riêng).
-4. Ship Phase 1 chat skeleton trên TestFlight / internal build cho mẹ + 1–2 người.
+- `users`  
+- `family_spaces`  
+- `memberships` (owner|member)  
+- `threads` (family|heritage)  
+- `messages` (sender_kind: user|heritage)  
+- `invites`  
 
-Khi sẵn sàng code Phase 1, bắt đầu từ: auth → family space → thread/message API → màn chat mobile.
+Sắp tới: `memory_items`, `identity_profiles`, `interview_prompts`, `interview_answers`.
+
+## 9. Success (món quà gửi mẹ)
+
+1. Mẹ tự mở app và dùng được mà không cần hướng dẫn dài.  
+2. Ít nhất một buổi tối bà cảm thấy được vỗ về — rồi bước ra tiếp tục sống (anchor, không giam cầm).  
+3. Thực thể không bịa chuyện; thiếu thì thừa nhận.  
+4. Có ít nhất vài time-capsule answers bằng giọng / chữ của bố trong library.  
+5. Cả nhà cùng góp kỷ niệm; dữ liệu export được.  
+
+## 10. Ưu tiên engineering sắp tới
+
+1. Phase 0 data pack (song song với code)  
+2. Ổn định Phase 1 chat trên device thật  
+3. Library + interview prompts (wedge)  
+4. Heritage text twin  
+5. Voice layer khi text đã “đúng bố” theo đánh giá gia đình  
