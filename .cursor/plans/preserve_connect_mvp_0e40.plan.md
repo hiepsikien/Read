@@ -1,8 +1,8 @@
-# Bảo tồn & Kết nối — MVP Plan
+# Forever — MVP Plan
 
 ## Goal
 
-Private family chat + shared memory library + heritage AI entity (immutable identity + mutable life context), starting with one family (gift for mother).
+**Forever:** private family chat + shared memory library + heritage AI entity (immutable identity + mutable life context), starting with one family (gift for mother).
 
 ## Source
 
@@ -10,7 +10,7 @@ Discussion doc: “Thảo luận về SP quan trọng (Bảo tồn & Kết nối
 
 ## Important constraint
 
-Current repo ships **Read** (book product). This SP must be greenfield (new apps/domain or new repo), not mixed into Read’s library/reader flows.
+Current repo ships **Read** (book product). Forever is a **separate greenfield repo** (`hiepsikien/Forever`), not mixed into Read’s library/reader flows.
 
 ## Phased delivery
 

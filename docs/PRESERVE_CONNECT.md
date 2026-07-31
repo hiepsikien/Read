@@ -1,5 +1,9 @@
-# Bảo tồn & Kết nối — Product & Engineering Plan
+# Forever — Product & Engineering Plan
 
+> **Product name:** Forever  
+> **Repo:** greenfield `hiepsikien/Forever` (not this Read monorepo).  
+> Implementation scaffold lives outside Read — create the empty GitHub repo, then push the Forever tree.
+>
 > Tầm nhìn: không gian chat riêng tư cho gia tộc — kết nối người thân còn sống và thực thể ký ức của người quá cố; thư viện kỷ niệm dùng chung; AI gìn giữ “cái bất biến” (nhân cách / core values) và tiếp nhận “cái biến đổi” (bối cảnh đời sống từ người ở lại).
 >
 > Người nhận đầu tiên: mẹ. Bắt đầu từ gia đình mình, piece by piece.
