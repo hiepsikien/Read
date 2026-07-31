@@ -15,14 +15,14 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "app.read.mobile"
+      "bundleIdentifier": "com.nguyendinhanh.read"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#d5e2dd"
       },
-      "package": "app.read.mobile"
+      "package": "com.nguyendinhanh.read"
     },
     "plugins": [
       "expo-router",
