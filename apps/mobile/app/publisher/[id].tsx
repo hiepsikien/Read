@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -8,20 +9,32 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import {
   ApiError,
+  DEFAULT_SEGMENT_TITLE_COMPONENTS,
+  SEGMENT_TITLE_COMPONENT_OPTIONS,
   SPLIT_LENGTH_OPTIONS,
+  SUGGEST_LANGUAGE_OPTIONS,
+  formatSegmentTitlePreview,
   type BookDetail,
   type Category,
   type ChapterListItem,
+  type SegmentTitleComponent,
   type SplitLength,
+  type SuggestLanguage,
 } from "@read/api-client";
 import { BookCover } from "../../components/BookCover";
 import { FormScroll } from "../../components/FormScroll";
 import { useAuth } from "../../lib/auth";
-import { colors, formatPrice } from "../../lib/theme";
+import { bookStatusLabel, displayFilename } from "../../lib/book-labels";
+import { pickBookCoverImage } from "../../lib/pick-cover";
+import { colors, coverHeightForWidth, formatPrice } from "../../lib/theme";
+
+type SuggestionPreview = {
+  category: Category | null;
+  description: string | null;
+};
 
 export default function ManageBookScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -37,10 +50,23 @@ export default function ManageBookScreen() {
   const [price, setPrice] = useState("4.99");
   const [categoryId, setCategoryId] = useState("");
   const [splitLength, setSplitLength] = useState<SplitLength>("standard");
-  const [busy, setBusy] = useState<"" | "save" | "split" | "submit" | "cover" | "glossary">("");
+  const [suggestLanguage, setSuggestLanguage] = useState<SuggestLanguage>("en");
+  const [titleComponents, setTitleComponents] = useState<SegmentTitleComponent[]>(
+    DEFAULT_SEGMENT_TITLE_COMPONENTS
+  );
+  const [busy, setBusy] = useState<
+    "" | "split" | "submit" | "cover" | "glossary" | "suggest" | "discard" | "titles"
+  >("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [glossaryCount, setGlossaryCount] = useState<number | null>(null);
+  const [suggestion, setSuggestion] = useState<SuggestionPreview | null>(null);
+  const [localCoverUri, setLocalCoverUri] = useState<string | null>(null);
+
+  const formRef = useRef({ title, description, pricing, price, categoryId });
+  useEffect(() => {
+    formRef.current = { title, description, pricing, price, categoryId };
+  }, [title, description, pricing, price, categoryId]);
 
   const locked = book?.status === "pending_review" || book?.status === "published";
 
@@ -77,24 +103,70 @@ export default function ManageBookScreen() {
     }, [load])
   );
 
-  async function saveMeta() {
-    setBusy("save");
+  async function persistMeta(overrides?: Partial<typeof formRef.current>) {
+    if (!id || locked) return;
+    const current = { ...formRef.current, ...overrides };
+    await api.updateBook(id, {
+      title: current.title,
+      description: current.description,
+      pricing: current.pricing,
+      price: Number(current.price),
+      category_id: current.categoryId,
+    });
+    formRef.current = current;
+  }
+
+  async function suggestWithAi() {
+    if (locked || !book?.has_raw_text) return;
+    setBusy("suggest");
     setMessage("");
     setError("");
+    setSuggestion(null);
     try {
-      await api.updateBook(id!, {
-        title,
-        description,
-        pricing,
-        price: Number(price),
-        category_id: categoryId,
+      await persistMeta();
+      const payload = await api.suggestBookMetadata(id!, {
+        language: suggestLanguage,
       });
-      setMessage("Details saved.");
-      await load();
+      if (!payload.category && !payload.description) {
+        setError("AI did not return a usable suggestion. Try again.");
+        return;
+      }
+      setSuggestion({
+        category: payload.category,
+        description: payload.description,
+      });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Save failed.");
+      if (err instanceof ApiError && (err.status === 503 || err.message === "ai_unavailable")) {
+        Alert.alert("Unavailable", "AI suggestions are unavailable.");
+        return;
+      }
+      const body = err instanceof ApiError ? (err.body as { error?: string } | null) : null;
+      if (body?.error === "ai_unavailable") {
+        Alert.alert("Unavailable", "AI suggestions are unavailable.");
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : "Could not suggest metadata.");
     } finally {
       setBusy("");
+    }
+  }
+
+  async function applySuggestion() {
+    if (!suggestion) return;
+    const nextDescription = suggestion.description ?? description;
+    const nextCategoryId = suggestion.category?.id ?? categoryId;
+    if (suggestion.description) setDescription(suggestion.description);
+    if (suggestion.category?.id) setCategoryId(suggestion.category.id);
+    setSuggestion(null);
+    try {
+      await persistMeta({
+        description: nextDescription,
+        categoryId: nextCategoryId,
+      });
+      setMessage("Suggestion applied.");
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not apply suggestion.");
     }
   }
 
@@ -103,11 +175,44 @@ export default function ManageBookScreen() {
     setMessage("");
     setError("");
     try {
-      const payload = await api.splitBook(id!, { length: splitLength });
-      setMessage(`Created ${payload.chapter_count} chapters.`);
+      await persistMeta();
+      const payload = await api.splitBook(id!, {
+        length: splitLength,
+        title_components: ["part"],
+        title_language: suggestLanguage,
+      });
+      setMessage(`Created ${payload.chapter_count} segments.`);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Split failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applySegmentTitles() {
+    if (locked || chapters.length === 0) return;
+    setBusy("titles");
+    setMessage("");
+    setError("");
+    try {
+      await persistMeta();
+      const payload = await api.nameBookSegments(id!, {
+        title_components: titleComponents,
+        title_language: suggestLanguage,
+      });
+      setMessage(
+        titleComponents.includes("name")
+          ? `Named ${payload.chapter_count} segments.`
+          : `Updated ${payload.chapter_count} segment titles.`
+      );
+      await load();
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 503 || err.message === "ai_unavailable")) {
+        Alert.alert("Unavailable", "AI naming is unavailable. Try again or turn off Distinctive name.");
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : "Could not update segment titles.");
     } finally {
       setBusy("");
     }
@@ -118,6 +223,7 @@ export default function ManageBookScreen() {
     setMessage("");
     setError("");
     try {
+      await persistMeta();
       await api.submitReview(id!);
       setMessage("Submitted for admin review.");
       await load();
@@ -132,30 +238,58 @@ export default function ManageBookScreen() {
     }
   }
 
-  async function replaceCover() {
-    if (locked) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.9,
-      allowsEditing: true,
-      aspect: [2, 3],
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    setBusy("cover");
+  function confirmDiscard() {
+    if (!book || book.status !== "draft") return;
+    Alert.alert(
+      "Discard draft?",
+      "This permanently deletes the manuscript, cover, and chapters. You can’t undo this.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            void discardDraft();
+          },
+        },
+      ]
+    );
+  }
+
+  async function discardDraft() {
+    if (!id) return;
+    setBusy("discard");
     setMessage("");
     setError("");
     try {
+      await api.discardBook(id);
+      router.replace("/publisher");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not discard draft.");
+      setBusy("");
+    }
+  }
+
+  async function replaceCover() {
+    if (locked) return;
+    const picked = await pickBookCoverImage();
+    if (!picked) return;
+    setBusy("cover");
+    setMessage("");
+    setError("");
+    setLocalCoverUri(picked.uri);
+    try {
       const form = new FormData();
       form.append("file", {
-        uri: asset.uri,
-        name: asset.fileName || "cover.jpg",
-        type: asset.mimeType || "image/jpeg",
+        uri: picked.uri,
+        name: picked.name,
+        type: picked.mimeType,
       } as unknown as Blob);
       await api.uploadBookCover(id!, form);
       setMessage("Cover updated.");
       await load();
     } catch (err) {
+      setLocalCoverUri(null);
       setError(err instanceof ApiError ? err.message : "Cover upload failed.");
     } finally {
       setBusy("");
@@ -177,6 +311,7 @@ export default function ManageBookScreen() {
     setMessage("");
     setError("");
     try {
+      await persistMeta();
       const form = new FormData();
       form.append("file", {
         uri: asset.uri,
@@ -196,6 +331,29 @@ export default function ManageBookScreen() {
     }
   }
 
+  function toggleTitleComponent(component: SegmentTitleComponent) {
+    setTitleComponents((prev) => {
+      if (prev.includes(component)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((item) => item !== component);
+      }
+      return [...prev, component];
+    });
+  }
+
+  function moveTitleComponent(component: SegmentTitleComponent, direction: -1 | 1) {
+    setTitleComponents((prev) => {
+      const index = prev.indexOf(component);
+      if (index < 0) return prev;
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(index, 1);
+      copy.splice(nextIndex, 0, item);
+      return copy;
+    });
+  }
+
   if (!book) {
     return (
       <View style={styles.centered}>
@@ -212,16 +370,21 @@ export default function ManageBookScreen() {
           title={book.title}
           categorySlug={book.category?.slug}
           categoryLabel={book.category?.label}
-          coverUrl={api.bookCoverUrl(book.cover_url)}
+          coverUrl={
+            book.cover_url
+              ? api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at })
+              : null
+          }
+          localUri={localCoverUri}
           width={110}
-          height={165}
+          height={coverHeightForWidth(110)}
         />
         <View style={styles.coverMeta}>
           <Text style={styles.title}>{book.title}</Text>
           <Text style={styles.sub}>
-            {book.status} · {formatPrice(book.price_cents)}
+            {bookStatusLabel(book.status)} · {formatPrice(book.price_cents)}
             {book.category ? ` · ${book.category.label}` : ""}
-            {book.source_filename ? ` · ${book.source_filename}` : ""}
+            {book.source_filename ? ` · ${displayFilename(book.source_filename)}` : ""}
           </Text>
           <Pressable
             style={[styles.secondaryBtn, styles.coverBtn, locked && styles.disabled]}
@@ -250,12 +413,73 @@ export default function ManageBookScreen() {
         placeholder="Title"
         placeholderTextColor={colors.inkSoft}
       />
+
+      {!locked && book.has_raw_text ? (
+        <>
+          <Text style={styles.hint}>
+            Suggest category and description from the manuscript, then Apply.
+          </Text>
+          <Text style={styles.label}>Suggestion language</Text>
+          <View style={styles.pricingRow}>
+            {SUGGEST_LANGUAGE_OPTIONS.map((option) => {
+              const active = suggestLanguage === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  style={[styles.choice, active && styles.choiceActive]}
+                  onPress={() => setSuggestLanguage(option.value)}
+                >
+                  <Text style={[styles.choiceText, active && styles.choiceTextActive]}>
+                    {option.label}
+                  </Text>
+                  <Text style={[styles.choiceHint, active && styles.choiceHintActive]}>
+                    {option.hint}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Pressable
+            style={[styles.secondaryBtn, styles.suggestBtn, busy === "suggest" && styles.disabled]}
+            onPress={() => void suggestWithAi()}
+            disabled={busy === "suggest"}
+          >
+            <Text style={styles.secondaryBtnText}>
+              {busy === "suggest" ? "Suggesting…" : "Suggest with AI"}
+            </Text>
+          </Pressable>
+        </>
+      ) : null}
+
+      {suggestion ? (
+        <View style={styles.suggestCard}>
+          <Text style={styles.suggestTitle}>AI suggestion</Text>
+          {suggestion.category ? (
+            <Text style={styles.suggestLine}>
+              Category: <Text style={styles.suggestStrong}>{suggestion.category.label}</Text>
+            </Text>
+          ) : null}
+          {suggestion.description ? (
+            <Text style={styles.suggestBlurb}>{suggestion.description}</Text>
+          ) : null}
+          <View style={styles.suggestActions}>
+            <Pressable style={styles.suggestApply} onPress={() => void applySuggestion()}>
+              <Text style={styles.suggestApplyText}>Apply</Text>
+            </Pressable>
+            <Pressable style={styles.suggestDismiss} onPress={() => setSuggestion(null)}>
+              <Text style={styles.suggestDismissText}>Dismiss</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      <Text style={styles.label}>Description</Text>
       <TextInput
         style={[styles.input, styles.multiline, locked && styles.disabledInput]}
         value={description}
         onChangeText={setDescription}
         editable={!locked}
-        placeholder="Description"
+        placeholder="Description / blurb"
         placeholderTextColor={colors.inkSoft}
         multiline
       />
@@ -306,14 +530,6 @@ export default function ManageBookScreen() {
           placeholderTextColor={colors.inkSoft}
         />
       ) : null}
-      <Pressable
-        style={[styles.secondaryBtn, styles.saveBtn, locked && styles.disabled]}
-        onPress={saveMeta}
-        disabled={locked || busy === "save"}
-      >
-        <Text style={styles.secondaryBtnText}>{busy === "save" ? "Saving…" : "Save details"}</Text>
-      </Pressable>
-
       <Text style={styles.section}>Character notes</Text>
       <Text style={styles.hint}>
         Upload a NHÂN VẬT.docx glossary so readers can long-press names for book notes
@@ -363,6 +579,7 @@ export default function ManageBookScreen() {
           );
         })}
       </View>
+
       <Pressable
         style={[styles.primaryBtn, (!book.has_raw_text || locked) && styles.disabled]}
         onPress={split}
@@ -388,6 +605,114 @@ export default function ManageBookScreen() {
         )}
       </View>
 
+      {chapters.length > 0 ? (
+        <>
+          <Text style={styles.section}>Segment titles</Text>
+          <Text style={styles.hint}>
+            After splitting, choose the title layout. Distinctive names use AI when available.
+          </Text>
+          <Text style={styles.label}>Title language</Text>
+          <View style={styles.pricingRow}>
+            {SUGGEST_LANGUAGE_OPTIONS.map((option) => {
+              const active = suggestLanguage === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  disabled={locked}
+                  style={[styles.choice, active && styles.choiceActive, locked && styles.disabled]}
+                  onPress={() => setSuggestLanguage(option.value)}
+                >
+                  <Text style={[styles.choiceText, active && styles.choiceTextActive]}>
+                    {option.label}
+                  </Text>
+                  <Text style={[styles.choiceHint, active && styles.choiceHintActive]}>
+                    {option.hint}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.previewLine}>
+            Preview:{" "}
+            {formatSegmentTitlePreview(titleComponents, {
+              bookTitle: title || book.title,
+              language: suggestLanguage,
+            })}
+          </Text>
+          <View style={styles.formatList}>
+            {titleComponents.map((component, index) => {
+              const meta = SEGMENT_TITLE_COMPONENT_OPTIONS.find(
+                (item) => item.value === component
+              );
+              return (
+                <View key={component} style={styles.formatRow}>
+                  <Pressable
+                    style={[styles.formatToggle, styles.formatToggleOn]}
+                    disabled={locked}
+                    onPress={() => toggleTitleComponent(component)}
+                  >
+                    <Text style={styles.formatToggleTextOn}>✓</Text>
+                  </Pressable>
+                  <View style={styles.formatMeta}>
+                    <Text style={styles.formatTitle}>{meta?.label ?? component}</Text>
+                    <Text style={styles.formatHint}>{meta?.hint}</Text>
+                  </View>
+                  <View style={styles.formatMove}>
+                    <Pressable
+                      style={[styles.moveBtn, (locked || index === 0) && styles.disabled]}
+                      disabled={locked || index === 0}
+                      onPress={() => moveTitleComponent(component, -1)}
+                    >
+                      <Text style={styles.moveBtnText}>↑</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.moveBtn,
+                        (locked || index === titleComponents.length - 1) && styles.disabled,
+                      ]}
+                      disabled={locked || index === titleComponents.length - 1}
+                      onPress={() => moveTitleComponent(component, 1)}
+                    >
+                      <Text style={styles.moveBtnText}>↓</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+            {SEGMENT_TITLE_COMPONENT_OPTIONS.filter(
+              (option) => !titleComponents.includes(option.value)
+            ).map((option) => (
+              <View key={option.value} style={styles.formatRow}>
+                <Pressable
+                  style={styles.formatToggle}
+                  disabled={locked}
+                  onPress={() => toggleTitleComponent(option.value)}
+                >
+                  <Text style={styles.formatToggleText}>+</Text>
+                </Pressable>
+                <View style={styles.formatMeta}>
+                  <Text style={styles.formatTitleMuted}>{option.label}</Text>
+                  <Text style={styles.formatHint}>{option.hint} · off</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+          <Pressable
+            style={[styles.primaryBtn, locked && styles.disabled]}
+            onPress={() => void applySegmentTitles()}
+            disabled={locked || busy === "titles"}
+          >
+            <Text style={styles.primaryBtnText}>
+              {busy === "titles"
+                ? "Updating titles…"
+                : titleComponents.includes("name")
+                  ? "Name segments with AI"
+                  : "Apply titles"}
+            </Text>
+          </Pressable>
+        </>
+      ) : null}
+
       <View style={styles.publishRow}>
         <Pressable
           style={[
@@ -405,6 +730,17 @@ export default function ManageBookScreen() {
                 : "Submit for review"}
           </Text>
         </Pressable>
+        {book.status === "draft" ? (
+          <Pressable
+            style={[styles.discardBtn, busy === "discard" && styles.disabled]}
+            onPress={confirmDiscard}
+            disabled={busy === "discard"}
+          >
+            <Text style={styles.discardBtnText}>
+              {busy === "discard" ? "Discarding…" : "Discard draft"}
+            </Text>
+          </Pressable>
+        ) : null}
         {book.status === "published" && chapters[0] ? (
           <Pressable
             style={styles.secondaryBtn}
@@ -483,6 +819,36 @@ const styles = StyleSheet.create({
   categoryChipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
   categoryText: { color: colors.ink, fontSize: 13, fontWeight: "600" },
   categoryTextActive: { color: "#fff" },
+  suggestBtn: { marginTop: 10, alignSelf: "flex-start" },
+  suggestCard: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    backgroundColor: colors.card,
+    padding: 14,
+    gap: 8,
+  },
+  suggestTitle: { color: colors.ink, fontWeight: "700", fontSize: 14 },
+  suggestLine: { color: colors.inkSoft, fontSize: 13 },
+  suggestStrong: { color: colors.ink, fontWeight: "700" },
+  suggestBlurb: { color: colors.ink, fontSize: 14, lineHeight: 20 },
+  suggestActions: { flexDirection: "row", gap: 10, marginTop: 4 },
+  suggestApply: {
+    backgroundColor: colors.sage,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  suggestApplyText: { color: "#fff", fontWeight: "700" },
+  suggestDismiss: {
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  suggestDismissText: { color: colors.inkSoft, fontWeight: "600" },
   pricingRow: { flexDirection: "row", gap: 10, marginTop: 8 },
   choice: {
     flex: 1,
@@ -490,6 +856,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     borderRadius: 10,
     paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.6)",
   },
@@ -504,6 +871,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sage,
     borderRadius: 10,
     paddingVertical: 13,
+    paddingHorizontal: 18,
     alignItems: "center",
   },
   primaryBtnText: { color: "#fff", fontWeight: "600" },
@@ -546,7 +914,64 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   publishBtnText: { color: colors.paper, fontWeight: "600" },
+  discardBtn: {
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    backgroundColor: "rgba(155,28,28,0.06)",
+  },
+  discardBtnText: { color: colors.danger, fontWeight: "600" },
   disabled: { opacity: 0.5 },
   success: { color: colors.sageDeep, marginTop: 12 },
   error: { color: colors.danger, marginTop: 12 },
+  previewLine: { color: colors.ink, fontSize: 14, marginTop: 8, lineHeight: 20 },
+  formatList: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    backgroundColor: colors.card,
+    overflow: "hidden",
+  },
+  formatRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  formatToggle: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  formatToggleOn: { backgroundColor: colors.sage, borderColor: colors.sage },
+  formatToggleText: { color: colors.inkSoft, fontWeight: "700" },
+  formatToggleTextOn: { color: "#fff", fontWeight: "700" },
+  formatMeta: { flex: 1, gap: 2 },
+  formatTitle: { color: colors.ink, fontWeight: "600" },
+  formatTitleMuted: { color: colors.inkSoft, fontWeight: "600" },
+  formatHint: { color: colors.inkSoft, fontSize: 12 },
+  formatMove: { flexDirection: "row", gap: 4 },
+  moveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  moveBtnText: { color: colors.ink, fontWeight: "700", fontSize: 14 },
 });

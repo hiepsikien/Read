@@ -8,12 +8,12 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
 import { ApiError, type BookDetail, type Category } from "@read/api-client";
 import { BookCover } from "../../../components/BookCover";
 import { FormScroll } from "../../../components/FormScroll";
 import { useAuth } from "../../../lib/auth";
-import { colors, formatPrice } from "../../../lib/theme";
+import { pickBookCoverImage } from "../../../lib/pick-cover";
+import { colors, coverHeightForWidth, formatPrice } from "../../../lib/theme";
 
 export default function AdminEditCatalogScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -111,23 +111,17 @@ export default function AdminEditCatalogScreen() {
   }
 
   async function replaceCover() {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.9,
-      allowsEditing: true,
-      aspect: [2, 3],
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
+    const picked = await pickBookCoverImage();
+    if (!picked) return;
     setBusy("cover");
     setMessage("");
     setError("");
     try {
       const form = new FormData();
       form.append("file", {
-        uri: asset.uri,
-        name: asset.fileName || "cover.jpg",
-        type: asset.mimeType || "image/jpeg",
+        uri: picked.uri,
+        name: picked.name,
+        type: picked.mimeType,
       } as unknown as Blob);
       await api.adminUploadBookCover(id!, form);
       setMessage("Cover updated.");
@@ -157,9 +151,9 @@ export default function AdminEditCatalogScreen() {
           title={book.title}
           categorySlug={book.category?.slug}
           categoryLabel={book.category?.label}
-          coverUrl={api.bookCoverUrl(book.cover_url)}
+          coverUrl={api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at })}
           width={110}
-          height={165}
+          height={coverHeightForWidth(110)}
         />
         <View style={styles.coverMeta}>
           <Text style={styles.title}>{book.title}</Text>
@@ -356,6 +350,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     borderRadius: 10,
     paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.6)",
   },
@@ -367,6 +362,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sage,
     borderRadius: 10,
     paddingVertical: 13,
+    paddingHorizontal: 18,
     alignItems: "center",
   },
   primaryBtnText: { color: "#fff", fontWeight: "600" },

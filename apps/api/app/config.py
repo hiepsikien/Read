@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     google_tts_voice: str = ""
     tts_cache_dir: str = ""
 
-    # Optional Gemini explain. The glossary-first path works with AI off.
+    # Optional Gemini (reader explain + publisher metadata suggest). Glossary-first works with AI off.
     ai_explain_enabled: bool = False
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"

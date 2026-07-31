@@ -130,6 +130,17 @@ def test_normalize_cover_image_reencodes_and_resizes():
     image = Image.open(io.BytesIO(out))
     assert image.format == "JPEG"
     assert max(image.size) == 1600
+    width, height = image.size
+    assert abs((width / height) - (3 / 4)) < 0.02
+
+
+def test_normalize_cover_crops_square_to_portrait_3x4():
+    raw = _make_image_bytes(width=900, height=900)
+    out = normalize_cover_image(raw)
+    image = Image.open(io.BytesIO(out))
+    width, height = image.size
+    assert width < height
+    assert abs((width / height) - (3 / 4)) < 0.02
 
 
 def test_extract_cover_from_docx_picks_qualifying_image(tmp_path: Path):
@@ -151,6 +162,42 @@ def test_extract_cover_skips_tiny_images(tmp_path: Path):
 def test_try_extract_fail_soft(tmp_path: Path):
     missing = tmp_path / "missing.docx"
     assert try_extract_and_save_cover(tmp_path, "book1", missing) is None
+
+
+def test_create_book_defaults_category_when_missing(client, seeded, tmp_path, monkeypatch):
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    settings = Settings(upload_dir=str(upload_dir), auth_dev_mode=True)
+    monkeypatch.setattr(books_router, "get_settings", lambda: settings)
+
+    docx_path = tmp_path / "plain.docx"
+    document = Document()
+    document.add_paragraph("Chapter one body for upload-first flow.")
+    document.save(str(docx_path))
+
+    with docx_path.open("rb") as handle:
+        response = client.post(
+            "/api/books",
+            data={
+                "title": "Upload First",
+                "description": "",
+                "pricing": "free",
+                "category_id": "",
+            },
+            files={
+                "file": (
+                    "plain.docx",
+                    handle,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            headers=auth_header(seeded["publisher"]),
+        )
+    assert response.status_code == 200
+    book_id = response.json()["id"]
+    detail = client.get(f"/api/books/{book_id}", headers=auth_header(seeded["publisher"]))
+    assert detail.status_code == 200
+    assert detail.json()["book"]["category"]["slug"] == "other"
 
 
 def test_create_book_extracts_cover(client, seeded, tmp_path, monkeypatch):

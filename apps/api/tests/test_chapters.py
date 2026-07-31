@@ -206,6 +206,11 @@ def test_markdown_does_not_affect_heading_detection_or_word_count():
     assert "*chữ nghiêng*" in units[0].content
     assert count_words("Một **hai** *ba*") == 3
     assert plain_text(r"Một \* ký tự") == "Một * ký tự"
+    assert (
+        plain_text("![Figure 1. Harbor](/api/books/x/media/abc.jpg)")
+        == "Figure 1. Harbor"
+    )
+    assert count_words("![A B C](/api/books/x/media/abc.jpg)") == 3
 
 
 def test_segments_target_longer_reading_units():
@@ -242,6 +247,43 @@ def test_unknown_split_length_is_rejected():
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "huge" in str(exc)
+
+
+def test_near_full_pack_absorbs_tiny_heading_orphan():
+    """A pack at target_words + a 1-word heading must not become a 1-word segment."""
+    limits = SPLIT_PROFILES["standard"]
+    body = para(limits.target_words, "body") + "."
+    text = "\n".join(
+        [
+            "Chapter 1 — Voyage",
+            "",
+            body,
+            "",
+            "Epilogue",
+            "",
+        ]
+    )
+    units = split_into_chapters(text, length="standard")
+    assert units
+    assert all(count_words(u.content) >= limits.min_words for u in units)
+    assert any("Epilogue" in u.content for u in units)
+
+
+def test_leading_tiny_pack_absorbs_into_next():
+    limits = SPLIT_PROFILES["standard"]
+    text = "\n".join(
+        [
+            "Chapter 1",
+            "",
+            "X",
+            "",
+            para(limits.target_words, "main") + ".",
+            "",
+        ]
+    )
+    units = split_into_chapters(text, length="standard")
+    assert units
+    assert all(count_words(u.content) >= limits.min_words for u in units)
 
 
 def test_can_access_chapter_rules():

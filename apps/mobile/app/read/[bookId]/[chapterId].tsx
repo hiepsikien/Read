@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  FlatList,
   Modal,
   Pressable,
   ScrollView,
@@ -20,10 +21,12 @@ import {
 } from "expo-router";
 import {
   ApiError,
+  parseContentBlocks,
   parseInlineMarkdown,
   type ChapterListItem,
   type ReadingProgress,
 } from "@read/api-client";
+import { AuthenticatedImage } from "../../../components/AuthenticatedImage";
 import { BrandLogo } from "../../../components/BrandLogo";
 import { ExplainSheet } from "../../../components/ExplainSheet";
 import { useAuth } from "../../../lib/auth";
@@ -50,6 +53,8 @@ type ReaderPayload = {
   chapters: ChapterListItem[];
 };
 
+const TOC_ROW_HEIGHT = 56;
+
 export default function ReaderScreen() {
   const { bookId, chapterId } = useLocalSearchParams<{ bookId: string; chapterId: string }>();
   const router = useRouter();
@@ -68,6 +73,7 @@ export default function ReaderScreen() {
   const { fontSize, theme, changeFontSize, cycleTheme } = useReaderPreferences();
 
   const scrollRef = useRef<ScrollView>(null);
+  const tocListRef = useRef<FlatList<ChapterListItem>>(null);
   const contentRef = useRef<ViewType>(null);
   const paragraphRefs = useRef<Array<ViewType | null>>([]);
   const scrollYRef = useRef(0);
@@ -204,13 +210,18 @@ export default function ReaderScreen() {
   }, [data]);
 
   // Native text renders every newline as a hard break, so collapse the soft
-  // line wrapping that survives inside a paragraph.
+  // line wrapping that survives inside a paragraph. Figures stay as markdown
+  // blocks so speech can read captions and progress indexes stay stable.
   const paragraphs = useMemo(
     () =>
       (data?.chapter.content ?? "")
         .split(/\n\s*\n/)
         .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
         .filter(Boolean),
+    [data?.chapter.content]
+  );
+  const blocks = useMemo(
+    () => parseContentBlocks(data?.chapter.content ?? ""),
     [data?.chapter.content]
   );
   const speech = useIosNarration({ api, bookId, chapterId, paragraphs });
@@ -345,6 +356,9 @@ export default function ReaderScreen() {
   }, [data, loading, resumeProgress, restoreReadingPosition]);
 
   const palette = readerThemes[theme];
+  const activeChapterIndex = data
+    ? Math.max(0, data.chapters.findIndex((chapter) => chapter.id === data.chapter.id))
+    : 0;
   const brandTone = theme === "ink" ? "white" : "color";
 
   if (loading) {
@@ -527,7 +541,7 @@ export default function ReaderScreen() {
           </Text>
 
           <View style={styles.paragraphs}>
-            {paragraphs.map((paragraph, index) => (
+            {blocks.map((block, index) => (
               <View
                 key={index}
                 ref={(node) => {
@@ -541,18 +555,41 @@ export default function ReaderScreen() {
                   },
                 ]}
               >
-                <Pressable
-                  onLongPress={() => {
-                    setExplainMode("result");
-                    setExplainParagraph(index);
-                    setExplainOpen(true);
-                  }}
-                  delayLongPress={350}
-                >
-                  <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
-                    <InlineMarkdown value={paragraph} />
-                  </Text>
-                </Pressable>
+                {block.type === "figure" ? (
+                  <View style={styles.figure}>
+                    {api.mediaUrl(block.src) ? (
+                      <AuthenticatedImage
+                        url={api.mediaUrl(block.src)!}
+                        style={styles.figureImage}
+                        fillWidth
+                        accessibilityLabel={block.caption || "Illustration"}
+                      />
+                    ) : null}
+                    {block.caption ? (
+                      <Text
+                        style={[
+                          styles.figureCaption,
+                          { color: palette.muted, fontSize: Math.max(13, fontSize * 0.85) },
+                        ]}
+                      >
+                        {block.caption}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : (
+                  <Pressable
+                    onLongPress={() => {
+                      setExplainMode("result");
+                      setExplainParagraph(index);
+                      setExplainOpen(true);
+                    }}
+                    delayLongPress={350}
+                  >
+                    <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
+                      <InlineMarkdown value={block.value} />
+                    </Text>
+                  </Pressable>
+                )}
               </View>
             ))}
           </View>
@@ -619,15 +656,40 @@ export default function ReaderScreen() {
               <Text style={{ color: palette.fg }}>Close</Text>
             </Pressable>
           </View>
-          <ScrollView>
-            {data.chapters.map((chapter) => {
+          <FlatList
+            ref={tocListRef}
+            data={data.chapters}
+            keyExtractor={(chapter) => chapter.id}
+            initialNumToRender={Math.max(12, activeChapterIndex + 4)}
+            getItemLayout={(_, index) => ({
+              length: TOC_ROW_HEIGHT,
+              offset: TOC_ROW_HEIGHT * index,
+              index,
+            })}
+            onLayout={() => {
+              if (activeChapterIndex <= 0) return;
+              requestAnimationFrame(() => {
+                tocListRef.current?.scrollToIndex({
+                  index: activeChapterIndex,
+                  viewPosition: 0.25,
+                  animated: false,
+                });
+              });
+            }}
+            onScrollToIndexFailed={({ index }) => {
+              tocListRef.current?.scrollToOffset({
+                offset: Math.max(0, index * TOC_ROW_HEIGHT - 40),
+                animated: false,
+              });
+            }}
+            renderItem={({ item: chapter }) => {
               const active = chapter.id === data.chapter.id;
               return (
                 <Pressable
-                  key={chapter.id}
                   disabled={chapter.locked}
                   style={[
                     styles.tocRow,
+                    { minHeight: TOC_ROW_HEIGHT },
                     active && { backgroundColor: withAlpha(palette.fg, 0.08) },
                   ]}
                   onPress={() => {
@@ -638,13 +700,16 @@ export default function ReaderScreen() {
                   <Text style={[{ color: palette.fg }, chapter.locked && styles.tocLocked]}>
                     {chapter.title}
                   </Text>
+                  {active ? (
+                    <Text style={[styles.tocLockedLabel, { color: palette.muted }]}>Now reading</Text>
+                  ) : null}
                   {chapter.locked ? (
                     <Text style={[styles.tocLockedLabel, { color: palette.muted }]}>Locked</Text>
                   ) : null}
                 </Pressable>
               );
-            })}
-          </ScrollView>
+            }}
+          />
         </View>
       </Modal>
     </SafeAreaView>
@@ -716,6 +781,15 @@ const styles = StyleSheet.create({
   readerMeta: { fontSize: 13, marginTop: 6 },
   paragraphs: { gap: 18, marginTop: 24 },
   paragraph: { borderRadius: 8, marginHorizontal: -6, paddingHorizontal: 6, paddingVertical: 3 },
+  // Break out of readerBody padding (20) → ~12px from screen edges.
+  figure: { gap: 8, marginHorizontal: -8, alignSelf: "stretch" },
+  figureImage: { width: "100%", borderRadius: 0 },
+  figureCaption: {
+    textAlign: "center",
+    fontStyle: "italic",
+    lineHeight: 20,
+    paddingHorizontal: 20,
+  },
   speechError: { fontSize: 12, marginTop: 12 },
   nav: {
     flexDirection: "row",

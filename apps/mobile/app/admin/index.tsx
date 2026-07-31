@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,11 +15,15 @@ import {
   type BookListItem,
   type ContentReport,
   type ReportStatus,
+  type UserRole,
 } from "@read/api-client";
+import { AdminNarrationPanel } from "../../components/AdminNarrationPanel";
 import { SearchField } from "../../components/SearchField";
 import { useAuth } from "../../lib/auth";
+import { bookActivityLine } from "../../lib/book-labels";
 import { colors, formatPrice, radii, space } from "../../lib/theme";
 
+type AdminSection = "moderation" | "narration" | "users";
 type AdminTab = "queue" | "library" | "reports";
 type LibraryFilter = "listed" | "featured" | "rejected" | "hidden" | "removed";
 
@@ -29,6 +33,16 @@ type AdminCounts = {
   report_count: number;
   library_counts: Record<LibraryFilter, number>;
   report_counts: Record<ReportStatus, number>;
+};
+
+type AdminUserRow = {
+  id: string;
+  email: string;
+  name: string;
+  handle: string | null;
+  role: UserRole;
+  created_at: string;
+  book_count: number;
 };
 
 const EMPTY_COUNTS: AdminCounts = {
@@ -49,21 +63,30 @@ const EMPTY_COUNTS: AdminCounts = {
   },
 };
 
+const SECTIONS: Array<{ value: AdminSection; label: string }> = [
+  { value: "moderation", label: "Moderation" },
+  { value: "narration", label: "Narration" },
+  { value: "users", label: "Users" },
+];
+
 export default function AdminQueueScreen() {
   const router = useRouter();
   const { user, api, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [reports, setReports] = useState<ContentReport[]>([]);
+  const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [counts, setCounts] = useState<AdminCounts>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [section, setSection] = useState<AdminSection>("moderation");
   const [tab, setTab] = useState<AdminTab>("queue");
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("listed");
   const [reportStatus, setReportStatus] = useState<ReportStatus>("open");
   const [query, setQuery] = useState("");
+  const [userQuery, setUserQuery] = useState("");
 
-  const load = useCallback(async () => {
+  const loadModeration = useCallback(async () => {
     setError("");
     try {
       const summaryPromise = api.adminSummary().catch(() => null);
@@ -111,6 +134,37 @@ export default function AdminQueueScreen() {
     }
   }, [api, libraryFilter, query, reportStatus, tab]);
 
+  const loadUsers = useCallback(async () => {
+    setError("");
+    try {
+      const data = await api.adminListUsers({ q: userQuery || undefined, limit: 50 });
+      setUsers(data.users);
+      const summary = await api.adminSummary().catch(() => null);
+      if (summary) setCounts(summary);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not load users.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [api, userQuery]);
+
+  const load = useCallback(async () => {
+    if (section === "moderation") {
+      await loadModeration();
+      return;
+    }
+    if (section === "users") {
+      await loadUsers();
+      return;
+    }
+    // Narration panel loads itself.
+    const summary = await api.adminSummary().catch(() => null);
+    if (summary) setCounts(summary);
+    setLoading(false);
+    setRefreshing(false);
+  }, [api, loadModeration, loadUsers, section]);
+
   useFocusEffect(
     useCallback(() => {
       if (authLoading) return;
@@ -126,7 +180,16 @@ export default function AdminQueueScreen() {
     }, [authLoading, user, router, load])
   );
 
-  if (authLoading || loading) {
+  useEffect(() => {
+    if (section !== "users") return;
+    const timer = setTimeout(() => {
+      setLoading(true);
+      void loadUsers();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [userQuery, section, loadUsers]);
+
+  if (authLoading || (loading && section !== "narration")) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.sage} />
@@ -139,150 +202,6 @@ export default function AdminQueueScreen() {
     library: counts.library_count,
     reports: counts.report_count,
   };
-
-  return (
-    <ScrollView
-      contentContainerStyle={styles.container}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
-          tintColor={colors.sage}
-        />
-      }
-    >
-      <Stack.Screen options={{ title: "Admin" }} />
-      <Text style={styles.eyebrow}>Moderation</Text>
-      <Text style={styles.title}>Admin center</Text>
-
-      <View style={styles.tabs}>
-        {(["queue", "library", "reports"] as AdminTab[]).map((item) => (
-          <Pressable
-            key={item}
-            style={[styles.tab, tab === item && styles.tabActive]}
-            onPress={() => {
-              setLoading(true);
-              setTab(item);
-            }}
-          >
-            <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>
-              {item[0].toUpperCase() + item.slice(1)} ({tabCounts[item]})
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-
-      {tab === "library" ? (
-        <>
-          <SearchField value={query} onChangeText={setQuery} placeholder="Search title or publisher" />
-          <View style={styles.filters}>
-            {(["listed", "featured", "rejected", "hidden", "removed"] as LibraryFilter[]).map(
-              (item) => (
-                <FilterChip
-                  key={item}
-                  label={`${item} (${counts.library_counts[item]})`}
-                  active={libraryFilter === item}
-                  onPress={() => {
-                    setLoading(true);
-                    setLibraryFilter(item);
-                  }}
-                />
-              )
-            )}
-          </View>
-        </>
-      ) : null}
-
-      {tab === "reports" ? (
-        <View style={styles.filters}>
-          {(["open", "resolved", "dismissed"] as ReportStatus[]).map((item) => (
-            <FilterChip
-              key={item}
-              label={`${item} (${counts.report_counts[item]})`}
-              active={reportStatus === item}
-              onPress={() => {
-                setLoading(true);
-                setReportStatus(item);
-              }}
-            />
-          ))}
-        </View>
-      ) : null}
-
-      {tab === "reports" ? (
-        <View style={styles.reportList}>
-          {reports.length === 0 ? (
-            <Text style={styles.meta}>No {reportStatus} reports.</Text>
-          ) : (
-            reports.map((report) => (
-              <View key={report.id} style={styles.reportCard}>
-                <Pressable onPress={() => router.push(`/admin/${report.book_id}`)}>
-                  <Text style={styles.rowTitle}>{report.book_title}</Text>
-                  <Text style={styles.badge}>{report.reason}</Text>
-                  <Text style={styles.rowMeta}>
-                    {report.reporter_name} · {new Date(report.created_at).toLocaleString()}
-                  </Text>
-                  {report.details ? <Text style={styles.reportDetails}>{report.details}</Text> : null}
-                </Pressable>
-                {report.status === "open" ? (
-                  <View style={styles.reportActions}>
-                    <SmallAction
-                      label="Dismiss"
-                      onPress={() => confirmReportAction(report, "dismiss")}
-                    />
-                    <SmallAction
-                      label="Resolve"
-                      onPress={() => confirmReportAction(report, "resolve")}
-                    />
-                    <SmallAction
-                      label="Hide book"
-                      danger
-                      onPress={() => confirmReportAction(report, "hide")}
-                    />
-                  </View>
-                ) : null}
-              </View>
-            ))
-          )}
-        </View>
-      ) : (
-        <View style={styles.list}>
-          {books.length === 0 ? (
-            <Text style={styles.meta}>
-              {tab === "queue" ? "No books waiting for review." : "No books in this view."}
-            </Text>
-          ) : (
-            books.map((book) => (
-              <Pressable
-                key={book.id}
-                style={styles.row}
-                onPress={() => router.push(`/admin/${book.id}`)}
-              >
-                <View style={styles.rowTop}>
-                  <Text style={styles.rowTitle}>{book.title}</Text>
-                  {book.featured ? <Text style={styles.featured}>Featured</Text> : null}
-                </View>
-                <Text style={styles.rowMeta}>
-                  {book.category?.label ? `${book.category.label} · ` : ""}
-                  {book.publisher_name} · {formatPrice(book.price_cents)} · {book.chapter_count} chapters
-                </Text>
-                <Text style={styles.rowMeta}>
-                  {book.status}
-                  {book.visibility ? ` · ${book.visibility}` : ""}
-                  {book.report_count ? ` · ${book.report_count} open report(s)` : ""}
-                </Text>
-              </Pressable>
-            ))
-          )}
-        </View>
-      )}
-    </ScrollView>
-  );
 
   function confirmReportAction(
     report: ContentReport,
@@ -301,7 +220,7 @@ export default function AdminQueueScreen() {
           onPress: () => {
             void api
               .adminResolveReport(report.id, action)
-              .then(load)
+              .then(loadModeration)
               .catch((err) =>
                 setError(err instanceof ApiError ? err.message : "Could not update report.")
               );
@@ -310,6 +229,270 @@ export default function AdminQueueScreen() {
       ]
     );
   }
+
+  function confirmRoleChange(target: AdminUserRow, next: "reader" | "publisher") {
+    Alert.alert(
+      next === "publisher" ? "Make publisher?" : "Make reader?",
+      `${target.name} (${target.email}) → ${next}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Confirm",
+          onPress: () => {
+            void api
+              .adminUpdateUserRole(target.id, next)
+              .then((result) => {
+                setUsers((prev) =>
+                  prev.map((row) => (row.id === result.user.id ? result.user : row))
+                );
+              })
+              .catch((err) =>
+                setError(err instanceof ApiError ? err.message : "Could not update role.")
+              );
+          },
+        },
+      ]
+    );
+  }
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            void load();
+          }}
+          tintColor={colors.sage}
+        />
+      }
+    >
+      <Stack.Screen options={{ title: "Admin" }} />
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.sectionRow}
+      >
+        {SECTIONS.map((item) => {
+          const active = section === item.value;
+          return (
+            <Pressable
+              key={item.value}
+              style={[styles.sectionChip, active && styles.sectionChipActive]}
+              onPress={() => {
+                setError("");
+                setLoading(item.value !== "narration");
+                setSection(item.value);
+              }}
+            >
+              <Text style={[styles.sectionText, active && styles.sectionTextActive]}>
+                {item.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      {section === "narration" ? <AdminNarrationPanel /> : null}
+
+      {section === "users" ? (
+        <>
+          <SearchField
+            value={userQuery}
+            onChangeText={setUserQuery}
+            placeholder="Search name, email, or handle"
+          />
+          <View style={styles.list}>
+            {users.length === 0 ? (
+              <Text style={styles.meta}>No users found.</Text>
+            ) : (
+              users.map((row) => (
+                <View key={row.id} style={styles.userRow}>
+                  <View style={styles.userCopy}>
+                    <Text style={styles.rowTitle}>{row.name}</Text>
+                    <Text style={styles.rowMeta}>
+                      {row.handle ? `@${row.handle} · ` : ""}
+                      {row.email}
+                    </Text>
+                    <Text style={styles.rowMeta}>
+                      {row.role}
+                      {row.role === "publisher"
+                        ? ` · ${row.book_count} book${row.book_count === 1 ? "" : "s"}`
+                        : ""}
+                    </Text>
+                  </View>
+                  {row.role === "admin" ? (
+                    <Text style={styles.adminLock}>Admin</Text>
+                  ) : (
+                    <View style={styles.userActions}>
+                      {row.role !== "reader" ? (
+                        <SmallAction
+                          label="Reader"
+                          onPress={() => confirmRoleChange(row, "reader")}
+                        />
+                      ) : null}
+                      {row.role !== "publisher" ? (
+                        <SmallAction
+                          label="Publisher"
+                          onPress={() => confirmRoleChange(row, "publisher")}
+                        />
+                      ) : null}
+                    </View>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        </>
+      ) : null}
+
+      {section === "moderation" ? (
+        <>
+          <View style={styles.tabs}>
+            {(["queue", "library", "reports"] as AdminTab[]).map((item) => (
+              <Pressable
+                key={item}
+                style={[styles.tab, tab === item && styles.tabActive]}
+                onPress={() => {
+                  setLoading(true);
+                  setTab(item);
+                }}
+              >
+                <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>
+                  {item[0].toUpperCase() + item.slice(1)} {tabCounts[item]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {tab === "library" ? (
+            <>
+              <SearchField
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search title or publisher"
+              />
+              <View style={styles.filters}>
+                {(
+                  ["listed", "featured", "rejected", "hidden", "removed"] as LibraryFilter[]
+                ).map((item) => (
+                  <FilterChip
+                    key={item}
+                    label={`${item} (${counts.library_counts[item]})`}
+                    active={libraryFilter === item}
+                    onPress={() => {
+                      setLoading(true);
+                      setLibraryFilter(item);
+                    }}
+                  />
+                ))}
+              </View>
+            </>
+          ) : null}
+
+          {tab === "reports" ? (
+            <View style={styles.filters}>
+              {(["open", "resolved", "dismissed"] as ReportStatus[]).map((item) => (
+                <FilterChip
+                  key={item}
+                  label={`${item} (${counts.report_counts[item]})`}
+                  active={reportStatus === item}
+                  onPress={() => {
+                    setLoading(true);
+                    setReportStatus(item);
+                  }}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {tab === "reports" ? (
+            <View style={styles.reportList}>
+              {reports.length === 0 ? (
+                <Text style={styles.meta}>No {reportStatus} reports.</Text>
+              ) : (
+                reports.map((report) => (
+                  <View key={report.id} style={styles.reportCard}>
+                    <Pressable onPress={() => router.push(`/admin/${report.book_id}`)}>
+                      <Text style={styles.rowTitle}>{report.book_title}</Text>
+                      <Text style={styles.badge}>{report.reason}</Text>
+                      <Text style={styles.rowMeta}>
+                        {report.reporter_name} ·{" "}
+                        {new Date(report.created_at).toLocaleString()}
+                      </Text>
+                      {report.details ? (
+                        <Text style={styles.reportDetails}>{report.details}</Text>
+                      ) : null}
+                    </Pressable>
+                    {report.status === "open" ? (
+                      <View style={styles.reportActions}>
+                        <SmallAction
+                          label="Dismiss"
+                          onPress={() => confirmReportAction(report, "dismiss")}
+                        />
+                        <SmallAction
+                          label="Resolve"
+                          onPress={() => confirmReportAction(report, "resolve")}
+                        />
+                        <SmallAction
+                          label="Hide book"
+                          danger
+                          onPress={() => confirmReportAction(report, "hide")}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+                ))
+              )}
+            </View>
+          ) : (
+            <View style={styles.list}>
+              {books.length === 0 ? (
+                <Text style={styles.meta}>
+                  {tab === "queue"
+                    ? "No books waiting for review."
+                    : "No books in this view."}
+                </Text>
+              ) : (
+                books.map((book) => (
+                  <Pressable
+                    key={book.id}
+                    style={styles.row}
+                    onPress={() => router.push(`/admin/${book.id}`)}
+                  >
+                    <View style={styles.rowTop}>
+                      <Text style={styles.rowTitle}>{book.title}</Text>
+                      {book.featured ? (
+                        <Text style={styles.featured}>Featured</Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.rowMeta}>
+                      {book.category?.label ? `${book.category.label} · ` : ""}
+                      {book.publisher_name} · {formatPrice(book.price_cents)}
+                    </Text>
+                    <Text style={styles.rowMeta}>
+                      {bookActivityLine(book, { includeFilename: false })}
+                      {book.visibility && book.visibility !== "listed"
+                        ? ` · ${book.visibility}`
+                        : ""}
+                      {book.report_count
+                        ? ` · ${book.report_count} open report(s)`
+                        : ""}
+                    </Text>
+                  </Pressable>
+                ))
+              )}
+            </View>
+          )}
+        </>
+      ) : null}
+    </ScrollView>
+  );
 }
 
 function FilterChip({
@@ -345,17 +528,21 @@ function SmallAction({
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 10, paddingBottom: 48 },
+  container: { paddingHorizontal: 20, paddingTop: 12, gap: 8, paddingBottom: 48 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.mist },
-  eyebrow: {
-    fontSize: 12,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: colors.sage,
-    fontWeight: "600",
+  sectionRow: { gap: 8, paddingVertical: 2 },
+  sectionChip: {
+    borderRadius: radii.pill,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.card,
   },
-  title: { fontSize: 32, fontWeight: "700", color: colors.ink, marginTop: 4 },
-  tabs: { flexDirection: "row", gap: 8, marginVertical: 6 },
+  sectionChipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
+  sectionText: { color: colors.ink, fontWeight: "600", fontSize: 13 },
+  sectionTextActive: { color: colors.white },
+  tabs: { flexDirection: "row", gap: 8, marginTop: 2 },
   tab: {
     flex: 1,
     borderRadius: radii.sm,
@@ -366,8 +553,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     backgroundColor: colors.card,
   },
-  tabActive: { backgroundColor: colors.sage, borderColor: colors.sage },
-  tabText: { color: colors.ink, fontWeight: "600", fontSize: 13 },
+  tabActive: { backgroundColor: colors.ink, borderColor: colors.ink },
+  tabText: { color: colors.ink, fontWeight: "600", fontSize: 12 },
   tabTextActive: { color: colors.white },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   filter: {
@@ -382,7 +569,7 @@ const styles = StyleSheet.create({
   filterText: { color: colors.inkSoft, textTransform: "capitalize", fontSize: 12 },
   filterTextActive: { color: colors.white, fontWeight: "600" },
   list: {
-    marginTop: 8,
+    marginTop: 4,
     backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
@@ -395,8 +582,24 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
     gap: 4,
   },
+  userRow: {
+    padding: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+  },
+  userCopy: { flex: 1, gap: 3, minWidth: 0 },
+  userActions: { flexDirection: "row", flexWrap: "wrap", gap: 6, maxWidth: 140, justifyContent: "flex-end" },
+  adminLock: {
+    color: colors.sageDeep,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
   rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  rowTitle: { fontSize: 18, fontWeight: "600", color: colors.ink },
+  rowTitle: { fontSize: 17, fontWeight: "600", color: colors.ink },
   rowMeta: { fontSize: 13, color: colors.inkSoft },
   featured: { color: colors.sageDeep, fontSize: 11, fontWeight: "700" },
   badge: {
@@ -429,5 +632,5 @@ const styles = StyleSheet.create({
   smallActionText: { color: colors.ink, fontWeight: "600", fontSize: 12 },
   smallActionDangerText: { color: colors.danger },
   meta: { color: colors.inkSoft, padding: 16 },
-  error: { color: colors.danger, marginTop: 8 },
+  error: { color: colors.danger, marginTop: 4 },
 });

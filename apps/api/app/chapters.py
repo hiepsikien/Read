@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Sequence
+
+from .segment_titles import (
+    SuggestLanguage,
+    TitleComponent,
+    fallback_distinctive_name,
+    format_segment_title,
+)
 
 SplitLength = Literal["short", "standard", "long"]
 
@@ -52,7 +59,8 @@ NUMBERED_HEADING = re.compile(
 SENTENCE_END = re.compile(r"[.!?…:;][\"'”’)\]]*$")
 INLINE_WHITESPACE = re.compile(r"[ \t\u00a0\u200b]+")
 MARKDOWN_MARKER = re.compile(r"(?<!\\)\*{1,3}")
-MARKDOWN_ESCAPE = re.compile(r"\\([\\*])")
+MARKDOWN_ESCAPE = re.compile(r"\\([\\*\[\]])")
+IMAGE_MARKDOWN = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
 
 
 @dataclass
@@ -82,9 +90,20 @@ class LogicalChapter:
     sections: list[SectionBlock]
 
 
+@dataclass
+class ChapterDraft:
+    content: str
+    group_index: int
+    chapter_title: str
+    section_titles: list[str | None]
+    sample: str
+
+
 def plain_text(text: str) -> str:
     """Return the readable projection used by split/count heuristics."""
-    without_markers = MARKDOWN_MARKER.sub("", text)
+    # Keep figure captions; drop the image URL so word counts stay honest.
+    without_images = IMAGE_MARKDOWN.sub(r"\1", text)
+    without_markers = MARKDOWN_MARKER.sub("", without_images)
     return MARKDOWN_ESCAPE.sub(r"\1", without_markers)
 
 
@@ -96,7 +115,15 @@ def is_free_preview_group(group_index: int) -> bool:
     return group_index == 1
 
 
+def is_figure_line(line: str) -> bool:
+    """True when the paragraph is solely an embedded figure markdown block."""
+    stripped = line.strip()
+    return bool(stripped) and bool(IMAGE_MARKDOWN.fullmatch(stripped))
+
+
 def is_heading_line(line: str) -> bool:
+    if is_figure_line(line):
+        return False
     candidate = plain_text(line).strip()
     if not candidate or len(candidate) > 110:
         return False
@@ -164,12 +191,12 @@ def normalize_document_text(
     return "\n\n".join(paragraphs).strip()
 
 
-def split_into_chapters(
+def split_into_chapter_drafts(
     raw_text: str,
     *,
     preserve_paragraphs: bool = False,
     length: SplitLength | str | None = None,
-) -> list[SplitChapter]:
+) -> list[ChapterDraft]:
     profile = resolve_split_profile(length)
     normalized = normalize_document_text(
         raw_text, preserve_paragraphs=preserve_paragraphs
@@ -179,22 +206,103 @@ def split_into_chapters(
 
     lines = normalized.split("\n")
     logical_chapters = build_logical_chapters(lines)
-    units: list[SplitChapter] = []
+    drafts: list[ChapterDraft] = []
 
     for chapter_index, chapter in enumerate(logical_chapters):
         packed = pack_sections_for_reading(chapter, profile)
-        for unit in packed:
-            units.append(
-                SplitChapter(
-                    title=unit["title"],
-                    content=unit["content"],
+        for pack in packed:
+            content = pack["content"]
+            drafts.append(
+                ChapterDraft(
+                    content=content,
                     group_index=chapter_index + 1,
+                    chapter_title=chapter.title,
+                    section_titles=[s.title for s in pack["sections"]],
+                    sample=content[:1200],
                 )
             )
 
-    if units:
-        return units
-    return [SplitChapter(title="Chapter 1", content=normalized, group_index=1)]
+    if drafts:
+        return drafts
+    return [
+        ChapterDraft(
+            content=normalized,
+            group_index=1,
+            chapter_title="Chapter 1",
+            section_titles=[],
+            sample=normalized[:1200],
+        )
+    ]
+
+
+def materialize_split_chapters(
+    drafts: Sequence[ChapterDraft],
+    *,
+    book_title: str | None = None,
+    title_components: Sequence[TitleComponent] | None = None,
+    distinctive_names: Sequence[str] | None = None,
+    language: SuggestLanguage = "en",
+) -> list[SplitChapter]:
+    units: list[SplitChapter] = []
+    for index, draft in enumerate(drafts):
+        if title_components is None:
+            siblings = [d for d in drafts if d.group_index == draft.group_index]
+            local_index = next(i for i, d in enumerate(siblings) if d is draft)
+            title = title_for_pack(
+                draft.chapter_title,
+                [SectionBlock(title=t, body="") for t in draft.section_titles],
+                local_index,
+                len(siblings),
+            )
+        else:
+            name = ""
+            if distinctive_names and index < len(distinctive_names):
+                name = distinctive_names[index] or ""
+            if not name.strip():
+                name = fallback_distinctive_name(
+                    draft.chapter_title, draft.section_titles
+                )
+            title = format_segment_title(
+                components=title_components,
+                book_title=book_title,
+                distinctive_name=name,
+                part_index=index + 1,
+                language=language,
+            )
+        units.append(
+            SplitChapter(
+                title=title,
+                content=draft.content,
+                group_index=draft.group_index,
+            )
+        )
+    return units
+
+
+def split_into_chapters(
+    raw_text: str,
+    *,
+    preserve_paragraphs: bool = False,
+    length: SplitLength | str | None = None,
+    book_title: str | None = None,
+    title_components: Sequence[TitleComponent] | None = None,
+    distinctive_names: Sequence[str] | None = None,
+    language: SuggestLanguage | str = "en",
+) -> list[SplitChapter]:
+    from .segment_titles import normalize_suggest_language
+
+    drafts = split_into_chapter_drafts(
+        raw_text, preserve_paragraphs=preserve_paragraphs, length=length
+    )
+    if not drafts:
+        return []
+    return materialize_split_chapters(
+        drafts,
+        book_title=book_title,
+        title_components=title_components,
+        distinctive_names=distinctive_names,
+        language=normalize_suggest_language(str(language)),
+    )
 
 
 def build_logical_chapters(lines: list[str]) -> list[LogicalChapter]:
@@ -367,37 +475,60 @@ def pack_sections_for_reading(
                 )
             continue
 
-        if (
+        # Keep micro hangers (short headings / leftovers) on the open pack
+        # instead of flushing a near-full pack and orphaning 1-word pieces.
+        # Only truly tiny sections qualify — normal sections still flush at target.
+        would_overflow = (
             current["words"] > 0
             and current["words"] + section_words > limits.target_words
-        ):
+        )
+        tiny_hanger = section_words <= 80 and current["words"] > 0
+        if would_overflow and not tiny_hanger:
             flush()
 
         current["sections"].append(section)
         current["words"] += section_words
 
     flush()
+    absorb_undersized_packs(packs, limits.min_words)
 
-    i = len(packs) - 1
-    while i > 0:
-        if (
-            packs[i]["words"] < limits.min_words
-            and packs[i - 1]["words"] + packs[i]["words"] <= limits.target_words
-        ):
-            packs[i - 1]["sections"].extend(packs[i]["sections"])
-            packs[i - 1]["words"] += packs[i]["words"]
-            packs.pop(i)
-        i -= 1
-
-    total_parts = len(packs)
     return [
         {
-            "title": title_for_pack(chapter.title, pack["sections"], index, total_parts),
+            "sections": pack["sections"],
             "content": "\n\n".join(render_section(s) for s in pack["sections"]).strip()
             or "(Empty segment)",
         }
-        for index, pack in enumerate(packs)
+        for pack in packs
     ]
+
+
+def absorb_undersized_packs(packs: list[dict], min_words: int) -> None:
+    """Merge packs below min_words into a neighbor. Prefer previous, else next.
+
+    Never leave orphan micro-packs even if the merged size exceeds target_words.
+    """
+    changed = True
+    while changed and len(packs) >= 2:
+        changed = False
+        i = 0
+        while i < len(packs):
+            if packs[i]["words"] >= min_words:
+                i += 1
+                continue
+            if i > 0:
+                packs[i - 1]["sections"].extend(packs[i]["sections"])
+                packs[i - 1]["words"] += packs[i]["words"]
+                packs.pop(i)
+                changed = True
+                i = max(0, i - 1)
+                continue
+            # Leading tiny pack: absorb into the following pack.
+            packs[1]["sections"] = packs[0]["sections"] + packs[1]["sections"]
+            packs[1]["words"] = packs[0]["words"] + packs[1]["words"]
+            packs.pop(0)
+            changed = True
+            i = 0
+
 
 
 def split_oversized_section(

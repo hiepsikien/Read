@@ -4,7 +4,8 @@
  */
 export function normalizeForSpeech(value: string): string {
   return value
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    // Skip figures entirely — do not narrate image captions.
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/https?:\/\/\S+|www\.\S+/gi, (url) =>
       /[.,;:!?]$/.test(url) ? url.slice(-1) : ""

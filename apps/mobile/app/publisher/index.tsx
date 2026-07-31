@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -10,8 +10,52 @@ import {
 } from "react-native";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { ApiError, type BookListItem } from "@read/api-client";
+import { BookCover } from "../../components/BookCover";
 import { useAuth } from "../../lib/auth";
-import { colors, formatPrice } from "../../lib/theme";
+import {
+  bookStatusLabel,
+  formatRelativeTime,
+  publisherBookMetaLine,
+  shouldShowStoreBadge,
+  visibilityLabel,
+} from "../../lib/book-labels";
+import { colors, coverHeightForWidth, formatPrice, radii } from "../../lib/theme";
+
+type ListFilter = "all" | "in_progress" | "on_shelf" | "needs_attention";
+
+const FILTERS: Array<{ value: ListFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "in_progress", label: "In progress" },
+  { value: "on_shelf", label: "On shelf" },
+  { value: "needs_attention", label: "Needs attention" },
+];
+
+const COVER_W = 52;
+
+function matchesFilter(book: BookListItem, filter: ListFilter) {
+  if (filter === "all") return true;
+  if (filter === "in_progress") {
+    return book.status === "draft" || book.status === "pending_review" || book.status === "rejected";
+  }
+  if (filter === "on_shelf") {
+    return book.status === "published" && (book.visibility ?? "listed") === "listed";
+  }
+  // needs_attention
+  return book.status === "rejected" || book.visibility === "hidden";
+}
+
+function workflowBadgeTone(status: string): "neutral" | "sage" | "warn" | "danger" {
+  if (status === "published") return "sage";
+  if (status === "pending_review") return "neutral";
+  if (status === "rejected") return "danger";
+  return "neutral";
+}
+
+function storeBadgeTone(visibility: string | null | undefined): "sage" | "warn" | "muted" {
+  if (visibility === "hidden") return "warn";
+  if (visibility === "removed") return "muted";
+  return "sage";
+}
 
 export default function PublisherHome() {
   const router = useRouter();
@@ -20,6 +64,7 @@ export default function PublisherHome() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [filter, setFilter] = useState<ListFilter>("all");
 
   const load = useCallback(async () => {
     setError("");
@@ -49,6 +94,38 @@ export default function PublisherHome() {
     }, [authLoading, user, router, load])
   );
 
+  const duplicateTitles = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const book of books) {
+      const key = book.title.trim().toLowerCase();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return new Set(
+      [...counts.entries()].filter(([, count]) => count >= 2).map(([title]) => title)
+    );
+  }, [books]);
+
+  const { mainBooks, removedBooks, filterCounts, mainTotal } = useMemo(() => {
+    const main: BookListItem[] = [];
+    const removed: BookListItem[] = [];
+    for (const book of books) {
+      if (book.visibility === "removed") removed.push(book);
+      else main.push(book);
+    }
+    const counts: Record<ListFilter, number> = {
+      all: main.length,
+      in_progress: main.filter((book) => matchesFilter(book, "in_progress")).length,
+      on_shelf: main.filter((book) => matchesFilter(book, "on_shelf")).length,
+      needs_attention: main.filter((book) => matchesFilter(book, "needs_attention")).length,
+    };
+    return {
+      mainBooks: main.filter((book) => matchesFilter(book, filter)),
+      removedBooks: removed,
+      filterCounts: counts,
+      mainTotal: main.length,
+    };
+  }, [books, filter]);
+
   if (authLoading || loading) {
     return (
       <View style={styles.centered}>
@@ -56,6 +133,8 @@ export default function PublisherHome() {
       </View>
     );
   }
+
+  const isEmptyLibrary = books.length === 0;
 
   return (
     <ScrollView
@@ -71,53 +150,214 @@ export default function PublisherHome() {
         />
       }
     >
-      <Stack.Screen options={{ title: "Publisher" }} />
-      <Text style={styles.eyebrow}>Publisher</Text>
-      <Text style={styles.title}>Your books</Text>
-      <Text style={styles.sub}>
-        Upload a DOCX manuscript, auto-split into chapters, then submit for review.
-      </Text>
+      <Stack.Screen
+        options={{
+          title: "Publisher",
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push("/publisher/new")}
+              hitSlop={8}
+              style={styles.headerUpload}
+            >
+              <Text style={styles.headerUploadText}>Upload</Text>
+            </Pressable>
+          ),
+        }}
+      />
 
-      <Pressable style={styles.primaryBtn} onPress={() => router.push("/publisher/new")}>
-        <Text style={styles.primaryBtnText}>Upload book</Text>
-      </Pressable>
+      <View style={styles.toolbar}>
+        <Text style={styles.title}>
+          Your books · {mainTotal}
+        </Text>
+      </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <View style={styles.list}>
-        {books.length === 0 ? (
-          <Text style={styles.meta}>No books yet. Upload your first manuscript.</Text>
-        ) : (
-          books.map((book) => (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.filters}
+      >
+        {FILTERS.map((item) => {
+          const active = filter === item.value;
+          return (
             <Pressable
-              key={book.id}
-              style={styles.row}
-              onPress={() => router.push(`/publisher/${book.id}`)}
+              key={item.value}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+              onPress={() => setFilter(item.value)}
             >
-              <Text style={styles.rowTitle}>{book.title}</Text>
-              <Text style={styles.rowMeta}>
-                {book.status} · {book.chapter_count} chapters · {formatPrice(book.price_cents)}
+              <Text style={[styles.filterText, active && styles.filterTextActive]}>
+                {item.label} {filterCounts[item.value]}
               </Text>
             </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.list}>
+        {isEmptyLibrary ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyCopy}>Upload a DOCX to start.</Text>
+            <Pressable
+              style={styles.primaryBtn}
+              onPress={() => router.push("/publisher/new")}
+            >
+              <Text style={styles.primaryBtnText}>Upload book</Text>
+            </Pressable>
+          </View>
+        ) : mainBooks.length === 0 ? (
+          <Text style={styles.meta}>No books in this view.</Text>
+        ) : (
+          mainBooks.map((book) => (
+            <BookRow
+              key={book.id}
+              book={book}
+              api={api}
+              showUploaded={duplicateTitles.has(book.title.trim().toLowerCase())}
+              onPress={() => router.push(`/publisher/${book.id}`)}
+            />
           ))
         )}
       </View>
+
+      {removedBooks.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>Removed from Library</Text>
+          <Text style={styles.sectionHint}>
+            These books were taken off the public shelf. You can still open them for details.
+          </Text>
+          <View style={[styles.list, styles.removedList]}>
+            {removedBooks.map((book) => (
+              <BookRow
+                key={book.id}
+                book={book}
+                api={api}
+                muted
+                showUploaded={duplicateTitles.has(book.title.trim().toLowerCase())}
+                onPress={() => router.push(`/publisher/${book.id}`)}
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
     </ScrollView>
   );
 }
 
+function BookRow({
+  book,
+  api,
+  onPress,
+  muted = false,
+  showUploaded = false,
+}: {
+  book: BookListItem;
+  api: ReturnType<typeof useAuth>["api"];
+  onPress: () => void;
+  muted?: boolean;
+  showUploaded?: boolean;
+}) {
+  const showStore = shouldShowStoreBadge(book);
+  const uploaded = showUploaded ? formatRelativeTime(book.created_at) : null;
+
+  return (
+    <Pressable
+      style={[styles.row, muted && styles.rowMuted]}
+      onPress={onPress}
+    >
+      <BookCover
+        title={book.title}
+        categorySlug={book.category?.slug}
+        categoryLabel={book.category?.label}
+        coverUrl={
+          book.cover_url
+            ? api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at })
+            : null
+        }
+        width={COVER_W}
+        height={coverHeightForWidth(COVER_W)}
+        showTitle={false}
+      />
+      <View style={styles.rowBody}>
+        <Text style={[styles.rowTitle, muted && styles.textMuted]} numberOfLines={2}>
+          {book.title}
+        </Text>
+        <View style={styles.badgeRow}>
+          <StatusBadge
+            label={bookStatusLabel(book.status)}
+            tone={workflowBadgeTone(book.status)}
+          />
+          {showStore ? (
+            <StatusBadge
+              label={visibilityLabel(book.visibility)}
+              tone={storeBadgeTone(book.visibility)}
+            />
+          ) : null}
+        </View>
+        <Text style={[styles.rowMeta, muted && styles.textMuted]} numberOfLines={2}>
+          {[publisherBookMetaLine(book), formatPrice(book.price_cents)]
+            .filter(Boolean)
+            .join(" · ")}
+        </Text>
+        {uploaded ? (
+          <Text style={[styles.rowMeta, muted && styles.textMuted]}>Uploaded {uploaded}</Text>
+        ) : null}
+        {book.visibility_note &&
+        (book.visibility === "hidden" || book.visibility === "removed") ? (
+          <Text style={styles.note} numberOfLines={2}>
+            {book.visibility_note}
+          </Text>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function StatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "neutral" | "sage" | "warn" | "danger" | "muted";
+}) {
+  return (
+    <View style={[styles.badge, badgeToneStyles[tone]]}>
+      <Text style={[styles.badgeText, badgeTextToneStyles[tone]]}>{label}</Text>
+    </View>
+  );
+}
+
+const badgeToneStyles = StyleSheet.create({
+  neutral: { backgroundColor: "rgba(20,34,28,0.06)" },
+  sage: { backgroundColor: "rgba(63,111,92,0.14)" },
+  warn: { backgroundColor: "rgba(154,106,0,0.14)" },
+  danger: { backgroundColor: "rgba(155,28,28,0.10)" },
+  muted: { backgroundColor: "rgba(20,34,28,0.05)" },
+});
+
+const badgeTextToneStyles = StyleSheet.create({
+  neutral: { color: colors.inkSoft },
+  sage: { color: colors.sageDeep },
+  warn: { color: "#7a5500" },
+  danger: { color: colors.danger },
+  muted: { color: colors.inkSoft },
+});
+
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 10, paddingBottom: 48 },
+  container: { paddingHorizontal: 20, paddingTop: 12, gap: 8, paddingBottom: 48 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.mist },
-  eyebrow: {
-    fontSize: 12,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    color: colors.sage,
-    fontWeight: "600",
+  headerUpload: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginRight: 4,
   },
-  title: { fontSize: 32, fontWeight: "700", color: colors.ink, marginTop: 4 },
-  sub: { color: colors.inkSoft, lineHeight: 21, marginTop: 6, marginBottom: 8 },
+  headerUploadText: { color: colors.sage, fontWeight: "700", fontSize: 16 },
+  toolbar: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+  },
+  title: { fontSize: 18, fontWeight: "700", color: colors.ink },
   primaryBtn: {
     alignSelf: "flex-start",
     backgroundColor: colors.sage,
@@ -126,22 +366,57 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   primaryBtnText: { color: "#fff", fontWeight: "600" },
+  filters: { gap: 8, paddingVertical: 2 },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radii.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  filterChipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
+  filterText: { color: colors.ink, fontSize: 13, fontWeight: "600" },
+  filterTextActive: { color: "#fff" },
   list: {
-    marginTop: 16,
+    marginTop: 4,
     backgroundColor: colors.card,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.line,
     overflow: "hidden",
   },
+  empty: { padding: 20, gap: 12 },
+  emptyCopy: { color: colors.inkSoft, fontSize: 14, lineHeight: 20 },
+  removedList: { opacity: 0.92 },
+  sectionTitle: {
+    marginTop: 20,
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.inkSoft,
+  },
+  sectionHint: { color: colors.inkSoft, fontSize: 13, lineHeight: 18 },
   row: {
-    padding: 16,
+    flexDirection: "row",
+    gap: 12,
+    padding: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
-    gap: 4,
+    alignItems: "flex-start",
   },
-  rowTitle: { fontSize: 18, fontWeight: "600", color: colors.ink },
-  rowMeta: { fontSize: 13, color: colors.inkSoft },
+  rowMuted: { backgroundColor: "rgba(20,34,28,0.03)" },
+  rowBody: { flex: 1, gap: 6, minWidth: 0 },
+  rowTitle: { fontSize: 17, fontWeight: "600", color: colors.ink },
+  rowMeta: { fontSize: 13, color: colors.inkSoft, lineHeight: 18 },
+  textMuted: { color: colors.inkSoft, opacity: 0.85 },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  badge: {
+    borderRadius: radii.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeText: { fontSize: 12, fontWeight: "700" },
+  note: { fontSize: 12, color: colors.danger, lineHeight: 16 },
   meta: { color: colors.inkSoft, padding: 16 },
-  error: { color: colors.danger, marginTop: 8 },
+  error: { color: colors.danger, marginTop: 4 },
 });

@@ -88,6 +88,13 @@ export function coverPalette(slugOrTitle?: string | null) {
   return CATEGORY_PALETTE[keys[hash % keys.length]] || CATEGORY_PALETTE.other;
 }
 
+/** Portrait book cover width:height for image pickers and frames. */
+export const COVER_ASPECT = [3, 4] as const;
+
+export function coverHeightForWidth(width: number) {
+  return Math.round((width * COVER_ASPECT[1]) / COVER_ASPECT[0]);
+}
+
 export function coverInitials(title: string) {
   const words = title.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "R";

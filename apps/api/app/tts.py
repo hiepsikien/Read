@@ -318,7 +318,8 @@ def _soften_all_caps(value: str) -> str:
 
 def _sanitize_speech_markup(value: str) -> str:
     value = html.unescape(value)
-    value = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", value)
+    # Skip figures entirely — do not narrate image captions.
+    value = re.sub(r"!\[([^\]]*)\]\([^)]+\)", "", value)
     value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
     value = re.sub(
         r"https?://\S+|www\.\S+",

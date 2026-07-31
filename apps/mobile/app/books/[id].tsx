@@ -20,7 +20,7 @@ import {
 import { BookCover } from "../../components/BookCover";
 import { useAuth } from "../../lib/auth";
 import { readLocalProgress } from "../../lib/reading-progress";
-import { colors, estimateMinutes, formatPrice, radii, shadows, space } from "../../lib/theme";
+import { colors, coverHeightForWidth, estimateMinutes, formatPrice, radii, shadows, space } from "../../lib/theme";
 
 type Access = {
   owned: boolean;
@@ -132,7 +132,7 @@ export default function BookDetailScreen() {
   const targetChapterId = resumeChapterId ?? firstChapter?.id ?? null;
   const hasProgress = Boolean(resumeChapterId);
   const totalWords = chapters.reduce((sum, c) => sum + c.word_count, 0);
-  const coverUrl = api.bookCoverUrl(book.cover_url);
+  const coverUrl = api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at });
   const readLabel = !firstChapter
     ? "No chapters yet"
     : hasProgress || owned
@@ -150,7 +150,7 @@ export default function BookDetailScreen() {
           categoryLabel={book.category?.label}
           coverUrl={coverUrl}
           width={148}
-          height={222}
+          height={coverHeightForWidth(148)}
           style={styles.cover}
         />
         <View style={styles.heroCopy}>

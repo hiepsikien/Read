@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -16,12 +17,24 @@ from sqlalchemy.orm import Session, joinedload
 from ..access import can_access_chapter
 from ..auth import get_current_user, get_current_user_optional, require_publisher
 from ..categories import category_payload, ensure_categories
-from ..chapters import SPLIT_PROFILES, count_words, split_into_chapters
+from ..chapters import (
+    SPLIT_PROFILES,
+    count_words,
+    materialize_split_chapters,
+    split_into_chapter_drafts,
+)
 from ..config import get_settings
 from ..db import get_db
 from ..legal import require_current_legal_acceptance
 from ..models import Book, Category, Chapter, ContentReport, Purchase, ReadingProgress, User
 from ..moderation import record_moderation_event
+from ..publisher_suggest import suggest_metadata, suggest_segment_names
+from ..gemini import gemini_available
+from ..segment_titles import (
+    format_segment_title,
+    normalize_suggest_language,
+    normalize_title_components,
+)
 from ..covers import (
     ALLOWED_CONTENT_TYPES,
     ALLOWED_EXT,
@@ -30,6 +43,7 @@ from ..covers import (
     save_cover_bytes,
     try_extract_and_save_cover,
 )
+from ..media import media_absolute_path
 from ..parse_docs import extract_text_from_file
 from ..tts_settings import get_active_tts
 from .. import tts
@@ -53,11 +67,25 @@ class PatchBookBody(BaseModel):
 
 class SplitBookBody(BaseModel):
     length: Literal["short", "standard", "long"] = "standard"
+    # Ordered components for segment titles. Omit for legacy heading-based titles.
+    title_components: list[Literal["book", "name", "part"]] | None = None
+    # Language for Part label + AI distinctive names.
+    title_language: Literal["en", "vi", "bilingual"] = "en"
+
+
+class SegmentTitlesBody(BaseModel):
+    title_components: list[Literal["book", "name", "part"]] | None = None
+    title_language: Literal["en", "vi", "bilingual"] = "en"
 
 
 class ReportBookBody(BaseModel):
     reason: Literal["copyright", "inappropriate", "spam", "misleading", "other"]
     details: str = ""
+
+
+class SuggestMetadataBody(BaseModel):
+    fields: list[Literal["category", "description"]] | None = None
+    language: Literal["en", "vi", "bilingual"] = "en"
 
 
 class SaveProgressBody(BaseModel):
@@ -107,6 +135,8 @@ def _book_list_item(
         "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
         "cover_url": cover_url_for(book.id, book.cover_path),
     }
+    if book.visibility in {"hidden", "removed"} and book.visibility_note:
+        item["visibility_note"] = book.visibility_note
     if publisher_name is not None:
         item["publisher_name"] = publisher_name
     if publisher_handle is not None:
@@ -329,18 +359,23 @@ async def create_book(
     file: UploadFile = File(...),
 ):
     settings = get_settings()
-    ensure_categories(db)
     title = title.strip()
     description = description.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title is required.")
+    categories = ensure_categories(db)
     category = _get_category(db, category_id.strip() or None)
+    if not category:
+        # Upload-first flow: category can be chosen later (AI suggest / edit).
+        category = next((item for item in categories if item.slug == "other"), None) or (
+            categories[0] if categories else None
+        )
     if not category:
         raise HTTPException(status_code=400, detail="Category is required.")
     if not file.filename:
         raise HTTPException(status_code=400, detail="A DOCX manuscript is required.")
 
-    original_name = file.filename
+    original_name = unquote(file.filename).strip() or file.filename
     ext = Path(original_name).suffix.lower()
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     if ext != DOCX_EXT and content_type != DOCX_MIME:
@@ -371,7 +406,12 @@ async def create_book(
     stored_path.write_bytes(content)
 
     try:
-        raw_text = extract_text_from_file(stored_path, original_name if original_name.lower().endswith(".docx") else f"{original_name}.docx")
+        raw_text = extract_text_from_file(
+            stored_path,
+            original_name if original_name.lower().endswith(".docx") else f"{original_name}.docx",
+            media_dir=upload_dir,
+            book_id=book_id,
+        )
     except Exception as exc:  # noqa: BLE001
         stored_path.unlink(missing_ok=True)
         logger.exception("Text extraction failed for %s", original_name)
@@ -491,7 +531,55 @@ def get_book_cover(
     return FileResponse(
         path,
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={
+            "Cache-Control": (
+                "public, max-age=86400"
+                if _is_publicly_visible(book)
+                else "private, no-store"
+            )
+        },
+    )
+
+
+@router.get("/{book_id}/media/{asset_filename}")
+def get_book_media(
+    book_id: str,
+    asset_filename: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+):
+    """Serve an inline figure extracted from the manuscript."""
+    if "/" in asset_filename or "\\" in asset_filename or ".." in asset_filename:
+        raise HTTPException(status_code=404, detail="Media not found.")
+    if not asset_filename.lower().endswith(".jpg"):
+        raise HTTPException(status_code=404, detail="Media not found.")
+    asset_id = asset_filename[:-4]
+    if not asset_id or not all(ch.isalnum() for ch in asset_id):
+        raise HTTPException(status_code=404, detail="Media not found.")
+
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Media not found.")
+
+    is_manager = _can_manage_book(book, user)
+    if not _is_publicly_visible(book) and not is_manager:
+        raise HTTPException(status_code=404, detail="Media not found.")
+
+    settings = get_settings()
+    path = media_absolute_path(settings.upload_dir, book.id, asset_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Media not found.")
+
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": (
+                "public, max-age=86400"
+                if _is_publicly_visible(book)
+                else "private, no-store"
+            )
+        },
     )
 
 
@@ -527,6 +615,37 @@ async def upload_book_cover(
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True, "cover_url": cover_url_for(book.id, cover_path)}
+
+
+@router.delete("/{book_id}")
+def discard_book(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_publisher)],
+):
+    """Permanently discard a draft book owned by the publisher."""
+    book = db.get(Book, book_id)
+    if not book or book.publisher_id != user.id:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    if book.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only draft books can be discarded. Withdraw from review or unpublish first.",
+        )
+
+    settings = get_settings()
+    upload_dir = Path(settings.upload_dir)
+    for relative in (book.source_path, book.cover_path):
+        if not relative:
+            continue
+        try:
+            (upload_dir / relative).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not delete upload file %s for book %s", relative, book_id)
+
+    db.delete(book)
+    db.commit()
+    return {"ok": True}
 
 
 @router.patch("/{book_id}")
@@ -569,8 +688,78 @@ def patch_book(
     return {"ok": True, "status": book.status}
 
 
+@router.post("/{book_id}/suggest-metadata")
+async def suggest_book_metadata(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_publisher)],
+    body: Annotated[SuggestMetadataBody | None, Body()] = None,
+):
+    book = db.get(Book, book_id)
+    if not book or book.publisher_id != user.id:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_editable(book)
+    if not (book.raw_text or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a manuscript before requesting AI suggestions.",
+        )
+
+    settings = get_settings()
+    if not gemini_available(settings):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "ai_unavailable", "detail": "AI suggestions are unavailable."},
+        )
+
+    fields = body.fields if body and body.fields else ["category", "description"]
+    want_category = "category" in fields
+    want_description = "description" in fields
+    if not want_category and not want_description:
+        raise HTTPException(status_code=400, detail="Choose at least one field to suggest.")
+
+    try:
+        suggestion = await suggest_metadata(
+            settings=settings,
+            title=book.title,
+            raw_text=book.raw_text or "",
+            want_category=want_category,
+            want_description=want_description,
+            language=body.language if body else "en",
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a manuscript before requesting AI suggestions.",
+        ) from None
+    except RuntimeError:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "ai_unavailable", "detail": "AI suggestions are unavailable."},
+        )
+
+    category_payload_result = None
+    if want_category and suggestion.get("category_slug"):
+        categories = ensure_categories(db)
+        match = next(
+            (item for item in categories if item.slug == suggestion["category_slug"]),
+            None,
+        )
+        category_payload_result = category_payload(match)
+
+    description = suggestion.get("description") if want_description else None
+    if description == "":
+        description = None
+
+    return {
+        "category": category_payload_result,
+        "description": description,
+        "ai_used": True,
+    }
+
+
 @router.post("/{book_id}/split")
-def split_book(
+async def split_book(
     book_id: str,
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User, Depends(require_publisher)],
@@ -590,11 +779,41 @@ def split_book(
             detail=f"Invalid length. Expected one of: {', '.join(SPLIT_PROFILES)}.",
         )
 
-    units = split_into_chapters(
+    title_components = None
+    if body is not None and "title_components" in body.model_fields_set:
+        title_components = normalize_title_components(body.title_components or [])
+
+    title_language = normalize_suggest_language(
+        body.title_language if body else "en"
+    )
+
+    drafts = split_into_chapter_drafts(
         book.raw_text or "", preserve_paragraphs=True, length=length
     )
-    if not units:
+    if not drafts:
         raise HTTPException(status_code=400, detail="Could not create chapters from this document.")
+
+    distinctive_names: list[str] | None = None
+    if title_components is not None and "name" in title_components:
+        settings = get_settings()
+        if gemini_available(settings):
+            try:
+                distinctive_names = await suggest_segment_names(
+                    settings=settings,
+                    book_title=book.title,
+                    segments=[{"sample": d.sample} for d in drafts],
+                    language=title_language,
+                )
+            except RuntimeError:
+                distinctive_names = None
+
+    units = materialize_split_chapters(
+        drafts,
+        book_title=book.title,
+        title_components=title_components,
+        distinctive_names=distinctive_names,
+        language=title_language,
+    )
 
     db.query(Chapter).filter(Chapter.book_id == book_id).delete()
     for index, unit in enumerate(units):
@@ -614,6 +833,85 @@ def split_book(
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True, "chapter_count": len(units)}
+
+
+def _chapter_fallback_name(chapter: Chapter, index: int) -> str:
+    title = (chapter.title or "").strip()
+    if " · " in title:
+        for piece in title.split(" · "):
+            piece = piece.strip()
+            if not piece:
+                continue
+            lower = piece.lower()
+            if lower.startswith("part ") or lower.startswith("phần "):
+                continue
+            return piece
+    for line in (chapter.content or "").splitlines():
+        cleaned = line.strip()
+        if cleaned and cleaned != "(Empty segment)":
+            return cleaned[:48]
+    return f"Segment {index + 1}"
+
+
+@router.post("/{book_id}/segment-titles")
+async def apply_segment_titles(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(require_publisher)],
+    body: Annotated[SegmentTitlesBody | None, Body()] = None,
+):
+    """Rename existing chapters using title format (+ optional AI names). Does not re-split."""
+    book = db.get(Book, book_id)
+    if not book or book.publisher_id != user.id:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    _assert_editable(book)
+
+    chapters = (
+        db.query(Chapter)
+        .filter(Chapter.book_id == book_id)
+        .order_by(Chapter.position.asc())
+        .all()
+    )
+    if not chapters:
+        raise HTTPException(status_code=400, detail="Split the manuscript into segments first.")
+
+    components = normalize_title_components(
+        (body.title_components if body else None) or ["part"]
+    )
+    assert components is not None
+    language = normalize_suggest_language(body.title_language if body else "en")
+
+    distinctive_names: list[str] | None = None
+    if "name" in components:
+        settings = get_settings()
+        if gemini_available(settings):
+            try:
+                distinctive_names = await suggest_segment_names(
+                    settings=settings,
+                    book_title=book.title,
+                    segments=[{"sample": (c.content or "")[:1200]} for c in chapters],
+                    language=language,
+                )
+            except RuntimeError:
+                distinctive_names = None
+
+    for index, chapter in enumerate(chapters):
+        name = ""
+        if distinctive_names and index < len(distinctive_names):
+            name = (distinctive_names[index] or "").strip()
+        if not name and "name" in components:
+            name = _chapter_fallback_name(chapter, index)
+        chapter.title = format_segment_title(
+            components=components,
+            book_title=book.title,
+            distinctive_name=name,
+            part_index=index + 1,
+            language=language,
+        )
+
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "chapter_count": len(chapters)}
 
 
 @router.post("/{book_id}/submit-review")

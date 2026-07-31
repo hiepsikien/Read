@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, parseInlineMarkdown, type ReadingProgress } from "@read/api-client";
+import { ApiError, parseContentBlocks, parseInlineMarkdown, type ReadingProgress } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getStoredToken } from "@/lib/api";
@@ -440,15 +440,37 @@ export function InAppReader({
           className="reader-serif mt-10 space-y-6 leading-[1.75]"
           style={{ fontSize: `${fontSize}px` }}
         >
-          {data.chapter.content.split(/\n\s*\n/).map((paragraph, index) => (
-            <p
-              key={index}
-              data-read-paragraph={index}
-              className="whitespace-pre-wrap"
-            >
-              <InlineMarkdown value={paragraph} />
-            </p>
-          ))}
+          {parseContentBlocks(data.chapter.content).map((block, index) =>
+            block.type === "figure" ? (
+              <figure
+                key={index}
+                data-read-paragraph={index}
+                className="-mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)]"
+              >
+                <ReaderFigure src={block.src} caption={block.caption} />
+                {block.caption ? (
+                  <figcaption
+                    className="mt-3 text-center italic"
+                    style={{
+                      color: palette.muted,
+                      fontSize: `${Math.max(13, fontSize * 0.85)}px`,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {block.caption}
+                  </figcaption>
+                ) : null}
+              </figure>
+            ) : (
+              <p
+                key={index}
+                data-read-paragraph={index}
+                className="whitespace-pre-wrap"
+              >
+                <InlineMarkdown value={block.value} />
+              </p>
+            )
+          )}
         </div>
 
         <nav className="mt-14 flex items-center justify-between gap-4 border-t pt-6"
@@ -533,6 +555,57 @@ export function InAppReader({
         </div>
       )}
     </div>
+  );
+}
+
+function ReaderFigure({ src, caption }: { src: string; caption: string }) {
+  const [uri, setUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    const api = createBrowserApi();
+    const absolute = api.mediaUrl(src);
+    if (!absolute) return;
+
+    void (async () => {
+      try {
+        const token = getStoredToken();
+        const response = await fetch(absolute, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!response.ok) return;
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setUri(objectUrl);
+      } catch {
+        // Leave empty; caption may still show.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [src]);
+
+  if (!uri) {
+    return (
+      <div
+        className="flex min-h-40 items-center justify-center rounded-md"
+        style={{ background: "color-mix(in srgb, currentColor 6%, transparent)" }}
+        aria-label={caption || "Illustration"}
+      />
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={uri}
+      alt={caption || "Illustration"}
+      className="max-h-[85vh] w-full rounded-md object-contain"
+    />
   );
 }
 

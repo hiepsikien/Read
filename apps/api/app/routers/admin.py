@@ -60,6 +60,22 @@ class AdminCatalogBody(BaseModel):
     category_id: str | None = None
 
 
+class PatchUserRoleBody(BaseModel):
+    role: Literal["reader", "publisher"]
+
+
+def _user_list_item(user: User, *, book_count: int = 0) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "handle": user.handle,
+        "role": user.role,
+        "created_at": user.created_at.isoformat(),
+        "book_count": book_count,
+    }
+
+
 def _report_count(db: Session, book_id: str, status: str | None = "open") -> int:
     query = select(func.count()).select_from(ContentReport).where(
         ContentReport.book_id == book_id
@@ -105,6 +121,7 @@ def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
         "category": category_payload(book.category),
         "source_filename": book.source_filename,
         "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
+        "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
         "created_at": book.created_at.isoformat(),
         "updated_at": book.updated_at.isoformat(),
         "review_note": book.review_note,
@@ -813,3 +830,75 @@ def update_tts_settings(
             "source": active.source,
         },
     }
+
+
+@router.get("/users")
+def list_users(
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+    q: str | None = None,
+    role: Literal["reader", "publisher", "admin"] | None = None,
+    limit: int = 50,
+):
+    limit = max(1, min(limit, 100))
+    query = db.query(User)
+    if role:
+        query = query.filter(User.role == role)
+    needle = (q or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        query = query.filter(
+            or_(
+                User.email.ilike(like),
+                User.name.ilike(like),
+                User.handle.ilike(like),
+            )
+        )
+    rows = query.order_by(User.created_at.desc()).limit(limit).all()
+    if not rows:
+        return {"users": []}
+    ids = [user.id for user in rows]
+    book_counts = dict(
+        db.execute(
+            select(Book.publisher_id, func.count())
+            .where(Book.publisher_id.in_(ids))
+            .group_by(Book.publisher_id)
+        ).all()
+    )
+    return {
+        "users": [
+            _user_list_item(user, book_count=int(book_counts.get(user.id) or 0))
+            for user in rows
+        ]
+    }
+
+
+@router.patch("/users/{user_id}")
+def patch_user_role(
+    user_id: str,
+    body: PatchUserRoleBody,
+    db: Annotated[Session, Depends(get_db)],
+    admin: Annotated[User, Depends(require_admin)],
+):
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target.role == "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Admin roles cannot be changed here. Use ADMIN_EMAILS.",
+        )
+    if target.id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot change your own role.")
+
+    target.role = body.role
+    db.commit()
+    db.refresh(target)
+    book_count = (
+        db.scalar(
+            select(func.count()).select_from(Book).where(Book.publisher_id == target.id)
+        )
+        or 0
+    )
+    return {"ok": True, "user": _user_list_item(target, book_count=int(book_count))}
+

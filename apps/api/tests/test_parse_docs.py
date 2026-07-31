@@ -1,5 +1,10 @@
+from io import BytesIO
+from pathlib import Path
+
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Inches
+from PIL import Image
 
 from app.parse_docs import _docx_paragraph_to_markdown, extract_text_from_file
 
@@ -13,6 +18,13 @@ def add_hyperlink(paragraph, text: str) -> None:
     run.append(text_node)
     hyperlink.append(run)
     paragraph._p.append(hyperlink)
+
+
+def _png_bytes(*, width: int = 320, height: int = 240, color=(40, 120, 200)) -> bytes:
+    image = Image.new("RGB", (width, height), color=color)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def test_docx_runs_become_inline_markdown():
@@ -85,3 +97,59 @@ def test_extract_includes_table_cells(tmp_path):
     text = extract_text_from_file(path, "with-table.docx")
 
     assert text.split("\n\n") == ["Body paragraph.", "First cell.", "Second cell."]
+
+
+def test_extract_keeps_images_and_caption_style(tmp_path):
+    png_path = tmp_path / "figure.png"
+    png_path.write_bytes(_png_bytes())
+
+    document = Document()
+    document.add_paragraph("Before the figure.")
+    picture = document.add_paragraph()
+    picture.add_run().add_picture(str(png_path), width=Inches(3))
+    caption = document.add_paragraph("Figure 1. The harbor at dawn.")
+    try:
+        caption.style = "Caption"
+    except KeyError:
+        # Minimal test docs may lack the built-in Caption style; set pStyle directly.
+        p_pr = caption._p.get_or_add_pPr()
+        style_el = p_pr.makeelement(qn("w:pStyle"), {qn("w:val"): "Caption"})
+        p_pr.append(style_el)
+    document.add_paragraph("After the figure.")
+
+    path = tmp_path / "with-figure.docx"
+    document.save(path)
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+
+    text = extract_text_from_file(
+        path,
+        "with-figure.docx",
+        media_dir=upload_dir,
+        book_id="bookfig1",
+    )
+    blocks = text.split("\n\n")
+
+    assert blocks[0] == "Before the figure."
+    assert blocks[1].startswith("![Figure 1. The harbor at dawn.](/api/books/bookfig1/media/")
+    assert blocks[1].endswith(".jpg)")
+    assert blocks[2] == "After the figure."
+
+    asset_name = blocks[1].rsplit("/", 1)[-1].rstrip(")")
+    assert (upload_dir / "media" / "bookfig1" / asset_name).is_file()
+
+
+def test_extract_without_media_dir_skips_images(tmp_path):
+    png_path = tmp_path / "figure.png"
+    png_path.write_bytes(_png_bytes())
+
+    document = Document()
+    document.add_paragraph("Only text survives.")
+    document.add_paragraph().add_run().add_picture(str(png_path), width=Inches(2))
+    path = tmp_path / "img.docx"
+    document.save(path)
+
+    text = extract_text_from_file(path, "img.docx")
+
+    assert text == "Only text survives."
+    assert "![" not in text

@@ -6,6 +6,8 @@ export type ReportReason = "copyright" | "inappropriate" | "spam" | "misleading"
 export type ReportStatus = "open" | "resolved" | "dismissed";
 
 export type SplitLength = "short" | "standard" | "long";
+export type SuggestLanguage = "en" | "vi" | "bilingual";
+export type SegmentTitleComponent = "book" | "name" | "part";
 
 export const SPLIT_LENGTH_OPTIONS: Array<{
   value: SplitLength;
@@ -16,6 +18,57 @@ export const SPLIT_LENGTH_OPTIONS: Array<{
   { value: "standard", label: "Standard", hint: "~10–15 min" },
   { value: "long", label: "Long", hint: "~20–25 min" },
 ];
+
+export const SUGGEST_LANGUAGE_OPTIONS: Array<{
+  value: SuggestLanguage;
+  label: string;
+  hint: string;
+}> = [
+  { value: "en", label: "English", hint: "EN" },
+  { value: "vi", label: "Tiếng Việt", hint: "VI" },
+  { value: "bilingual", label: "Bilingual", hint: "EN + VI" },
+];
+
+export const SEGMENT_TITLE_COMPONENT_OPTIONS: Array<{
+  value: SegmentTitleComponent;
+  label: string;
+  hint: string;
+}> = [
+  { value: "book", label: "Book title", hint: "Optional" },
+  { value: "name", label: "Distinctive name", hint: "AI" },
+  { value: "part", label: "Part", hint: "1, 2, 3…" },
+];
+
+export const DEFAULT_SEGMENT_TITLE_COMPONENTS: SegmentTitleComponent[] = [
+  "name",
+  "part",
+];
+
+export function formatSegmentTitlePreview(
+  components: SegmentTitleComponent[],
+  options?: {
+    bookTitle?: string;
+    distinctiveName?: string;
+    partIndex?: number;
+    language?: SuggestLanguage;
+  }
+): string {
+  const bookTitle = (options?.bookTitle || "").trim();
+  const name = (options?.distinctiveName || "Storm Rising").trim();
+  const partIndex = options?.partIndex ?? 1;
+  const language = options?.language ?? "en";
+  const part =
+    language === "vi" || language === "bilingual"
+      ? `Phần ${partIndex}`
+      : `Part ${partIndex}`;
+  const pieces: string[] = [];
+  for (const component of components) {
+    if (component === "book" && bookTitle) pieces.push(bookTitle);
+    if (component === "name" && name) pieces.push(name);
+    if (component === "part") pieces.push(part);
+  }
+  return pieces.join(" · ") || part;
+}
 
 export const HANDLE_MIN_LENGTH = 3;
 export const HANDLE_MAX_LENGTH = 30;
@@ -270,6 +323,10 @@ export interface InlineMarkdownToken {
   italic: boolean;
 }
 
+export type ContentBlock =
+  | { type: "text"; value: string }
+  | { type: "figure"; src: string; caption: string };
+
 function isEscaped(value: string, index: number) {
   let slashes = 0;
   for (let i = index - 1; i >= 0 && value[i] === "\\"; i -= 1) {
@@ -289,6 +346,46 @@ function findClosingMarker(value: string, marker: string, start: number) {
 
 function unescapeInlineMarkdown(value: string) {
   return value.replace(/\\([\\*])/g, "$1");
+}
+
+function unescapeCaption(value: string) {
+  return value.replace(/\\([\\\[\]])/g, "$1");
+}
+
+const FIGURE_BLOCK = /^!\[((?:\\.|[^\]])*)\]\(([^)\s]+)\)$/;
+
+/** Word/DOCX often stores the asset filename as drawing name; hide those as captions. */
+export function isFilenameLikeCaption(caption: string): boolean {
+  const value = caption.trim();
+  if (!value) return true;
+  if (/\.(jpe?g|png|webp|gif|bmp|tiff?)$/i.test(value)) return true;
+  if (/^(?:picture|image|photo|img|hình(?:\s*ảnh)?|ảnh)[\s._-]?\d*$/i.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Split chapter content into text paragraphs and figure blocks.
+ * Figures are emitted by the DOCX importer as `![caption](/api/books/.../media/....jpg)`.
+ */
+export function parseContentBlocks(content: string): ContentBlock[] {
+  return content
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
+    .filter(Boolean)
+    .map((paragraph) => {
+      const match = FIGURE_BLOCK.exec(paragraph);
+      if (match) {
+        const raw = unescapeCaption(match[1] ?? "");
+        return {
+          type: "figure" as const,
+          caption: isFilenameLikeCaption(raw) ? "" : raw,
+          src: match[2] ?? "",
+        };
+      }
+      return { type: "text" as const, value: paragraph };
+    });
 }
 
 /**
@@ -467,10 +564,24 @@ export function createApiClient(options: ApiClientOptions) {
         body: form,
       });
     },
-    bookCoverUrl(coverUrl: string | null | undefined) {
+    bookCoverUrl(
+      coverUrl: string | null | undefined,
+      options?: { cacheKey?: string | number | null }
+    ) {
       if (!coverUrl) return null;
-      if (coverUrl.startsWith("http://") || coverUrl.startsWith("https://")) return coverUrl;
-      return `${baseUrl}${coverUrl}`;
+      const absolute =
+        coverUrl.startsWith("http://") || coverUrl.startsWith("https://")
+          ? coverUrl
+          : `${baseUrl}${coverUrl}`;
+      if (options?.cacheKey == null || options.cacheKey === "") return absolute;
+      const sep = absolute.includes("?") ? "&" : "?";
+      return `${absolute}${sep}v=${encodeURIComponent(String(options.cacheKey))}`;
+    },
+    /** Resolve a relative or absolute manuscript figure URL against the API base. */
+    mediaUrl(src: string | null | undefined) {
+      if (!src) return null;
+      if (src.startsWith("http://") || src.startsWith("https://")) return src;
+      return `${baseUrl}${src.startsWith("/") ? src : `/${src}`}`;
     },
     updateBook(
       id: string,
@@ -487,11 +598,64 @@ export function createApiClient(options: ApiClientOptions) {
         body: JSON.stringify(body),
       });
     },
-    splitBook(id: string, options?: { length?: SplitLength }) {
+    discardBook(id: string) {
+      return request<{ ok: boolean }>(`/api/books/${id}`, {
+        method: "DELETE",
+      });
+    },
+    suggestBookMetadata(
+      id: string,
+      options?: {
+        fields?: Array<"category" | "description">;
+        language?: SuggestLanguage;
+      }
+    ) {
+      return request<{
+        category: Category | null;
+        description: string | null;
+        ai_used: boolean;
+      }>(`/api/books/${id}/suggest-metadata`, {
+        method: "POST",
+        body: JSON.stringify({
+          fields: options?.fields,
+          language: options?.language ?? "en",
+        }),
+      });
+    },
+    splitBook(
+      id: string,
+      options?: {
+        length?: SplitLength;
+        title_components?: SegmentTitleComponent[];
+        title_language?: SuggestLanguage;
+      }
+    ) {
       return request<{ ok: boolean; chapter_count: number }>(`/api/books/${id}/split`, {
         method: "POST",
-        body: JSON.stringify({ length: options?.length ?? "standard" }),
+        body: JSON.stringify({
+          length: options?.length ?? "standard",
+          title_components: options?.title_components,
+          title_language: options?.title_language ?? "en",
+        }),
       });
+    },
+    nameBookSegments(
+      id: string,
+      options?: {
+        title_components?: SegmentTitleComponent[];
+        title_language?: SuggestLanguage;
+      }
+    ) {
+      return request<{ ok: boolean; chapter_count: number }>(
+        `/api/books/${id}/segment-titles`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            title_components: options?.title_components ?? ["part"],
+            title_language: options?.title_language ?? "en",
+          }),
+        }
+      );
     },
     submitReview(id: string) {
       return request<{ ok: boolean; status: BookStatus }>(`/api/books/${id}/submit-review`, {
@@ -739,6 +903,45 @@ export function createApiClient(options: ApiClientOptions) {
       return request<{ ok: boolean; active: TtsActiveSettings }>("/api/admin/settings/tts", {
         method: "PUT",
         body: JSON.stringify(body),
+      });
+    },
+    adminListUsers(options?: {
+      q?: string;
+      role?: UserRole;
+      limit?: number;
+    }) {
+      const params = new URLSearchParams();
+      if (options?.q) params.set("q", options.q);
+      if (options?.role) params.set("role", options.role);
+      if (options?.limit != null) params.set("limit", String(options.limit));
+      const query = params.toString();
+      return request<{
+        users: Array<{
+          id: string;
+          email: string;
+          name: string;
+          handle: string | null;
+          role: UserRole;
+          created_at: string;
+          book_count: number;
+        }>;
+      }>(`/api/admin/users${query ? `?${query}` : ""}`);
+    },
+    adminUpdateUserRole(id: string, role: "reader" | "publisher") {
+      return request<{
+        ok: boolean;
+        user: {
+          id: string;
+          email: string;
+          name: string;
+          handle: string | null;
+          role: UserRole;
+          created_at: string;
+          book_count: number;
+        };
+      }>(`/api/admin/users/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
       });
     },
     ttsPreviewUrl(options: {

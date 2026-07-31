@@ -17,6 +17,7 @@
     "expo-audio": "~1.1.1",
     "expo-constants": "~18.0.13",
     "expo-document-picker": "~14.0.8",
+    "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.8",
     "expo-linking": "~8.0.12",
     "expo-router": "~6.0.24",

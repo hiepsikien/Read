@@ -18,6 +18,9 @@ MIN_LONG_EDGE = 600
 MAX_LONG_EDGE = 1600
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 JPEG_QUALITY = 85
+# Portrait book cover width:height
+COVER_ASPECT_W = 3
+COVER_ASPECT_H = 4
 ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/jpg",
@@ -41,6 +44,26 @@ def cover_url_for(book_id: str, cover_path: str | None) -> str | None:
     return f"/api/books/{book_id}/cover"
 
 
+def crop_to_cover_aspect(image: Image.Image) -> Image.Image:
+    """Center-crop to portrait 3×4 (width:height)."""
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return image
+    target = COVER_ASPECT_W / COVER_ASPECT_H
+    current = width / height
+    if abs(current - target) < 0.01:
+        return image
+    if current > target:
+        # Too wide — trim left/right.
+        new_width = max(1, round(height * target))
+        left = max(0, (width - new_width) // 2)
+        return image.crop((left, 0, left + new_width, height))
+    # Too tall (or square) — trim top/bottom.
+    new_height = max(1, round(width / target))
+    top = max(0, (height - new_height) // 2)
+    return image.crop((0, top, width, top + new_height))
+
+
 def normalize_cover_image(raw: bytes) -> bytes:
     """Decode any supported raster image and re-encode as JPEG under size caps."""
     if len(raw) > MAX_UPLOAD_BYTES:
@@ -56,6 +79,8 @@ def normalize_cover_image(raw: bytes) -> bytes:
     elif image.mode == "L":
         image = image.convert("RGB")
 
+    image = crop_to_cover_aspect(image)
+
     width, height = image.size
     long_edge = max(width, height)
     if long_edge > MAX_LONG_EDGE:
@@ -68,6 +93,7 @@ def normalize_cover_image(raw: bytes) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
     return buffer.getvalue()
+
 
 
 def save_cover_bytes(upload_dir: str | Path, book_id: str, raw: bytes) -> str:

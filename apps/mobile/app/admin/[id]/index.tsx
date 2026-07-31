@@ -18,7 +18,7 @@ import {
 import { BookCover } from "../../../components/BookCover";
 import { FormScroll } from "../../../components/FormScroll";
 import { useAuth } from "../../../lib/auth";
-import { colors, formatPrice } from "../../../lib/theme";
+import { colors, coverHeightForWidth, formatPrice } from "../../../lib/theme";
 
 export default function AdminReviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -149,9 +149,9 @@ export default function AdminReviewScreen() {
           title={book.title}
           categorySlug={book.category?.slug}
           categoryLabel={book.category?.label}
-          coverUrl={book.status === "published" ? api.bookCoverUrl(book.cover_url) : null}
+          coverUrl={api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at })}
           width={100}
-          height={150}
+          height={coverHeightForWidth(100)}
         />
         <View style={styles.heroCopy}>
           <Text style={styles.title}>{book.title}</Text>
@@ -391,6 +391,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sage,
     borderRadius: 10,
     paddingVertical: 13,
+    paddingHorizontal: 18,
     alignItems: "center",
   },
   actionText: { color: "#fff", fontWeight: "600" },

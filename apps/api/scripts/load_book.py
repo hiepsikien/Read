@@ -30,6 +30,7 @@ from app.config import get_settings  # noqa: E402
 from app.covers import try_extract_and_save_cover  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.glossary import aliases_to_storage, parse_glossary_docx  # noqa: E402
+from app.media import clear_book_media  # noqa: E402
 from app.models import Book, Chapter, ExplainCache, GlossaryEntry, User  # noqa: E402
 from app.parse_docs import extract_text_from_file  # noqa: E402
 
@@ -109,7 +110,13 @@ def load_manuscript(
     stored_name = f"{book.id}.docx"
     (upload_dir / stored_name).write_bytes(manuscript.read_bytes())
 
-    raw_text = extract_text_from_file(upload_dir / stored_name, manuscript.name)
+    clear_book_media(upload_dir, book.id)
+    raw_text = extract_text_from_file(
+        upload_dir / stored_name,
+        manuscript.name,
+        media_dir=upload_dir,
+        book_id=book.id,
+    )
 
     book.category_id = category.id
     book.description = description

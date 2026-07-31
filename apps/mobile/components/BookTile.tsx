@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { BookListItem } from "@read/api-client";
 import { useAuth } from "../lib/auth";
-import { colors, formatPrice, radii, space } from "../lib/theme";
+import { colors, coverHeightForWidth, formatPrice, radii, space } from "../lib/theme";
 import { BookCover } from "./BookCover";
 
 type Props = {
@@ -13,8 +13,8 @@ type Props = {
 
 export function BookTile({ book, width, onPress, onPressPublisher }: Props) {
   const { api } = useAuth();
-  const coverHeight = Math.round(width * 1.45);
-  const coverUrl = api.bookCoverUrl(book.cover_url);
+  const coverHeight = coverHeightForWidth(width);
+  const coverUrl = api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at });
 
   return (
     <View style={[styles.tile, { width }]}>

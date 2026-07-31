@@ -8,9 +8,8 @@ import logging
 import re
 from typing import Any
 
-import httpx
-
 from .config import Settings
+from .gemini import gemini_available, generate_gemini_text
 from .glossary import aliases_from_storage
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,9 @@ def paragraph_window(content: str, paragraph_index: int | None) -> str:
         re.sub(r"\s+", " ", paragraph.replace("\n", " ")).strip()
         for paragraph in paragraphs[start:end]
     )
+    # Prefer caption text over raw figure markdown for the model.
+    chunk = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", chunk)
+    chunk = re.sub(r"\s+", " ", chunk).strip()
     if len(chunk) > MAX_PARAGRAPH_CHARS:
         return chunk[: MAX_PARAGRAPH_CHARS - 1].rstrip() + "…"
     return chunk
@@ -138,9 +140,7 @@ async def maybe_generate_ai_context(
 ) -> str:
     if not need_context and book_note:
         return ""
-    if not settings.ai_explain_enabled:
-        return ""
-    if not settings.gemini_api_key.strip():
+    if not gemini_available(settings):
         return ""
 
     system = (
@@ -157,25 +157,14 @@ async def maybe_generate_ai_context(
         user_parts.append(f"Passage:\n{passage[:MAX_PARAGRAPH_CHARS]}")
     user_parts.append("Write the brief context now.")
 
-    url = (
-        f"{settings.gemini_base_url.rstrip('/')}"
-        f"/models/{settings.gemini_model}:generateContent"
-    )
-    headers = {
-        "x-goog-api-key": settings.gemini_api_key.strip(),
-        "Content-Type": "application/json",
-    }
-    body = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": "\n\n".join(user_parts)}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300},
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, headers=headers, json=body)
-            response.raise_for_status()
-            text = _gemini_text(response.json())
+        text = await generate_gemini_text(
+            settings=settings,
+            system=system,
+            user="\n\n".join(user_parts),
+            temperature=0.2,
+            max_output_tokens=300,
+        )
     except Exception:  # noqa: BLE001
         logger.exception("Gemini explain call failed")
         return ""
@@ -183,20 +172,6 @@ async def maybe_generate_ai_context(
     if len(text) > MAX_AI_CONTEXT_CHARS:
         text = text[: MAX_AI_CONTEXT_CHARS - 1].rstrip() + "…"
     return text
-
-
-def _gemini_text(data: dict) -> str:
-    """Join answer parts, skipping the thought parts that 3.x models may emit."""
-    candidates = data.get("candidates") or []
-    if not candidates:
-        return ""
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    chunks = [
-        part["text"]
-        for part in parts
-        if isinstance(part, dict) and part.get("text") and not part.get("thought")
-    ]
-    return "\n".join(chunks).strip()
 
 
 def dumps_card(card: dict) -> str:
