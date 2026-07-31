@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -25,6 +35,7 @@ class User(Base):
         foreign_keys="Book.publisher_id",
     )
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="user")
+    reading_progress: Mapped[list["ReadingProgress"]] = relationship(back_populates="user")
 
     __table_args__ = (
         CheckConstraint("role IN ('reader', 'publisher', 'admin')", name="ck_users_role"),
@@ -85,6 +96,9 @@ class Book(Base):
     category: Mapped[Category | None] = relationship(back_populates="books")
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="book")
+    reading_progress: Mapped[list["ReadingProgress"]] = relationship(
+        back_populates="book", cascade="all, delete-orphan"
+    )
     glossary_entries: Mapped[list["GlossaryEntry"]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
     )
@@ -127,6 +141,27 @@ class Purchase(Base):
 
     user: Mapped[User] = relationship(back_populates="purchases")
     book: Mapped[Book] = relationship(back_populates="purchases")
+
+
+class ReadingProgress(Base):
+    __tablename__ = "reading_progress"
+    __table_args__ = (
+        UniqueConstraint("user_id", "book_id", name="uq_reading_progress_user_book"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    book_id: Mapped[str] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    chapter_id: Mapped[str | None] = mapped_column(
+        ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True
+    )
+    chapter_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paragraph_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scroll_fraction: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="reading_progress")
+    book: Mapped[Book] = relationship(back_populates="reading_progress")
 
 
 class ModerationEvent(Base):

@@ -14,16 +14,19 @@ import {
   ApiError,
   type BookDetail,
   type ChapterListItem,
+  type ReadingProgress,
   type ReportReason,
 } from "@read/api-client";
 import { BookCover } from "../../components/BookCover";
 import { useAuth } from "../../lib/auth";
+import { readLocalProgress } from "../../lib/reading-progress";
 import { colors, estimateMinutes, formatPrice, radii, shadows, space } from "../../lib/theme";
 
 type Access = {
   owned: boolean;
   isPublisherOwner: boolean;
   previewChapterId: string | null;
+  progress?: ReadingProgress | null;
 };
 
 export default function BookDetailScreen() {
@@ -33,6 +36,7 @@ export default function BookDetailScreen() {
   const [book, setBook] = useState<BookDetail | null>(null);
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [access, setAccess] = useState<Access | null>(null);
+  const [resumeChapterId, setResumeChapterId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -49,6 +53,12 @@ export default function BookDetailScreen() {
       setBook(data.book);
       setChapters(data.chapters);
       setAccess(data.access);
+      if (data.access.progress?.chapter_id) {
+        setResumeChapterId(data.access.progress.chapter_id);
+      } else {
+        const local = await readLocalProgress(id);
+        setResumeChapterId(local?.chapterId ?? null);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
     } finally {
@@ -119,13 +129,15 @@ export default function BookDetailScreen() {
 
   const owned = access.owned;
   const firstChapter = chapters[0];
+  const targetChapterId = resumeChapterId ?? firstChapter?.id ?? null;
+  const hasProgress = Boolean(resumeChapterId);
   const totalWords = chapters.reduce((sum, c) => sum + c.word_count, 0);
   const coverUrl = api.bookCoverUrl(book.cover_url);
-  const readLabel = owned
-    ? firstChapter
-      ? "Start reading"
-      : "No chapters yet"
-    : "Read chapter 1 free";
+  const readLabel = !firstChapter
+    ? "No chapters yet"
+    : hasProgress || owned
+      ? "Continue reading"
+      : "Read chapter 1 free";
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -171,10 +183,10 @@ export default function BookDetailScreen() {
       {book.description ? <Text style={styles.description}>{book.description}</Text> : null}
 
       <View style={styles.actions}>
-        {firstChapter ? (
+        {targetChapterId ? (
           <Pressable
             style={styles.primaryBtn}
-            onPress={() => router.push(`/read/${book.id}/${firstChapter.id}`)}
+            onPress={() => router.push(`/read/${book.id}/${targetChapterId}`)}
           >
             <Text style={styles.primaryBtnText}>{readLabel}</Text>
           </Pressable>

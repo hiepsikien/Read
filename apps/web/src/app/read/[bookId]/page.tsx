@@ -9,11 +9,12 @@ export default async function ReadBookIndexPage({ params }: Props) {
   const { bookId } = await params;
   try {
     const api = await createServerApi();
-    const { chapters } = await api.getBook(bookId);
+    const { chapters, access } = await api.getBook(bookId);
     if (!chapters[0]) {
       redirect(`/books/${bookId}`);
     }
-    redirect(`/read/${bookId}/${chapters[0].id}`);
+    const chapterId = access.progress?.chapter_id ?? chapters[0].id;
+    redirect(`/read/${bookId}/${chapterId}`);
   } catch {
     redirect(`/books/${bookId}`);
   }

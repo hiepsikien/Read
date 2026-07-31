@@ -115,6 +115,13 @@ export interface ChapterListItem {
   content_preview?: string;
 }
 
+export interface ReadingProgress {
+  chapter_id: string;
+  paragraph_index: number;
+  scroll_fraction: number;
+  updated_at?: string;
+}
+
 export interface ChapterAudioSegment {
   index: number;
   paragraph_index: number;
@@ -444,6 +451,7 @@ export function createApiClient(options: ApiClientOptions) {
           owned: boolean;
           isPublisherOwner: boolean;
           previewChapterId: string | null;
+          progress?: ReadingProgress | null;
         };
       }>(`/api/books/${id}`);
     },
@@ -526,7 +534,24 @@ export function createApiClient(options: ApiClientOptions) {
           word_count: number;
         };
         chapters: ChapterListItem[];
+        progress?: ReadingProgress | null;
       }>(`/api/books/${bookId}/chapters/${chapterId}`);
+    },
+    saveReadingProgress(
+      bookId: string,
+      body: {
+        chapter_id: string;
+        paragraph_index?: number;
+        scroll_fraction?: number;
+      }
+    ) {
+      return request<{ ok: boolean; progress: ReadingProgress }>(
+        `/api/books/${bookId}/progress`,
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+        }
+      );
     },
     listGlossary(bookId: string, options?: { episode?: string; compact?: boolean }) {
       const params = new URLSearchParams();

@@ -18,11 +18,11 @@ import {
   useLocalSearchParams,
   useRouter,
 } from "expo-router";
-import * as SecureStore from "expo-secure-store";
 import {
   ApiError,
   parseInlineMarkdown,
   type ChapterListItem,
+  type ReadingProgress,
 } from "@read/api-client";
 import { BrandLogo } from "../../../components/BrandLogo";
 import { ExplainSheet } from "../../../components/ExplainSheet";
@@ -31,6 +31,10 @@ import {
   FONT_SIZE_STEP,
   useReaderPreferences,
 } from "../../../lib/reader-preferences";
+import {
+  readLocalProgress,
+  writeLocalProgress,
+} from "../../../lib/reading-progress";
 import { useIosNarration } from "../../../lib/use-ios-narration";
 import { VoicePickerModal } from "../../../lib/voice-picker";
 import {
@@ -67,19 +71,81 @@ export default function ReaderScreen() {
   const contentRef = useRef<ViewType>(null);
   const paragraphRefs = useRef<Array<ViewType | null>>([]);
   const scrollYRef = useRef(0);
+  const contentHeightRef = useRef(0);
   const viewportHeightRef = useRef(0);
   // Follow the spoken paragraph until the reader manually scrolls away.
   const followNarrationRef = useRef(true);
+  const restoredKeyRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestProgressRef = useRef({ paragraphIndex: 0, scrollFraction: 0 });
+  const resumeProgressRef = useRef<ReadingProgress | null>(null);
+  const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
+
+  const persistProgress = useCallback(
+    async (paragraphIndex: number, scrollFraction: number) => {
+      if (!bookId || !chapterId) return;
+      latestProgressRef.current = { paragraphIndex, scrollFraction };
+      await writeLocalProgress(bookId, {
+        chapterId,
+        paragraphIndex,
+        scrollFraction,
+      });
+      if (!user) return;
+      try {
+        await api.saveReadingProgress(bookId, {
+          chapter_id: chapterId,
+          paragraph_index: paragraphIndex,
+          scroll_fraction: scrollFraction,
+        });
+      } catch {
+        // Best-effort sync; local mirror already updated.
+      }
+    },
+    [api, bookId, chapterId, user]
+  );
 
   const load = useCallback(async () => {
     if (!bookId || !chapterId) return;
     setLoading(true);
     setError("");
     setLocked(false);
+    setResumeProgress(null);
+    resumeProgressRef.current = null;
+    restoredKeyRef.current = null;
     try {
       const payload = await api.getChapter(bookId, chapterId);
       setData(payload);
-      await SecureStore.setItemAsync(`read_pos_${bookId}`, chapterId);
+      const server =
+        payload.progress?.chapter_id === chapterId ? payload.progress : null;
+      const local = await readLocalProgress(bookId);
+      const localProgress =
+        local?.chapterId === chapterId
+          ? {
+              chapter_id: local.chapterId,
+              paragraph_index: local.paragraphIndex,
+              scroll_fraction: local.scrollFraction,
+            }
+          : null;
+      const resolved = server ?? localProgress;
+      setResumeProgress(resolved);
+      resumeProgressRef.current = resolved;
+      const paragraphIndex = resolved?.paragraph_index ?? 0;
+      const scrollFraction = resolved?.scroll_fraction ?? 0;
+      latestProgressRef.current = { paragraphIndex, scrollFraction };
+      await writeLocalProgress(bookId, {
+        chapterId,
+        paragraphIndex,
+        scrollFraction,
+      });
+      if (user) {
+        void api
+          .saveReadingProgress(bookId, {
+            chapter_id: chapterId,
+            paragraph_index: paragraphIndex,
+            scroll_fraction: scrollFraction,
+          })
+          .catch(() => undefined);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 402) {
         const body = err.body as { book?: { price_cents?: number } };
@@ -92,12 +158,20 @@ export default function ReaderScreen() {
     } finally {
       setLoading(false);
     }
-  }, [api, bookId, chapterId]);
+  }, [api, bookId, chapterId, user]);
 
   useFocusEffect(
     useCallback(() => {
       void load();
-    }, [load])
+      return () => {
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        const latest = latestProgressRef.current;
+        void persistProgress(latest.paragraphIndex, latest.scrollFraction);
+      };
+    }, [load, persistProgress])
   );
 
   async function buy() {
@@ -176,16 +250,84 @@ export default function ReaderScreen() {
     );
   }, []);
 
+  const restoreReadingPosition = useCallback(() => {
+    if (!bookId || !chapterId || !data) return;
+    const restoreKey = `${bookId}:${chapterId}`;
+    if (restoredKeyRef.current === restoreKey) return;
+    const resume = resumeProgressRef.current;
+    const paragraphIndex = resume?.paragraph_index ?? 0;
+    const scrollFraction = resume?.scroll_fraction ?? 0;
+
+    const finish = () => {
+      restoredKeyRef.current = restoreKey;
+    };
+
+    if (paragraphIndex > 0) {
+      const paragraph = paragraphRefs.current[paragraphIndex];
+      const content = contentRef.current;
+      if (paragraph && content) {
+        paragraph.measureLayout(
+          content,
+          (_x, y) => {
+            scrollRef.current?.scrollTo({
+              y: Math.max(0, y - 24),
+              animated: false,
+            });
+            finish();
+          },
+          () => {
+            if (scrollFraction > 0 && contentHeightRef.current > viewportHeightRef.current) {
+              const max = contentHeightRef.current - viewportHeightRef.current;
+              scrollRef.current?.scrollTo({
+                y: Math.max(0, scrollFraction * max),
+                animated: false,
+              });
+            }
+            finish();
+          }
+        );
+        return;
+      }
+    }
+
+    if (scrollFraction > 0 && contentHeightRef.current > viewportHeightRef.current) {
+      const max = contentHeightRef.current - viewportHeightRef.current;
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, scrollFraction * max),
+        animated: false,
+      });
+    }
+    finish();
+  }, [bookId, chapterId, data]);
+
   useEffect(() => {
     if (speech.playbackState !== "speaking") return;
     if (speech.currentParagraph === null) return;
     scrollSpokenParagraphIntoView(speech.currentParagraph);
   }, [speech.currentParagraph, speech.playbackState, scrollSpokenParagraphIntoView]);
 
-  const onReaderScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    scrollYRef.current = event.nativeEvent.contentOffset.y;
-    viewportHeightRef.current = event.nativeEvent.layoutMeasurement.height;
-  }, []);
+  const onReaderScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+      scrollYRef.current = contentOffset.y;
+      viewportHeightRef.current = layoutMeasurement.height;
+      contentHeightRef.current = contentSize.height;
+      const max = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const scrollFraction = max > 0 ? Math.min(1, Math.max(0, contentOffset.y / max)) : 0;
+      // Approximate the top-most visible paragraph from scroll fraction.
+      const paragraphCount = Math.max(1, paragraphRefs.current.length);
+      const paragraphIndex = Math.min(
+        paragraphCount - 1,
+        Math.max(0, Math.floor(scrollFraction * paragraphCount))
+      );
+      latestProgressRef.current = { paragraphIndex, scrollFraction };
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        void persistProgress(paragraphIndex, scrollFraction);
+      }, 1500);
+    },
+    [persistProgress]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -194,6 +336,13 @@ export default function ReaderScreen() {
       };
     }, [speech.stop])
   );
+
+  useEffect(() => {
+    if (!data || loading) return;
+    // Give paragraph refs a tick to attach before measuring.
+    const timer = setTimeout(() => restoreReadingPosition(), 50);
+    return () => clearTimeout(timer);
+  }, [data, loading, resumeProgress, restoreReadingPosition]);
 
   const palette = readerThemes[theme];
   const brandTone = theme === "ink" ? "white" : "color";
@@ -358,6 +507,13 @@ export default function ReaderScreen() {
         contentContainerStyle={styles.readerBody}
         onScroll={onReaderScroll}
         scrollEventThrottle={16}
+        onContentSizeChange={(_width, height) => {
+          contentHeightRef.current = height;
+          restoreReadingPosition();
+        }}
+        onLayout={(event) => {
+          viewportHeightRef.current = event.nativeEvent.layout.height;
+        }}
         onScrollBeginDrag={() => {
           followNarrationRef.current = false;
         }}

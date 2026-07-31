@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ContinueReadingButton } from "@/components/ContinueReadingButton";
 import { PurchaseButton } from "@/components/PurchaseButton";
 import { createServerApi } from "@/lib/api-server";
 import { estimateMinutes, formatPrice } from "@/lib/format";
@@ -62,12 +63,12 @@ export default async function BookDetailPage({ params }: Props) {
 
       <div className="mt-8 flex flex-wrap gap-3">
         {firstChapter && (
-          <Link
-            href={`/read/${book.id}/${firstChapter.id}`}
-            className="rounded-lg bg-[var(--sage)] px-5 py-2.5 font-medium text-white transition hover:bg-[var(--sage-deep)]"
-          >
-            {owned ? "Continue reading" : "Read chapter 1 free"}
-          </Link>
+          <ContinueReadingButton
+            bookId={book.id}
+            firstChapterId={firstChapter.id}
+            serverProgress={access.progress}
+            owned={owned}
+          />
         )}
         {!owned && book.price_cents > 0 && (
           <PurchaseButton bookId={book.id} priceCents={book.price_cents} />

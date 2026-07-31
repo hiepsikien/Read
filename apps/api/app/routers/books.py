@@ -20,7 +20,7 @@ from ..chapters import SPLIT_PROFILES, count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
 from ..legal import require_current_legal_acceptance
-from ..models import Book, Category, Chapter, ContentReport, Purchase, User
+from ..models import Book, Category, Chapter, ContentReport, Purchase, ReadingProgress, User
 from ..moderation import record_moderation_event
 from ..covers import (
     ALLOWED_CONTENT_TYPES,
@@ -58,6 +58,12 @@ class SplitBookBody(BaseModel):
 class ReportBookBody(BaseModel):
     reason: Literal["copyright", "inappropriate", "spam", "misleading", "other"]
     details: str = ""
+
+
+class SaveProgressBody(BaseModel):
+    chapter_id: str
+    paragraph_index: int = 0
+    scroll_fraction: float = 0.0
 
 
 def _is_publicly_visible(book: Book) -> bool:
@@ -178,6 +184,65 @@ def _assert_editable(book: Book) -> None:
             status_code=400,
             detail="This book is locked while under review or published. Rejected and draft books can be edited.",
         )
+
+
+def _resolve_progress_chapter(
+    book: Book, progress: ReadingProgress
+) -> Chapter | None:
+    chapters = sorted(book.chapters, key=lambda c: c.position)
+    if not chapters:
+        return None
+    if progress.chapter_id:
+        match = next((c for c in chapters if c.id == progress.chapter_id), None)
+        if match:
+            return match
+    if progress.chapter_position is not None:
+        by_position = next(
+            (c for c in chapters if c.position == progress.chapter_position), None
+        )
+        if by_position:
+            return by_position
+        # Clamp to the nearest existing chapter when the saved position is gone.
+        if progress.chapter_position < chapters[0].position:
+            return chapters[0]
+        if progress.chapter_position > chapters[-1].position:
+            return chapters[-1]
+    return None
+
+
+def _progress_payload(
+    db: Session,
+    *,
+    book: Book,
+    user: User | None,
+    purchased: bool,
+    is_manager: bool,
+) -> dict | None:
+    if not user:
+        return None
+    row = (
+        db.query(ReadingProgress)
+        .filter(ReadingProgress.user_id == user.id, ReadingProgress.book_id == book.id)
+        .one_or_none()
+    )
+    if not row:
+        return None
+    chapter = _resolve_progress_chapter(book, row)
+    if not chapter:
+        return None
+    if not is_manager and not can_access_chapter(
+        book=book,
+        chapter=chapter,
+        user_id=user.id,
+        purchased=purchased,
+    ):
+        return None
+    return {
+        "chapter_id": chapter.id,
+        "paragraph_index": max(0, int(row.paragraph_index or 0)),
+        "scroll_fraction": max(0.0, min(1.0, float(row.scroll_fraction or 0.0))),
+        "updated_at": row.updated_at.isoformat(),
+    }
 
 
 def _get_category(db: Session, category_id: str | None) -> Category | None:
@@ -390,6 +455,13 @@ def get_book(
             "owned": _owned(book, user, purchased),
             "isPublisherOwner": bool(user and user.id == book.publisher_id),
             "previewChapterId": chapters[0].id if chapters else None,
+            "progress": _progress_payload(
+                db,
+                book=book,
+                user=user,
+                purchased=purchased,
+                is_manager=is_manager,
+            ),
         },
     }
 
@@ -676,6 +748,82 @@ def report_book(
     return {"ok": True, "report_id": report.id}
 
 
+@router.put("/{book_id}/progress")
+def save_reading_progress(
+    book_id: str,
+    body: SaveProgressBody,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.chapters))
+        .filter(Book.id == book_id)
+        .one_or_none()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    is_manager = _can_manage_book(book, user)
+    if not _is_publicly_visible(book) and not is_manager:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    chapter = next((c for c in book.chapters if c.id == body.chapter_id), None)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found.")
+
+    purchased = _has_purchase(db, user.id, book.id)
+    if not is_manager and not can_access_chapter(
+        book=book,
+        chapter=chapter,
+        user_id=user.id,
+        purchased=purchased,
+    ):
+        raise HTTPException(
+            status_code=402,
+            detail="Purchase required to save progress for this chapter.",
+        )
+
+    paragraph_index = max(0, int(body.paragraph_index))
+    scroll_fraction = max(0.0, min(1.0, float(body.scroll_fraction)))
+    now = datetime.now(timezone.utc)
+
+    row = (
+        db.query(ReadingProgress)
+        .filter(ReadingProgress.user_id == user.id, ReadingProgress.book_id == book.id)
+        .one_or_none()
+    )
+    if row:
+        row.chapter_id = chapter.id
+        row.chapter_position = chapter.position
+        row.paragraph_index = paragraph_index
+        row.scroll_fraction = scroll_fraction
+        row.updated_at = now
+    else:
+        row = ReadingProgress(
+            id=generate(),
+            user_id=user.id,
+            book_id=book.id,
+            chapter_id=chapter.id,
+            chapter_position=chapter.position,
+            paragraph_index=paragraph_index,
+            scroll_fraction=scroll_fraction,
+            updated_at=now,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "ok": True,
+        "progress": {
+            "chapter_id": chapter.id,
+            "paragraph_index": row.paragraph_index,
+            "scroll_fraction": row.scroll_fraction,
+            "updated_at": row.updated_at.isoformat(),
+        },
+    }
+
+
 @router.get("/{book_id}/chapters/{chapter_id}")
 def get_chapter(
     book_id: str,
@@ -749,6 +897,13 @@ def get_chapter(
             "word_count": chapter.word_count,
         },
         "chapters": chapters,
+        "progress": _progress_payload(
+            db,
+            book=book,
+            user=user,
+            purchased=purchased,
+            is_manager=is_manager,
+        ),
     }
 
 

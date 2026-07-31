@@ -2,11 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { ApiError, parseInlineMarkdown } from "@read/api-client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ApiError, parseInlineMarkdown, type ReadingProgress } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
-import { createBrowserApi } from "@/lib/api";
+import { useAuth } from "@/components/AuthProvider";
+import { createBrowserApi, getStoredToken } from "@/lib/api";
 import { estimateMinutes, formatPrice } from "@/lib/format";
+import {
+  nearestParagraphIndex,
+  readLocalProgress,
+  writeLocalProgress,
+} from "@/lib/reading-progress";
 
 type ChapterMeta = {
   id: string;
@@ -68,6 +74,7 @@ export function InAppReader({
   chapterId: string;
 }) {
   const router = useRouter();
+  const { user } = useAuth();
   const [data, setData] = useState<ReaderPayload | null>(null);
   const [error, setError] = useState("");
   const [locked, setLocked] = useState(false);
@@ -79,6 +86,10 @@ export function InAppReader({
   const [theme, setTheme] = useState<ThemeKey>("paper");
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
+  const restoredKeyRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestScrollRef = useRef({ fraction: 0, paragraphIndex: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -86,6 +97,8 @@ export function InAppReader({
       setLoading(true);
       setError("");
       setLocked(false);
+      setResumeProgress(null);
+      restoredKeyRef.current = null;
       try {
         const payload = await createBrowserApi().getChapter(bookId, chapterId);
         if (cancelled) return;
@@ -100,8 +113,19 @@ export function InAppReader({
             locked: Boolean(chapter.locked),
           })),
         });
+        const serverProgress =
+          payload.progress?.chapter_id === chapterId ? payload.progress : null;
+        const local = readLocalProgress(bookId);
+        const localProgress =
+          local?.chapterId === chapterId
+            ? {
+                chapter_id: local.chapterId,
+                paragraph_index: local.paragraphIndex,
+                scroll_fraction: local.scrollFraction,
+              }
+            : null;
+        setResumeProgress(serverProgress ?? localProgress);
         setLoading(false);
-        window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 402) {
@@ -129,9 +153,55 @@ export function InAppReader({
 
   useEffect(() => {
     if (!data) return;
-    const key = `read:pos:${bookId}`;
-    localStorage.setItem(key, JSON.stringify({ chapterId, at: Date.now() }));
-  }, [bookId, chapterId, data]);
+    const restoreKey = `${bookId}:${chapterId}`;
+    if (restoredKeyRef.current === restoreKey) return;
+
+    const fraction = resumeProgress?.scroll_fraction ?? 0;
+    const apply = () => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      if (fraction > 0 && max > 0) {
+        window.scrollTo({ top: fraction * max, behavior: "auto" });
+      } else if (resumeProgress?.paragraph_index) {
+        const el = document.querySelector<HTMLElement>(
+          `[data-read-paragraph="${resumeProgress.paragraph_index}"]`
+        );
+        if (el) {
+          window.scrollTo({ top: Math.max(0, el.offsetTop - 24), behavior: "auto" });
+        } else {
+          window.scrollTo({ top: 0, behavior: "auto" });
+        }
+      } else {
+        window.scrollTo({ top: 0, behavior: "auto" });
+      }
+      restoredKeyRef.current = restoreKey;
+    };
+
+    // Wait a frame so paragraph layout is ready before restoring.
+    const frame = window.requestAnimationFrame(apply);
+    return () => window.cancelAnimationFrame(frame);
+  }, [bookId, chapterId, data, resumeProgress]);
+
+  useEffect(() => {
+    if (!data) return;
+    // Opening a chapter marks it as the resume point even before the reader scrolls.
+    const paragraphIndex = resumeProgress?.paragraph_index ?? 0;
+    const scrollFraction = resumeProgress?.scroll_fraction ?? 0;
+    latestScrollRef.current = { fraction: scrollFraction, paragraphIndex };
+    writeLocalProgress(bookId, {
+      chapterId,
+      paragraphIndex,
+      scrollFraction,
+    });
+    if (getStoredToken() || user) {
+      void createBrowserApi()
+        .saveReadingProgress(bookId, {
+          chapter_id: chapterId,
+          paragraph_index: paragraphIndex,
+          scroll_fraction: scrollFraction,
+        })
+        .catch(() => undefined);
+    }
+  }, [bookId, chapterId, data, resumeProgress, user]);
 
   useEffect(() => {
     try {
@@ -155,17 +225,64 @@ export function InAppReader({
   }, [fontSize, theme, prefsRestored]);
 
   useEffect(() => {
+    function persist(fraction: number, paragraphIndex: number) {
+      writeLocalProgress(bookId, {
+        chapterId,
+        paragraphIndex,
+        scrollFraction: fraction,
+      });
+      if (!getStoredToken() && !user) return;
+      void createBrowserApi()
+        .saveReadingProgress(bookId, {
+          chapter_id: chapterId,
+          paragraph_index: paragraphIndex,
+          scroll_fraction: fraction,
+        })
+        .catch(() => {
+          // Progress saves are best-effort; keep reading if the network fails.
+        });
+    }
+
     let lastY = window.scrollY;
     function onScroll() {
       const y = window.scrollY;
       setChromeVisible(y < 40 || y < lastY);
       lastY = y;
       const max = document.documentElement.scrollHeight - window.innerHeight;
-      setProgress(max > 0 ? Math.min(100, (y / max) * 100) : 0);
+      const fraction = max > 0 ? Math.min(1, Math.max(0, y / max)) : 0;
+      setProgress(fraction * 100);
+      const paragraphIndex = nearestParagraphIndex(y);
+      latestScrollRef.current = { fraction, paragraphIndex };
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        persist(fraction, paragraphIndex);
+      }, 1500);
     }
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      // Flush the latest position when leaving the chapter.
+      const latest = latestScrollRef.current;
+      writeLocalProgress(bookId, {
+        chapterId,
+        paragraphIndex: latest.paragraphIndex,
+        scrollFraction: latest.fraction,
+      });
+      if (getStoredToken() || user) {
+        void createBrowserApi()
+          .saveReadingProgress(bookId, {
+            chapter_id: chapterId,
+            paragraph_index: latest.paragraphIndex,
+            scroll_fraction: latest.fraction,
+          })
+          .catch(() => undefined);
+      }
+    };
+  }, [bookId, chapterId, user]);
 
   const neighbors = useMemo(() => {
     if (!data) return { prev: null as ChapterMeta | null, next: null as ChapterMeta | null };
@@ -324,7 +441,11 @@ export function InAppReader({
           style={{ fontSize: `${fontSize}px` }}
         >
           {data.chapter.content.split(/\n\s*\n/).map((paragraph, index) => (
-            <p key={index} className="whitespace-pre-wrap">
+            <p
+              key={index}
+              data-read-paragraph={index}
+              className="whitespace-pre-wrap"
+            >
               <InlineMarkdown value={paragraph} />
             </p>
           ))}
