@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,11 +14,13 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-rou
 import {
   ApiError,
   type BookDetail,
+  type BookListItem,
   type ChapterListItem,
   type ReadingProgress,
   type ReportReason,
 } from "@read/api-client";
 import { BookCover } from "../../components/BookCover";
+import { BookTile } from "../../components/BookTile";
 import { useAuth } from "../../lib/auth";
 import { readLocalProgress } from "../../lib/reading-progress";
 import { colors, coverHeightForWidth, estimateMinutes, formatPrice, radii, shadows, space } from "../../lib/theme";
@@ -29,6 +32,8 @@ type Access = {
   progress?: ReadingProgress | null;
 };
 
+const RECOMMEND_TILE_WIDTH = Math.min(140, Math.round(Dimensions.get("window").width * 0.36));
+
 export default function BookDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -37,6 +42,8 @@ export default function BookDetailScreen() {
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [access, setAccess] = useState<Access | null>(null);
   const [resumeChapterId, setResumeChapterId] = useState<string | null>(null);
+  const [sameAuthor, setSameAuthor] = useState<BookListItem[]>([]);
+  const [related, setRelated] = useState<BookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -49,10 +56,15 @@ export default function BookDetailScreen() {
     if (!id) return;
     setError("");
     try {
-      const data = await api.getBook(id);
+      const [data, recommendations] = await Promise.all([
+        api.getBook(id),
+        api.getBookRecommendations(id).catch(() => ({ same_author: [], related: [] })),
+      ]);
       setBook(data.book);
       setChapters(data.chapters);
       setAccess(data.access);
+      setSameAuthor(recommendations.same_author);
+      setRelated(recommendations.related);
       if (data.access.progress?.chapter_id) {
         setResumeChapterId(data.access.progress.chapter_id);
       } else {
@@ -61,6 +73,8 @@ export default function BookDetailScreen() {
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
+      setSameAuthor([]);
+      setRelated([]);
     } finally {
       setLoading(false);
     }
@@ -297,6 +311,56 @@ export default function BookDetailScreen() {
           );
         })}
       </View>
+
+      {sameAuthor.length > 0 ? (
+        <View style={styles.recommendSection}>
+          <Text style={styles.section}>More by this author</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.recommendRow}
+          >
+            {sameAuthor.map((item) => (
+              <BookTile
+                key={item.id}
+                book={item}
+                width={RECOMMEND_TILE_WIDTH}
+                onPress={() => router.push(`/books/${item.id}`)}
+                onPressPublisher={
+                  item.publisher_handle
+                    ? () => router.push(`/@${item.publisher_handle}`)
+                    : undefined
+                }
+              />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {related.length > 0 ? (
+        <View style={styles.recommendSection}>
+          <Text style={styles.section}>Related</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.recommendRow}
+          >
+            {related.map((item) => (
+              <BookTile
+                key={item.id}
+                book={item}
+                width={RECOMMEND_TILE_WIDTH}
+                onPress={() => router.push(`/books/${item.id}`)}
+                onPressPublisher={
+                  item.publisher_handle
+                    ? () => router.push(`/@${item.publisher_handle}`)
+                    : undefined
+                }
+              />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -408,6 +472,14 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.inkSoft,
     fontWeight: "700",
+  },
+  recommendSection: {
+    marginTop: space.sm,
+    gap: space.md,
+  },
+  recommendRow: {
+    gap: space.md,
+    paddingRight: space.xl,
   },
   chapterList: {
     backgroundColor: colors.card,

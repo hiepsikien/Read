@@ -45,6 +45,7 @@ from ..covers import (
 )
 from ..media import media_absolute_path
 from ..parse_docs import extract_text_from_file
+from ..recommendations import RECOMMEND_LIMIT, rank_related, sort_same_author
 from ..tts_settings import get_active_tts
 from .. import tts
 
@@ -503,6 +504,79 @@ def get_book(
                 is_manager=is_manager,
             ),
         },
+    }
+
+
+def _chapter_counts(db: Session, book_ids: list[str]) -> dict[str, int]:
+    if not book_ids:
+        return {}
+    rows = db.execute(
+        select(Chapter.book_id, func.count())
+        .where(Chapter.book_id.in_(book_ids))
+        .group_by(Chapter.book_id)
+    ).all()
+    return {book_id: int(count) for book_id, count in rows}
+
+
+def _serialize_book_rows(db: Session, books: list[Book]) -> list[dict]:
+    counts = _chapter_counts(db, [book.id for book in books])
+    return [
+        _book_list_item(
+            book,
+            chapter_count=counts.get(book.id, 0),
+            publisher_name=book.publisher.name if book.publisher else None,
+            publisher_handle=book.publisher.handle if book.publisher else None,
+        )
+        for book in books
+    ]
+
+
+@router.get("/{book_id}/recommendations")
+def get_book_recommendations(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
+):
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.publisher), joinedload(Book.category))
+        .filter(Book.id == book_id)
+        .one_or_none()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    is_manager = _can_manage_book(book, user)
+    if not _is_publicly_visible(book) and not is_manager:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    public_query = (
+        db.query(Book)
+        .options(joinedload(Book.category), joinedload(Book.publisher))
+        .filter(
+            Book.status == "published",
+            Book.visibility == "listed",
+            Book.id != book.id,
+        )
+    )
+
+    same_author_books = sort_same_author(
+        public_query.filter(Book.publisher_id == book.publisher_id).all()
+    )[:RECOMMEND_LIMIT]
+    same_author_ids = {item.id for item in same_author_books}
+
+    related_candidates = public_query.filter(Book.publisher_id != book.publisher_id).all()
+    # Prefer same-category peers; still allow fill from other categories via scoring.
+    related_books = rank_related(
+        source=book,
+        candidates=related_candidates,
+        exclude_ids=same_author_ids,
+        limit=RECOMMEND_LIMIT,
+    )
+
+    return {
+        "same_author": _serialize_book_rows(db, same_author_books),
+        "related": _serialize_book_rows(db, related_books),
     }
 
 

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { BookListItem } from "@read/api-client";
+import { BookCard } from "@/components/BookCard";
 import { ContinueReadingButton } from "@/components/ContinueReadingButton";
 import { PurchaseButton } from "@/components/PurchaseButton";
 import { createServerApi } from "@/lib/api-server";
@@ -8,6 +10,37 @@ import { estimateMinutes, formatPrice } from "@/lib/format";
 export const dynamic = "force-dynamic";
 
 type Props = { params: Promise<{ id: string }> };
+
+function RecommendationSection({
+  title,
+  books,
+}: {
+  title: string;
+  books: BookListItem[];
+}) {
+  if (books.length === 0) return null;
+  return (
+    <section className="surface mt-10 rounded-2xl px-5 py-2 sm:px-7">
+      <div className="border-b border-[var(--line)] py-5">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
+          {title}
+        </h2>
+      </div>
+      {books.map((item) => (
+        <BookCard
+          key={item.id}
+          id={item.id}
+          title={item.title}
+          description={item.description}
+          price_cents={item.price_cents}
+          publisher_name={item.publisher_name || "Publisher"}
+          publisher_handle={item.publisher_handle}
+          chapter_count={item.chapter_count}
+        />
+      ))}
+    </section>
+  );
+}
 
 export default async function BookDetailPage({ params }: Props) {
   const { id } = await params;
@@ -19,6 +52,10 @@ export default async function BookDetailPage({ params }: Props) {
   } catch {
     notFound();
   }
+
+  const recommendations = await api
+    .getBookRecommendations(id)
+    .catch(() => ({ same_author: [] as BookListItem[], related: [] as BookListItem[] }));
 
   const { book, chapters, access } = payload;
   const owned = access.owned;
@@ -120,6 +157,9 @@ export default async function BookDetailPage({ params }: Props) {
           })}
         </ol>
       </section>
+
+      <RecommendationSection title="More by this author" books={recommendations.same_author} />
+      <RecommendationSection title="Related" books={recommendations.related} />
     </div>
   );
 }

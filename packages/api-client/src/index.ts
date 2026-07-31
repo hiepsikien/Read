@@ -552,6 +552,12 @@ export function createApiClient(options: ApiClientOptions) {
         };
       }>(`/api/books/${id}`);
     },
+    getBookRecommendations(id: string) {
+      return request<{
+        same_author: BookListItem[];
+        related: BookListItem[];
+      }>(`/api/books/${id}/recommendations`);
+    },
     createBook(form: FormData) {
       return request<{ id: string; cover_url?: string | null }>("/api/books", {
         method: "POST",
