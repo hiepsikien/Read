@@ -15,6 +15,9 @@
     "api:install": "python3 -m venv apps/api/.venv && apps/api/.venv/bin/pip install -r apps/api/requirements.txt",
     "api:dev": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
     "api:test": "cd apps/api && .venv/bin/pytest -q",
-    "db:up": "docker compose up -d db"
+    "db:up": "docker compose up -d db",
+    "sync:status": "scripts/sync-db.sh status && scripts/sync-uploads.sh status",
+    "sync:to-cloud": "scripts/sync-to-cloud.sh",
+    "sync:from-cloud": "scripts/sync-from-cloud.sh"
   }
 }

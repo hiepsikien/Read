@@ -75,56 +75,100 @@ def test_chapter_audio_segments_normalize_text_and_respect_byte_limit():
     segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
 
     assert segments
-    assert segments[0].text == "Mở đầu Đọc thêm tại."
+    assert all(segment.is_ssml for segment in segments)
+    assert all(segment.kind == "narration" for segment in segments)
+    assert all(segment.voice == "vi-VN-Neural2-D" for segment in segments)
+    assert "Mở đầu Đọc thêm tại." in segments[0].text
+    assert 'rate="98%"' in segments[0].text
+    assert 'pitch="-1st"' in segments[0].text
     assert all(len(segment.text.encode("utf-8")) <= tts.MAX_TTS_INPUT_BYTES for segment in segments)
     assert all(segment.cache_key for segment in segments)
 
 
-def test_screenplay_dialogue_keeps_direction_with_pause_and_prosody():
+def test_screenplay_dialogue_uses_contrast_without_spoken_cues():
     content = (
-        "COLUMBUS *(Giọng khàn đặc nhưng vang dội)* "
+        "COLUMBUS *(Giọng khàn đặc)* "
         "Nhân danh Chúa Kitô cứu thế!\n\n"
         "NGƯỜI THƯ KÝ (Hộ tống) *(Thì thầm, mắt đầy kinh ngạc)* "
         "Thưa thuyền trưởng, đây là Calicut.\n\n"
         "AFONSO DE ALBUQUERQUE (58 tuổi) đứng trên mũi soái hạm."
     )
 
-    segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={
+            "columbus": "vi-VN-Chirp3-HD-Orus",
+            "nguoi thu ky": "vi-VN-Chirp3-HD-Aoede",
+        },
+        narrator_gender="male",
+    )
 
     assert len(segments) == 3
     assert segments[0].is_ssml is True
-    assert '<break time="300ms"/>' in segments[0].text
-    assert '<break time="450ms"/>' in segments[0].text
-    assert "Columbus." in segments[0].text
-    assert "Giọng khàn đặc nhưng vang dội." in segments[0].text
+    assert segments[0].kind == "dialogue"
+    assert segments[0].speaker == "Columbus"
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Orus"
+    assert '<break time="200ms"/>' in segments[0].text
+    assert "Columbus." not in segments[0].text
+    assert "Giọng khàn đặc." not in segments[0].text
     assert "Nhân danh Chúa Kitô cứu thế!" in segments[0].text
-    assert 'pitch="-2st"' in segments[0].text
+    assert 'pitch="-1st"' in segments[0].text
+    assert 'rate="96%"' in segments[0].text
 
     assert segments[1].is_ssml is True
-    assert "Người Thư Ký." in segments[1].text
-    assert "Hộ tống." in segments[1].text
-    assert "Thì thầm, mắt đầy kinh ngạc." in segments[1].text
-    assert 'rate="88%"' in segments[1].text
+    assert segments[1].kind == "dialogue"
+    assert segments[1].speaker == "Người Thư Ký"
+    assert segments[1].voice == "vi-VN-Chirp3-HD-Aoede"
+    assert "Người Thư Ký." not in segments[1].text
+    assert "Hộ tống." not in segments[1].text
+    assert "Thì thầm, mắt đầy kinh ngạc." not in segments[1].text
+    assert "Thưa thuyền trưởng, đây là Calicut." in segments[1].text
+    assert 'rate="90%"' in segments[1].text
     assert 'volume="-4dB"' in segments[1].text
 
-    # Ordinary prose with a parenthetical age must stay plain narration.
-    assert segments[2].is_ssml is False
-    assert "Afonso De Albuquerque (58 tuổi) đứng trên mũi soái hạm." == segments[2].text
+    # Ordinary prose with a parenthetical age must stay narrator-voiced.
+    assert segments[2].kind == "narration"
+    assert segments[2].voice == "vi-VN-Chirp3-HD-Charon"
+    assert segments[2].is_ssml is True
+    assert "Afonso De Albuquerque (58 tuổi) đứng trên mũi soái hạm." in segments[2].text
+    assert 'rate="98%"' in segments[2].text
 
 
-def test_leading_stage_direction_is_kept_with_pause():
-    content = "*(Ông nhìn ra đại dương bao la phía sau)* Hãy nhìn cho kỹ."
+def test_shouted_dialogue_raises_rate_and_pitch():
+    content = "COLUMBUS *(Hét lớn, vang dội)* Lui binh!"
 
     segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
 
     assert len(segments) == 1
+    assert segments[0].kind == "dialogue"
+    assert "Lui binh!" in segments[0].text
+    assert 'rate="106%"' in segments[0].text
+    assert 'pitch="+3st"' in segments[0].text
+    assert 'volume="+2dB"' in segments[0].text
+
+
+def test_leading_stage_direction_shapes_prosody_without_reading_cue():
+    content = "*(Ông nhìn ra đại dương bao la phía sau)* Hãy nhìn cho kỹ."
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        narrator_gender="male",
+    )
+
+    assert len(segments) == 1
     assert segments[0].is_ssml is True
-    assert "Ông nhìn ra đại dương bao la phía sau." in segments[0].text
-    assert '<break time="450ms"/>' in segments[0].text
+    assert segments[0].kind == "dialogue"
+    assert segments[0].voice.rsplit("-", 1)[-1] in {"Puck", "Orus", "Charon"}
+    assert "Ông nhìn ra đại dương bao la phía sau." not in segments[0].text
+    assert '<break time="200ms"/>' in segments[0].text
     assert "Hãy nhìn cho kỹ." in segments[0].text
 
 
-def test_screenplay_dialogue_without_direction_keeps_speaker_and_neutral_style():
+def test_screenplay_dialogue_without_direction_casts_distinct_voices():
     content = (
         "LÊ THÁNH TÔNG Ta giao cho con một bờ cõi thái bình.\n\n"
         "VASCO DA GAMA Chúng ta đã chạm tay vào nguồn gốc của thế giới.\n\n"
@@ -132,17 +176,65 @@ def test_screenplay_dialogue_without_direction_keeps_speaker_and_neutral_style()
         "NỘI THỊ Bẩm Thái sư, xin dùng canh."
     )
 
-    segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={
+            "le thanh tong": "vi-VN-Chirp3-HD-Orus",
+            "vasco da gama": "vi-VN-Chirp3-HD-Puck",
+            "nguoi thu ky": "vi-VN-Chirp3-HD-Aoede",
+            "noi thi": "vi-VN-Chirp3-HD-Kore",
+        },
+        narrator_gender="male",
+    )
 
     assert len(segments) == 4
     assert all(segment.is_ssml for segment in segments)
-    assert "Lê Thánh Tông." in segments[0].text
+    assert all(segment.kind == "dialogue" for segment in segments)
+    assert [segment.speaker for segment in segments] == [
+        "Lê Thánh Tông",
+        "Vasco Da Gama",
+        "Người Thư Ký",
+        "Nội Thị",
+    ]
+    assert [segment.voice for segment in segments] == [
+        "vi-VN-Chirp3-HD-Orus",
+        "vi-VN-Chirp3-HD-Puck",
+        "vi-VN-Chirp3-HD-Aoede",
+        "vi-VN-Chirp3-HD-Kore",
+    ]
+    assert all("Lê Thánh Tông." not in segment.text for segment in segments)
     assert "Ta giao cho con một bờ cõi thái bình." in segments[0].text
-    assert "Vasco Da Gama." in segments[1].text
-    assert "Người Thư Ký." in segments[2].text
-    assert "Nội Thị." in segments[3].text
-    assert all('<break time="300ms"/>' in segment.text for segment in segments)
+    assert all('<break time="200ms"/>' in segment.text for segment in segments)
     assert all('rate="100%"' in segment.text for segment in segments)
+    assert all('pitch="+0st"' in segment.text for segment in segments)
+
+
+def test_chirp3_assigns_unique_character_personas():
+    content = (
+        "COLUMBUS Nhân danh Chúa!\n\n"
+        "VASCO DA GAMA Chúng ta đã đến.\n\n"
+        "NGƯỜI THƯ KÝ Thưa ông."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={
+            "columbus": "vi-VN-Chirp3-HD-Orus",
+            "vasco da gama": "vi-VN-Chirp3-HD-Puck",
+            "nguoi thu ky": "vi-VN-Chirp3-HD-Aoede",
+        },
+    )
+
+    assert [segment.voice for segment in segments] == [
+        "vi-VN-Chirp3-HD-Orus",
+        "vi-VN-Chirp3-HD-Puck",
+        "vi-VN-Chirp3-HD-Aoede",
+    ]
+    assert all(segment.kind == "dialogue" for segment in segments)
 
 
 def test_plain_dialogue_detection_does_not_capture_scene_prose():
@@ -157,10 +249,11 @@ def test_plain_dialogue_detection_does_not_capture_scene_prose():
     segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
 
     assert len(segments) == 5
-    assert all(not segment.is_ssml for segment in segments)
-    assert segments[0].text.startswith("Vasco Da Gama đã đi vào lịch sử")
-    assert segments[1].text.startswith("Christopher Columbus (51 tuổi)")
-    assert segments[2].text.startswith("Trên Boong Tàu Caravel")
+    assert all(segment.kind == "narration" for segment in segments)
+    assert all(segment.voice == "vi-VN-Neural2-D" for segment in segments)
+    assert "Vasco Da Gama đã đi vào lịch sử" in segments[0].text
+    assert "Christopher Columbus (51 tuổi)" in segments[1].text
+    assert "Trên Boong Tàu Caravel" in segments[2].text
 
 
 def test_all_caps_words_are_spoken_as_words_not_letters():
@@ -174,14 +267,14 @@ def test_all_caps_words_are_spoken_as_words_not_letters():
 
     segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
 
-    assert segments[0].text == "Bước Chân Trên Cát Calicut - Tháng 5/1498"
-    assert segments[1].text.endswith("Vasco Da Gama đã đi vào lịch sử.")
+    assert "Bước Chân Trên Cát Calicut - Tháng 5/1498" in segments[0].text
+    assert segments[1].text.endswith("Vasco Da Gama đã đi vào lịch sử.</prosody></speak>")
     # DI and VI are Vietnamese words here, not roman numerals.
-    assert segments[2].text == "Cuộc Di Dân Sau Đứt Gãy - Ngoại Vi Tây Đô"
+    assert "Cuộc Di Dân Sau Đứt Gãy - Ngoại Vi Tây Đô" in segments[2].text
     # Roman numerals stay uppercase so they keep reading as numbers.
-    assert segments[3].text == "Vua Ferdinand II ngự trên ngai, châu Âu đầu thế kỷ XVI."
+    assert "Vua Ferdinand II ngự trên ngai, châu Âu đầu thế kỷ XVI." in segments[3].text
     # Genuine initialisms stay uppercase so they keep being spelled out.
-    assert segments[4].text == "Đông Ấn Hà Lan (VOC) tranh giành với Đông Ấn Anh (EIC)."
+    assert "Đông Ấn Hà Lan (VOC) tranh giành với Đông Ấn Anh (EIC)." in segments[4].text
 
 
 def test_synthesize_segment_reuses_cached_file(tmp_path, monkeypatch):
@@ -209,6 +302,8 @@ def test_synthesize_segment_reuses_cached_file(tmp_path, monkeypatch):
     assert first.read_bytes() == b"fake-mp3"
     assert calls == 1
     assert settings.resolved_tts_voice == "vi-VN-Neural2-D"
+    assert segment.voice == "vi-VN-Neural2-D"
+    assert segment.is_ssml is True
 
 
 def test_resolve_voice_engine_gender_and_overrides():
@@ -228,6 +323,14 @@ def test_resolve_voice_engine_gender_and_overrides():
         )
         == "vi-VN-Standard-B"
     )
+    assert tts.infer_engine_from_voice("vi-VN-Chirp3-HD-Kore") == "chirp3"
+    assert tts.gender_voice_pool("chirp3", "male", "vi-VN-Chirp3-HD-Charon") == [
+        "vi-VN-Chirp3-HD-Puck",
+        "vi-VN-Chirp3-HD-Orus",
+    ]
+    assert tts.gender_voice_pool("neural2", "male", "vi-VN-Neural2-D") == [
+        "vi-VN-Neural2-D",
+    ]
 
 
 def test_prepare_chapter_audio_generates_once_and_serves_cache(
@@ -349,11 +452,23 @@ def test_admin_can_update_tts_settings_dynamically(client, db_session, seeded):
     updated = client.put(
         "/api/admin/settings/tts",
         headers=headers,
-        json={"engine": "chirp3", "gender": "female", "chirp_persona": "Aoede"},
+        json={
+            "engine": "chirp3",
+            "gender": "female",
+            "chirp_persona": "Aoede",
+            "narrator_rate": 97,
+            "break_start_ms": 200,
+            "break_end_ms": 100,
+            "speak_speaker_names": False,
+            "max_character_voices": 3,
+        },
     )
     assert updated.status_code == 200
     assert updated.json()["active"]["voice"] == "vi-VN-Chirp3-HD-Aoede"
     assert updated.json()["active"]["source"] == "database"
+    assert updated.json()["active"]["narrator_rate"] == 97
+    assert updated.json()["active"]["break_start_ms"] == 200
+    assert updated.json()["active"]["max_character_voices"] == 3
 
     options = client.get("/api/tts/options")
     assert options.status_code == 200

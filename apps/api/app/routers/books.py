@@ -26,7 +26,16 @@ from ..chapters import (
 from ..config import get_settings
 from ..db import get_db
 from ..legal import require_current_legal_acceptance
-from ..models import Book, Category, Chapter, ContentReport, Purchase, ReadingProgress, User
+from ..models import (
+    Book,
+    Category,
+    Chapter,
+    ContentReport,
+    GlossaryEntry,
+    Purchase,
+    ReadingProgress,
+    User,
+)
 from ..moderation import record_moderation_event
 from ..publisher_suggest import suggest_metadata, suggest_segment_names
 from ..gemini import gemini_available
@@ -50,6 +59,56 @@ from ..tts_settings import get_active_tts
 from .. import tts
 
 logger = logging.getLogger(__name__)
+
+
+def _glossary_voice_map(
+    db: Session,
+    book_id: str,
+    *,
+    engine: str,
+    narrator_voice: str,
+    max_voices: int = 3,
+) -> tuple[dict[str, str], dict[str, str]]:
+    import json
+
+    from ..models import Book
+    from ..voice_cast import apply_cast_to_entries, cast_profiles_for_entries
+
+    entries = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book_id))
+    )
+    book = db.get(Book, book_id)
+    profiles = (
+        cast_profiles_for_entries(
+            entries,
+            engine=engine,
+            narrator_voice=narrator_voice,
+            max_voices=max_voices,
+        )
+        if entries
+        else {}
+    )
+    if entries and apply_cast_to_entries(entries, profiles):
+        db.commit()
+    voices = {key: profile.voice for key, profile in profiles.items()}
+    presence = {key: profile.presence for key, profile in profiles.items()}
+
+    raw = getattr(book, "cast_overrides", None) if book else "{}"
+    try:
+        overrides = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        overrides = {}
+    if isinstance(overrides, dict):
+        for key, meta in overrides.items():
+            if not isinstance(meta, dict):
+                continue
+            voice = (meta.get("tts_voice") or "").strip()
+            if voice:
+                voices[str(key)] = voice
+            value = (meta.get("presence") or "").strip()
+            if value:
+                presence[str(key)] = value
+    return voices, presence
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -1302,7 +1361,7 @@ def prepare_chapter_audio(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User | None, Depends(get_current_user_optional)],
 ):
-    _book, chapter = _accessible_chapter(
+    book, chapter = _accessible_chapter(
         db,
         book_id=book_id,
         chapter_id=chapter_id,
@@ -1311,7 +1370,22 @@ def prepare_chapter_audio(
     settings = get_settings()
     active = get_active_tts(db)
     voice = active.voice
-    segments = tts.chapter_audio_segments(chapter.content, voice)
+    glossary_voices, glossary_presence = _glossary_voice_map(
+        db,
+        book.id,
+        engine=active.engine,
+        narrator_voice=voice,
+        max_voices=active.max_character_voices,
+    )
+    segments = tts.chapter_audio_segments(
+        chapter.content,
+        voice,
+        engine=active.engine,
+        glossary_voices=glossary_voices,
+        glossary_presence=glossary_presence,
+        narrator_gender=active.gender,
+        style=active.narration_style(),
+    )
     if not segments:
         raise HTTPException(status_code=400, detail="This chapter has no readable text.")
 
@@ -1338,6 +1412,9 @@ def prepare_chapter_audio(
             {
                 "index": segment.index,
                 "paragraph_index": segment.paragraph_index,
+                "kind": segment.kind,
+                "speaker": segment.speaker,
+                "voice": segment.voice,
                 "url": (
                     f"/api/books/{book_id}/chapters/{chapter_id}/audio/"
                     f"{segment.index}?v={segment.cache_key[:16]}"
@@ -1356,15 +1433,31 @@ def get_chapter_audio_segment(
     db: Annotated[Session, Depends(get_db)],
     user: Annotated[User | None, Depends(get_current_user_optional)],
 ):
-    _book, chapter = _accessible_chapter(
+    book, chapter = _accessible_chapter(
         db,
         book_id=book_id,
         chapter_id=chapter_id,
         user=user,
     )
     settings = get_settings()
-    voice = get_active_tts(db).voice
-    segments = tts.chapter_audio_segments(chapter.content, voice)
+    active = get_active_tts(db)
+    voice = active.voice
+    glossary_voices, glossary_presence = _glossary_voice_map(
+        db,
+        book.id,
+        engine=active.engine,
+        narrator_voice=voice,
+        max_voices=active.max_character_voices,
+    )
+    segments = tts.chapter_audio_segments(
+        chapter.content,
+        voice,
+        engine=active.engine,
+        glossary_voices=glossary_voices,
+        glossary_presence=glossary_presence,
+        narrator_gender=active.gender,
+        style=active.narration_style(),
+    )
     if segment_index < 0 or segment_index >= len(segments):
         raise HTTPException(status_code=404, detail="Audio segment not found.")
     segment = segments[segment_index]
@@ -1374,7 +1467,7 @@ def get_chapter_audio_segment(
         if not settings.google_tts_enabled:
             raise HTTPException(status_code=503, detail="Cloud narration is not configured.")
         try:
-            path = tts.synthesize_segment(settings, segment, voice)
+            path = tts.synthesize_segment(settings, segment, segment.voice or voice)
         except (DefaultCredentialsError, GoogleAPICallError, OSError) as exc:
             logger.exception("Could not synthesize narration segment for chapter %s", chapter.id)
             raise HTTPException(

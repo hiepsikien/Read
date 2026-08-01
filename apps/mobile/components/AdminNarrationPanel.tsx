@@ -5,7 +5,9 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { setAudioModeAsync, useAudioPlayer } from "expo-audio";
@@ -16,6 +18,36 @@ import { colors } from "../lib/theme";
 const PREVIEW_TEXT =
   "Tàu chở dầu đi qua eo biển Hormuz mỗi ngày. Từ Washington đến eo biển Malacca, các tuyến đường này quyết định giá dầu toàn cầu.";
 
+function NumberField({
+  label,
+  value,
+  onChange,
+  suffix,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  suffix?: string;
+}) {
+  return (
+    <View style={styles.numberRow}>
+      <Text style={styles.numberLabel}>
+        {label}
+        {suffix ? ` (${suffix})` : ""}
+      </Text>
+      <TextInput
+        style={styles.numberInput}
+        keyboardType="numbers-and-punctuation"
+        value={String(value)}
+        onChangeText={(text) => {
+          const parsed = Number(text);
+          if (!Number.isNaN(parsed)) onChange(parsed);
+        }}
+      />
+    </View>
+  );
+}
+
 /** Admin TTS / narration controls — used by Admin center. */
 export function AdminNarrationPanel() {
   const { api } = useAuth();
@@ -23,6 +55,15 @@ export function AdminNarrationPanel() {
   const [engine, setEngine] = useState("neural2");
   const [gender, setGender] = useState("male");
   const [persona, setPersona] = useState("");
+  const [narratorRate, setNarratorRate] = useState(98);
+  const [narratorPitch, setNarratorPitch] = useState(-1);
+  const [dialogueRate, setDialogueRate] = useState(100);
+  const [dialoguePitch, setDialoguePitch] = useState(0);
+  const [breakStart, setBreakStart] = useState(200);
+  const [breakEnd, setBreakEnd] = useState(100);
+  const [speakNames, setSpeakNames] = useState(false);
+  const [speakDirections, setSpeakDirections] = useState(false);
+  const [maxVoices, setMaxVoices] = useState(3);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -56,6 +97,15 @@ export function AdminNarrationPanel() {
       setEngine(data.active.engine);
       setGender(data.active.gender);
       setPersona(data.active.chirp_persona || "");
+      setNarratorRate(data.active.narrator_rate ?? data.defaults?.narrator_rate ?? 98);
+      setNarratorPitch(data.active.narrator_pitch ?? data.defaults?.narrator_pitch ?? -1);
+      setDialogueRate(data.active.dialogue_rate ?? data.defaults?.dialogue_rate ?? 100);
+      setDialoguePitch(data.active.dialogue_pitch ?? data.defaults?.dialogue_pitch ?? 0);
+      setBreakStart(data.active.break_start_ms ?? data.defaults?.break_start_ms ?? 200);
+      setBreakEnd(data.active.break_end_ms ?? data.defaults?.break_end_ms ?? 100);
+      setSpeakNames(Boolean(data.active.speak_speaker_names));
+      setSpeakDirections(Boolean(data.active.speak_stage_directions));
+      setMaxVoices(data.active.max_character_voices ?? data.defaults?.max_character_voices ?? 3);
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : "Could not load narration settings."
@@ -105,6 +155,15 @@ export function AdminNarrationPanel() {
         engine,
         gender,
         chirp_persona: engine === "chirp3" ? persona : "",
+        narrator_rate: narratorRate,
+        narrator_pitch: narratorPitch,
+        dialogue_rate: dialogueRate,
+        dialogue_pitch: dialoguePitch,
+        break_start_ms: breakStart,
+        break_end_ms: breakEnd,
+        speak_speaker_names: speakNames,
+        speak_stage_directions: speakDirections,
+        max_character_voices: maxVoices,
       });
       setPayload((prev) => (prev ? { ...prev, active: result.active } : prev));
       setStatus(`Saved · ${result.active.voice}`);
@@ -128,7 +187,7 @@ export function AdminNarrationPanel() {
   return (
     <View style={styles.card}>
       <Text style={styles.cardSub}>
-        Applies immediately to new cloud narration for all readers.
+        Global defaults for all books. Book cast overrides live on each book’s admin page.
       </Text>
 
       <Text style={styles.label}>Engine</Text>
@@ -146,7 +205,7 @@ export function AdminNarrationPanel() {
         ))}
       </View>
 
-      <Text style={styles.label}>Gender</Text>
+      <Text style={styles.label}>Narrator gender</Text>
       <View style={styles.chipWrap}>
         {(["male", "female"] as const).map((value) => (
           <Pressable
@@ -184,6 +243,26 @@ export function AdminNarrationPanel() {
         </>
       ) : null}
 
+      <Text style={styles.sectionTitle}>Narration pace</Text>
+      <NumberField label="Narrator rate" value={narratorRate} onChange={setNarratorRate} suffix="%" />
+      <NumberField label="Narrator pitch" value={narratorPitch} onChange={setNarratorPitch} suffix="st" />
+      <NumberField label="Dialogue rate" value={dialogueRate} onChange={setDialogueRate} suffix="%" />
+      <NumberField label="Dialogue pitch" value={dialoguePitch} onChange={setDialoguePitch} suffix="st" />
+
+      <Text style={styles.sectionTitle}>Pauses</Text>
+      <NumberField label="Break before dialogue" value={breakStart} onChange={setBreakStart} suffix="ms" />
+      <NumberField label="Break after dialogue" value={breakEnd} onChange={setBreakEnd} suffix="ms" />
+      <NumberField label="Max character voices" value={maxVoices} onChange={setMaxVoices} />
+
+      <View style={styles.switchRow}>
+        <Text style={styles.numberLabel}>Speak speaker names</Text>
+        <Switch value={speakNames} onValueChange={setSpeakNames} />
+      </View>
+      <View style={styles.switchRow}>
+        <Text style={styles.numberLabel}>Speak stage directions</Text>
+        <Switch value={speakDirections} onValueChange={setSpeakDirections} />
+      </View>
+
       <Pressable style={styles.secondaryBtn} onPress={playPreview}>
         <Text style={styles.secondaryBtnText}>Play preview</Text>
       </Pressable>
@@ -204,7 +283,7 @@ export function AdminNarrationPanel() {
         onPress={() => void save()}
       >
         <Text style={styles.primaryBtnText}>
-          {saving ? "Saving…" : "Save narration voice"}
+          {saving ? "Saving…" : "Save narration settings"}
         </Text>
       </Pressable>
     </View>
@@ -222,6 +301,12 @@ const styles = StyleSheet.create({
   },
   cardSub: { fontSize: 13, color: colors.inkSoft },
   label: { color: colors.inkSoft, fontSize: 13, marginTop: 4 },
+  sectionTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 8,
+  },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chipRow: { flexDirection: "row", gap: 8, paddingVertical: 2 },
   chip: {
@@ -235,6 +320,30 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: colors.sage, borderColor: colors.sage },
   chipText: { color: colors.ink, textTransform: "capitalize" },
   chipTextActive: { color: "#fff", fontWeight: "600" },
+  numberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  numberLabel: { flex: 1, color: colors.ink, fontSize: 14 },
+  numberInput: {
+    width: 84,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    textAlign: "right",
+    backgroundColor: "rgba(255,255,255,0.7)",
+    color: colors.ink,
+  },
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
   primaryBtn: {
     backgroundColor: colors.sage,
     paddingVertical: 12,

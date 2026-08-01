@@ -94,21 +94,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [syncProfile, usingFirebase]);
 
   useEffect(() => {
-    if (!usingFirebase) {
-      void refresh();
-      return;
-    }
+    let cancelled = false;
+    let settled = false;
+    const finishLoading = () => {
+      if (!cancelled && !settled) {
+        settled = true;
+        setLoading(false);
+      }
+    };
+    // Never leave the UI stuck on a blank spinner if Firebase hangs.
+    const timeout = setTimeout(finishLoading, 5000);
 
-    const auth = getFirebaseAuth();
-    if (!auth) {
-      void refresh();
-      return;
-    }
+    const runRefresh = () => {
+      void refresh().finally(() => {
+        clearTimeout(timeout);
+        settled = true;
+      });
+    };
 
-    const unsubscribe = onAuthStateChanged(auth, () => {
-      void refresh();
-    });
-    return unsubscribe;
+    try {
+      if (!usingFirebase) {
+        runRefresh();
+        return () => {
+          cancelled = true;
+          clearTimeout(timeout);
+        };
+      }
+
+      const auth = getFirebaseAuth();
+      if (!auth) {
+        runRefresh();
+        return () => {
+          cancelled = true;
+          clearTimeout(timeout);
+        };
+      }
+
+      const unsubscribe = onAuthStateChanged(auth, () => {
+        runRefresh();
+      });
+      return () => {
+        cancelled = true;
+        clearTimeout(timeout);
+        unsubscribe();
+      };
+    } catch {
+      clearTimeout(timeout);
+      finishLoading();
+      return () => {
+        cancelled = true;
+      };
+    }
   }, [refresh, usingFirebase]);
 
   const signIn = useCallback(

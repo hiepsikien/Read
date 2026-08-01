@@ -14,7 +14,36 @@ from google.cloud import texttospeech
 from .config import Settings
 
 MAX_TTS_INPUT_BYTES = 4500
-TTS_CACHE_VERSION = "v2"
+TTS_CACHE_VERSION = "v5"
+
+# Narrator stays a touch under dialogue pace with a slightly lower pitch so
+# multi-voice character casting can still contrast on top of prosody.
+NARRATOR_RATE = 98
+NARRATOR_PITCH = -1
+NARRATOR_VOLUME = 0
+DIALOGUE_BASE_RATE = 100
+DIALOGUE_BASE_PITCH = 0
+DIALOGUE_BASE_VOLUME = 0
+DIALOGUE_BREAK_START_MS = 200
+DIALOGUE_BREAK_END_MS = 100
+
+
+@dataclass(frozen=True)
+class NarrationStyle:
+    narrator_rate: int = NARRATOR_RATE
+    narrator_pitch: int = NARRATOR_PITCH
+    narrator_volume: int = NARRATOR_VOLUME
+    dialogue_rate: int = DIALOGUE_BASE_RATE
+    dialogue_pitch: int = DIALOGUE_BASE_PITCH
+    dialogue_volume: int = DIALOGUE_BASE_VOLUME
+    break_start_ms: int = DIALOGUE_BREAK_START_MS
+    break_end_ms: int = DIALOGUE_BREAK_END_MS
+    speak_speaker_names: bool = False
+    speak_stage_directions: bool = False
+    max_character_voices: int = 3
+
+
+DEFAULT_NARRATION_STYLE = NarrationStyle()
 
 # Default Vietnamese voices per engine × gender.
 # Chirp3 has many personas; defaults are Charon (male) and Kore (female).
@@ -163,7 +192,10 @@ class AudioSegment:
     paragraph_index: int
     text: str
     cache_key: str
+    voice: str
     is_ssml: bool = False
+    kind: str = "narration"  # narration | dialogue
+    speaker: str | None = None
 
 
 def normalize_engine(value: str) -> str:
@@ -226,6 +258,147 @@ def voice_options() -> list[dict[str, str]]:
                 }
             )
     return options
+
+
+def infer_engine_from_voice(voice: str) -> str:
+    token = voice.casefold()
+    if "chirp3" in token:
+        return "chirp3"
+    if "neural2" in token:
+        return "neural2"
+    if "wavenet" in token:
+        return "wavenet"
+    if "standard" in token:
+        return "standard"
+    return "neural2"
+
+
+def gender_voice_pool(
+    engine: str,
+    gender: str,
+    narrator_voice: str,
+    *,
+    max_voices: int = 3,
+) -> list[str]:
+    """Same-gender voices for fallback casting when glossary has no match."""
+    from .voice_cast import CAST_PERSONAS
+
+    engine_key = normalize_engine(engine)
+    gender_key = normalize_gender(gender)
+    limit = max(1, min(6, int(max_voices)))
+    if engine_key == "chirp3":
+        pool = [
+            f"vi-VN-Chirp3-HD-{persona}"
+            for persona in CAST_PERSONAS[gender_key][:limit]
+        ]
+    else:
+        pool = [VOICE_CATALOG[engine_key][gender_key]]
+    others = [candidate for candidate in pool if candidate != narrator_voice]
+    return others or pool
+
+
+def character_voice_pool(engine: str, narrator_voice: str) -> list[str]:
+    """Deprecated round-robin pool — prefer gender_voice_pool + glossary cast."""
+    engine_key = normalize_engine(engine)
+    narrator_gender = "male"
+    persona = narrator_voice.rsplit("-", 1)[-1]
+    if persona in CHIRP3_PERSONAS["female"] or narrator_voice == VOICE_CATALOG.get(engine_key, {}).get(
+        "female"
+    ):
+        narrator_gender = "female"
+    return [
+        *gender_voice_pool(engine_key, "male" if narrator_gender == "female" else "female", narrator_voice),
+        *gender_voice_pool(engine_key, narrator_gender, narrator_voice),
+    ]
+
+
+class SpeakerVoiceCast:
+    """Stable speaker → voice mapping for one chapter synthesis pass.
+
+    Prefers a precomputed glossary cast (gender/age aware). Unknown speakers
+    stay inside a same-gender pool inferred from the cue text — never flip to
+    the opposite gender just to sound different.
+    """
+
+    def __init__(
+        self,
+        narrator_voice: str,
+        engine: str | None = None,
+        *,
+        glossary_voices: dict[str, str] | None = None,
+        glossary_presence: dict[str, str] | None = None,
+        narrator_gender: str | None = None,
+        max_character_voices: int = 3,
+    ) -> None:
+        from .glossary import normalize_lookup
+        from .voice_cast import infer_gender, infer_presence
+
+        self.narrator_voice = narrator_voice
+        self.engine = engine or infer_engine_from_voice(narrator_voice)
+        self._normalize = normalize_lookup
+        self._infer_gender = infer_gender
+        self._infer_presence = infer_presence
+        self._max_character_voices = max_character_voices
+        self._glossary_voices = {
+            self._normalize(key): voice
+            for key, voice in (glossary_voices or {}).items()
+            if key and voice
+        }
+        self._glossary_presence = {
+            self._normalize(key): value
+            for key, value in (glossary_presence or {}).items()
+            if key and value
+        }
+        if narrator_gender in {"male", "female"}:
+            self._narrator_gender = narrator_gender
+        else:
+            persona = narrator_voice.rsplit("-", 1)[-1]
+            if persona in CHIRP3_PERSONAS["female"]:
+                self._narrator_gender = "female"
+            elif persona in CHIRP3_PERSONAS["male"]:
+                self._narrator_gender = "male"
+            elif narrator_voice.endswith("-A"):
+                self._narrator_gender = "female"
+            else:
+                self._narrator_gender = "male"
+        self._assigned: dict[str, str] = {}
+        self._used: set[str] = {narrator_voice} if narrator_voice else set()
+
+    def presence_for(self, speaker: str | None) -> str:
+        if not speaker:
+            return "neutral"
+        key = self._normalize(speaker)
+        if key in self._glossary_presence:
+            return self._glossary_presence[key]
+        return self._infer_presence(speaker, "")
+
+    def voice_for(self, speaker: str | None) -> str:
+        if not speaker:
+            pool = gender_voice_pool(
+                self.engine,
+                self._narrator_gender,
+                self.narrator_voice,
+                max_voices=self._max_character_voices,
+            )
+            return pool[0]
+
+        key = self._normalize(speaker)
+        if key in self._glossary_voices:
+            return self._glossary_voices[key]
+        if key in self._assigned:
+            return self._assigned[key]
+
+        gender = self._infer_gender(speaker, "")
+        pool = gender_voice_pool(
+            self.engine,
+            gender,
+            self.narrator_voice,
+            max_voices=self._max_character_voices,
+        )
+        voice = next((candidate for candidate in pool if candidate not in self._used), pool[0])
+        self._assigned[key] = voice
+        self._used.add(voice)
+        return voice
 
 
 def _is_character_cue(value: str) -> bool:
@@ -344,28 +517,44 @@ def normalize_for_speech(value: str) -> str:
     return _sanitize_speech_markup(_screenplay_text_for_speech(value))
 
 
-def _dialogue_prosody(direction: str) -> tuple[int, int, int]:
+def _dialogue_prosody(
+    direction: str,
+    *,
+    presence: str = "neutral",
+    style: NarrationStyle = DEFAULT_NARRATION_STYLE,
+) -> tuple[int, int, int]:
     """Return rate percent, pitch semitones, and volume dB from a stage cue."""
     cue = direction.casefold()
-    rate = 100
-    pitch = 0
-    volume = 0
+    rate = style.dialogue_rate
+    pitch = style.dialogue_pitch
+    volume = style.dialogue_volume
+
+    if presence == "forceful":
+        rate = min(rate, 96)
+        pitch = min(pitch, -2)
+        volume = max(volume, 1)
+    elif presence == "soft":
+        rate = min(rate, 98)
+        pitch = max(pitch, 1)
+        volume = min(volume, -1)
 
     if re.search(r"trầm|khàn|lạnh lùng|uy nghiêm|trang trọng|vững chãi", cue):
-        rate = 94
-        pitch = -2
+        rate = min(rate, 96)
+        pitch = min(pitch, -1)
     if re.search(r"thì thầm|thoại thầm|nói nhỏ|nói khẽ|lẩm bẩm|nội tâm|nghĩ trong đầu", cue):
-        rate = 88
-        pitch = min(pitch, -2)
+        rate = min(rate, 90)
+        pitch = min(pitch, -1)
         volume = -4
     if re.search(r"hét|gào|thét|kêu xé|vang dội|nói lớn", cue):
-        rate = max(rate, 103)
+        rate = max(rate, 106)
+        pitch = max(pitch, 3)
         volume = 2
     if re.search(r"run|sợ hãi|kinh hoàng|hoảng|lạc đi", cue):
-        rate = max(rate, 105)
-        pitch = max(pitch, 1)
+        rate = max(rate, 107)
+        pitch = max(pitch, 3)
     if re.search(r"tức giận|giận dữ|răn đe|đe dọa", cue):
-        rate = max(rate, 104)
+        rate = max(rate, 105)
+        pitch = max(pitch, 2)
         volume = max(volume, 1)
     return rate, pitch, volume
 
@@ -381,10 +570,10 @@ def _prosody_ssml(value: str, *, rate: int, pitch: int, volume: int) -> str:
     )
 
 
-def _screenplay_ssml_chunks(
+def _parse_screenplay_paragraph(
     paragraph: str,
-    max_bytes: int = MAX_TTS_INPUT_BYTES,
-) -> list[str] | None:
+) -> tuple[str, str, str, str] | None:
+    """Return (speaker, role, direction, dialogue) when the paragraph is dialogue."""
     match = _screenplay_match(paragraph)
     plain_dialogue = _plain_screenplay_dialogue(paragraph)
     leading_direction = _LEADING_STAGE_DIRECTION_RE.match(paragraph.strip())
@@ -410,38 +599,42 @@ def _screenplay_ssml_chunks(
 
     if not dialogue:
         return None
+    return speaker, role, direction, dialogue
 
-    # Leave room for the SSML envelope. Long dialogue is split, but the
-    # speaker/direction cue is spoken only before the first chunk.
+
+def _dialogue_ssml_chunks(
+    dialogue: str,
+    direction: str,
+    max_bytes: int = MAX_TTS_INPUT_BYTES,
+    *,
+    presence: str = "neutral",
+    speaker: str = "",
+    role: str = "",
+    style: NarrationStyle = DEFAULT_NARRATION_STYLE,
+) -> list[str] | None:
+    # Leave room for the SSML envelope and boundary breaks. Long dialogue is
+    # split; delivery cues shape prosody but are not spoken aloud by default.
     dialogue_chunks = _chunks_within_limit(dialogue, max_bytes=max(1000, max_bytes - 900))
-    rate, pitch, volume = _dialogue_prosody(direction)
+    rate, pitch, volume = _dialogue_prosody(direction, presence=presence, style=style)
     rendered: list[str] = []
     for index, chunk in enumerate(dialogue_chunks):
         parts = ["<speak>"]
         if index == 0:
-            if speaker:
+            if style.speak_speaker_names and speaker:
                 parts.append(f"<s>{_ssml_text(_as_sentence(speaker))}</s>")
-                parts.append('<break time="300ms"/>')
-            if role:
+                parts.append('<break time="200ms"/>')
+            if style.speak_stage_directions and role:
                 parts.append(
-                    _prosody_ssml(
-                        _as_sentence(role),
-                        rate=90,
-                        pitch=-1,
-                        volume=-2,
-                    )
+                    _prosody_ssml(_as_sentence(role), rate=90, pitch=-1, volume=-2)
                 )
-                parts.append('<break time="250ms"/>')
-            if direction:
+                parts.append('<break time="150ms"/>')
+            if style.speak_stage_directions and direction:
                 parts.append(
-                    _prosody_ssml(
-                        _as_sentence(direction),
-                        rate=90,
-                        pitch=-1,
-                        volume=-2,
-                    )
+                    _prosody_ssml(_as_sentence(direction), rate=90, pitch=-1, volume=-2)
                 )
-                parts.append('<break time="450ms"/>')
+                parts.append('<break time="200ms"/>')
+            elif style.break_start_ms > 0:
+                parts.append(f'<break time="{style.break_start_ms}ms"/>')
         parts.append(
             _prosody_ssml(
                 chunk,
@@ -450,14 +643,36 @@ def _screenplay_ssml_chunks(
                 volume=volume,
             )
         )
+        if style.break_end_ms > 0:
+            parts.append(f'<break time="{style.break_end_ms}ms"/>')
         parts.append("</speak>")
         ssml = "".join(parts)
         if len(ssml.encode("utf-8")) > max_bytes:
-            # Extremely long speaker/direction cues are safer as plain speech
-            # than an invalid over-limit request.
             return None
         rendered.append(ssml)
     return rendered
+
+
+def _narration_ssml_chunks(
+    text: str,
+    max_bytes: int = MAX_TTS_INPUT_BYTES,
+    *,
+    style: NarrationStyle = DEFAULT_NARRATION_STYLE,
+) -> list[str]:
+    text_chunks = _chunks_within_limit(text, max_bytes=max(1000, max_bytes - 220))
+    return [
+        (
+            "<speak>"
+            + _prosody_ssml(
+                chunk,
+                rate=style.narrator_rate,
+                pitch=style.narrator_pitch,
+                volume=style.narrator_volume,
+            )
+            + "</speak>"
+        )
+        for chunk in text_chunks
+    ]
 
 
 def _chunks_within_limit(value: str, max_bytes: int = MAX_TTS_INPUT_BYTES) -> list[str]:
@@ -512,46 +727,95 @@ def _chunks_within_limit(value: str, max_bytes: int = MAX_TTS_INPUT_BYTES) -> li
     return chunks
 
 
-def chapter_audio_segments(content: str, voice: str) -> list[AudioSegment]:
+def chapter_audio_segments(
+    content: str,
+    voice: str,
+    *,
+    engine: str | None = None,
+    glossary_voices: dict[str, str] | None = None,
+    glossary_presence: dict[str, str] | None = None,
+    narrator_gender: str | None = None,
+    style: NarrationStyle | None = None,
+) -> list[AudioSegment]:
+    narration_style = style or DEFAULT_NARRATION_STYLE
     paragraphs = [
         collapsed
         for paragraph in re.split(r"\n\s*\n", content)
         if (collapsed := re.sub(r"\s*\n\s*", " ", paragraph).strip())
     ]
+    cast = SpeakerVoiceCast(
+        voice,
+        engine=engine,
+        glossary_voices=glossary_voices,
+        glossary_presence=glossary_presence,
+        narrator_gender=narrator_gender,
+        max_character_voices=narration_style.max_character_voices,
+    )
     segments: list[AudioSegment] = []
+
+    def append_segment(
+        *,
+        paragraph_index: int,
+        text: str,
+        segment_voice: str,
+        is_ssml: bool,
+        kind: str,
+        speaker: str | None,
+    ) -> None:
+        digest = hashlib.sha256(
+            f"{TTS_CACHE_VERSION}\0{segment_voice}\0"
+            f"{'ssml' if is_ssml else 'text'}\0{text}".encode()
+        ).hexdigest()
+        segments.append(
+            AudioSegment(
+                index=len(segments),
+                paragraph_index=paragraph_index,
+                text=text,
+                cache_key=digest,
+                voice=segment_voice,
+                is_ssml=is_ssml,
+                kind=kind,
+                speaker=speaker or None,
+            )
+        )
+
     for paragraph_index, paragraph in enumerate(paragraphs):
-        screenplay_chunks = _screenplay_ssml_chunks(paragraph)
-        if screenplay_chunks:
-            for chunk in screenplay_chunks:
-                digest = hashlib.sha256(
-                    f"{TTS_CACHE_VERSION}\0{voice}\0ssml\0{chunk}".encode()
-                ).hexdigest()
-                segments.append(
-                    AudioSegment(
-                        index=len(segments),
+        parsed = _parse_screenplay_paragraph(paragraph)
+        if parsed:
+            speaker, role, direction, dialogue = parsed
+            presence = cast.presence_for(speaker or None)
+            dialogue_chunks = _dialogue_ssml_chunks(
+                dialogue,
+                direction,
+                presence=presence,
+                speaker=speaker,
+                role=role,
+                style=narration_style,
+            )
+            if dialogue_chunks:
+                segment_voice = cast.voice_for(speaker or None)
+                for chunk in dialogue_chunks:
+                    append_segment(
                         paragraph_index=paragraph_index,
                         text=chunk,
-                        cache_key=digest,
+                        segment_voice=segment_voice,
                         is_ssml=True,
+                        kind="dialogue",
+                        speaker=speaker or None,
                     )
-                )
-            continue
+                continue
 
         normalized = normalize_for_speech(paragraph)
         if not normalized:
             continue
-        for chunk in _chunks_within_limit(normalized):
-            digest = hashlib.sha256(
-                f"{TTS_CACHE_VERSION}\0{voice}\0{chunk}".encode()
-            ).hexdigest()
-            segments.append(
-                AudioSegment(
-                    index=len(segments),
-                    paragraph_index=paragraph_index,
-                    text=chunk,
-                    cache_key=digest,
-                    is_ssml=False,
-                )
+        for chunk in _narration_ssml_chunks(normalized, style=narration_style):
+            append_segment(
+                paragraph_index=paragraph_index,
+                text=chunk,
+                segment_voice=voice,
+                is_ssml=True,
+                kind="narration",
+                speaker=None,
             )
     return segments
 
@@ -591,7 +855,15 @@ def synthesize_text(voice: str, text: str, *, is_ssml: bool = False) -> bytes:
     return response.audio_content
 
 
-def synthesize_segment(settings: Settings, segment: AudioSegment, voice: str) -> Path:
+def synthesize_segment(
+    settings: Settings,
+    segment: AudioSegment,
+    voice: str | None = None,
+) -> Path:
+    resolved_voice = segment.voice or voice
+    if not resolved_voice:
+        raise ValueError("Audio segment is missing a voice.")
+
     path = cache_path(settings, segment)
     if path.is_file():
         return path
@@ -600,7 +872,11 @@ def synthesize_segment(settings: Settings, segment: AudioSegment, voice: str) ->
         if path.is_file():
             return path
 
-        audio_content = synthesize_text(voice, segment.text, is_ssml=segment.is_ssml)
+        audio_content = synthesize_text(
+            resolved_voice,
+            segment.text,
+            is_ssml=segment.is_ssml,
+        )
 
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -612,14 +888,22 @@ def synthesize_segment(settings: Settings, segment: AudioSegment, voice: str) ->
         return path
 
 
-def prepare_segments(settings: Settings, segments: list[AudioSegment], voice: str) -> None:
+def prepare_segments(
+    settings: Settings,
+    segments: list[AudioSegment],
+    voice: str | None = None,
+) -> None:
     missing = [segment for segment in segments if not cache_path(settings, segment).is_file()]
     if not missing:
         return
     with ThreadPoolExecutor(max_workers=min(4, len(missing))) as executor:
         list(
             executor.map(
-                lambda segment: synthesize_segment(settings, segment, voice),
+                lambda segment: synthesize_segment(
+                    settings,
+                    segment,
+                    segment.voice or voice,
+                ),
                 missing,
             )
         )

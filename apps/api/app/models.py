@@ -88,6 +88,8 @@ class Book(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cast_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
+    cast_overrides: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -240,6 +242,11 @@ class GlossaryEntry(Base):
     aliases: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     sort_key: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    gender: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    age_band: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    presence: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    tts_voice: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    cast_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

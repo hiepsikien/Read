@@ -1,0 +1,42 @@
+{
+  "cli": {
+    "version": ">= 21.1.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "development"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://read-api.antunai.com",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyC8ExCTak7AWpI9EVE7Zo_cG5SyJtnwhC8",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "read-99d4d.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "read-99d4d",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:712440107921:web:3e52c72fa72d2227bac030"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://read-api.antunai.com",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyC8ExCTak7AWpI9EVE7Zo_cG5SyJtnwhC8",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "read-99d4d.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "read-99d4d",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:712440107921:web:3e52c72fa72d2227bac030"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6796692345"
+      }
+    }
+  }
+}

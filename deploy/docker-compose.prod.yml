@@ -1,0 +1,65 @@
+name: read
+
+# Production stack for Read API on the shared vstock-api VM.
+# Shares Angi Postgres (separate DB/user) and angi_net for Caddy routing.
+#
+# Usage (on VM, from /home/anh_nguyendinh_cs/Read/deploy):
+#   cp .env.prod.example .env.prod   # fill secrets
+#   docker compose -p read -f docker-compose.prod.yml --env-file .env.prod up -d --build
+# IMPORTANT: always use project name "read" (see top-level name:) so this does
+# not collide with Angi's compose project "deploy".
+
+services:
+  # Service name MUST be read-api (not "api") — shares angi_net with Angi,
+  # which already owns the DNS alias "api" for Caddy → angi.
+  read-api:
+    build:
+      context: ../apps/api
+    image: ${API_IMAGE:-read-api:latest}
+    container_name: read-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${READ_DB_USER:-read}:${READ_DB_PASSWORD}@postgres:5432/${READ_DB_NAME:-read}
+      UPLOAD_DIR: /data/uploads
+      TTS_CACHE_DIR: /data/uploads/tts-cache
+      PORT: "8000"
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://read-api.antunai.com}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      AUTH_DEV_MODE: ${AUTH_DEV_MODE:-false}
+      AUTH_DEV_SECRET: ${AUTH_DEV_SECRET:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_CREDENTIALS_JSON: ${FIREBASE_CREDENTIALS_JSON:-}
+      GOOGLE_TTS_ENABLED: ${GOOGLE_TTS_ENABLED:-false}
+      GOOGLE_TTS_ENGINE: ${GOOGLE_TTS_ENGINE:-neural2}
+      GOOGLE_TTS_GENDER: ${GOOGLE_TTS_GENDER:-male}
+      GOOGLE_TTS_CHIRP_PERSONA: ${GOOGLE_TTS_CHIRP_PERSONA:-}
+      GOOGLE_TTS_VOICE: ${GOOGLE_TTS_VOICE:-}
+      AI_EXPLAIN_ENABLED: ${AI_EXPLAIN_ENABLED:-false}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+    volumes:
+      - read_uploads:/data/uploads
+      - ./firebase-service-account.json:/run/secrets/firebase.json:ro
+    networks:
+      - angi
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  read_uploads:
+
+networks:
+  angi:
+    external: true
+    name: angi_net

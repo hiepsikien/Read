@@ -96,10 +96,17 @@ export default function LibraryScreen() {
     return Math.floor((screen - H_PAD * 2 - GAP) / 2);
   }, []);
 
-  if (authLoading || loading) {
+  // Library is public — don't block the whole screen on auth bootstrap.
+  // Auth still hydrates in the background for Settings / Continue reading.
+  if (loading && books.length === 0 && !error) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.sage} />
+        {authLoading ? (
+          <Text style={{ marginTop: 12, color: colors.inkSoft, fontSize: 13 }}>
+            Starting…
+          </Text>
+        ) : null}
       </View>
     );
   }

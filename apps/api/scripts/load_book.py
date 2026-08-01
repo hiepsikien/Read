@@ -33,6 +33,8 @@ from app.glossary import aliases_to_storage, parse_glossary_docx  # noqa: E402
 from app.media import clear_book_media  # noqa: E402
 from app.models import Book, Chapter, ExplainCache, GlossaryEntry, User  # noqa: E402
 from app.parse_docs import extract_text_from_file  # noqa: E402
+from app.tts_settings import get_active_tts  # noqa: E402
+from app.voice_cast import ensure_entries_cast  # noqa: E402
 
 
 def get_or_create_publisher(db: Session, email: str, name: str) -> User:
@@ -162,26 +164,42 @@ def load_glossary(db: Session, *, book: Book, glossary: Path) -> int:
     db.execute(delete(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
     db.execute(delete(ExplainCache).where(ExplainCache.book_id == book.id))
 
+    rows: list[GlossaryEntry] = []
     for item in parsed:
-        db.add(
-            GlossaryEntry(
-                id=generate(),
-                book_id=book.id,
-                episode_key=item.episode_key,
-                episode_title=item.episode_title,
-                group_label=item.group_label,
-                name=item.name,
-                aliases=aliases_to_storage(item.aliases),
-                summary=item.summary,
-                sort_key=item.sort_key,
-                created_at=now,
-                updated_at=now,
-            )
+        row = GlossaryEntry(
+            id=generate(),
+            book_id=book.id,
+            episode_key=item.episode_key,
+            episode_title=item.episode_title,
+            group_label=item.group_label,
+            name=item.name,
+            aliases=aliases_to_storage(item.aliases),
+            summary=item.summary,
+            sort_key=item.sort_key,
+            gender="",
+            age_band="",
+            presence="",
+            tts_voice="",
+            cast_locked=False,
+            created_at=now,
+            updated_at=now,
         )
+        db.add(row)
+        rows.append(row)
+
+    active = get_active_tts(db)
+    ensure_entries_cast(
+        rows,
+        engine=active.engine,
+        narrator_voice=active.voice,
+        max_voices=active.max_character_voices,
+    )
 
     episodes = sorted({item.episode_key for item in parsed if item.episode_key})
     print(f"  glossary: {len(parsed)} characters across {len(episodes)} episodes")
     print(f"  episodes: {', '.join(episodes) or 'none'}")
+    voices = sorted({row.tts_voice for row in rows if row.tts_voice})
+    print(f"  cast voices ({active.engine}): {', '.join(voices) or 'none'}")
     return len(parsed)
 
 

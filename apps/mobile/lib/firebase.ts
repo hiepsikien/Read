@@ -51,18 +51,25 @@ export function firebaseConfigured() {
 export function getFirebaseAuth(): Auth | null {
   const config = readConfig();
   if (!config) return null;
-  if (!auth) {
-    app = getApps()[0] ?? initializeApp(config);
-    try {
-      auth = initializeAuth(app, {
-        persistence: getReactNativePersistence(AsyncStorage),
-      });
-    } catch {
-      // Already initialized (Fast Refresh / hot reload)
-      auth = getAuth(app);
+  try {
+    if (!auth) {
+      app = getApps()[0] ?? initializeApp(config);
+      try {
+        auth = initializeAuth(app, {
+          persistence: getReactNativePersistence(AsyncStorage),
+        });
+      } catch {
+        // Already initialized (Fast Refresh / hot reload)
+        auth = getAuth(app);
+      }
     }
+    return auth;
+  } catch {
+    // Broken Firebase init must not white-screen the whole app.
+    auth = null;
+    app = null;
+    return null;
   }
-  return auth;
 }
 
 export async function firebaseSignIn(email: string, password: string) {

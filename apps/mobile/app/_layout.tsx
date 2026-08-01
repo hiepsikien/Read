@@ -1,3 +1,4 @@
+import "react-native-gesture-handler";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Stack, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -6,6 +7,8 @@ import { BrandLogo } from "../components/BrandLogo";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { ReaderPreferencesProvider } from "../lib/reader-preferences";
 import { colors } from "../lib/theme";
+
+export { ErrorBoundary } from "expo-router";
 
 function LibraryHeaderRight() {
   const router = useRouter();
