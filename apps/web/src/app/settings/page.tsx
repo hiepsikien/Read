@@ -147,6 +147,15 @@ function NarrationSettings() {
   const [engine, setEngine] = useState("neural2");
   const [gender, setGender] = useState("male");
   const [chirpPersona, setChirpPersona] = useState("");
+  const [narratorRate, setNarratorRate] = useState(98);
+  const [narratorPitch, setNarratorPitch] = useState(-1);
+  const [dialogueRate, setDialogueRate] = useState(100);
+  const [dialoguePitch, setDialoguePitch] = useState(0);
+  const [breakStart, setBreakStart] = useState(200);
+  const [breakEnd, setBreakEnd] = useState(100);
+  const [speakNames, setSpeakNames] = useState(false);
+  const [speakDirections, setSpeakDirections] = useState(false);
+  const [maxVoices, setMaxVoices] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -162,6 +171,15 @@ function NarrationSettings() {
       setEngine(data.active.engine);
       setGender(data.active.gender);
       setChirpPersona(data.active.chirp_persona || "");
+      setNarratorRate(data.active.narrator_rate ?? data.defaults?.narrator_rate ?? 98);
+      setNarratorPitch(data.active.narrator_pitch ?? data.defaults?.narrator_pitch ?? -1);
+      setDialogueRate(data.active.dialogue_rate ?? data.defaults?.dialogue_rate ?? 100);
+      setDialoguePitch(data.active.dialogue_pitch ?? data.defaults?.dialogue_pitch ?? 0);
+      setBreakStart(data.active.break_start_ms ?? data.defaults?.break_start_ms ?? 200);
+      setBreakEnd(data.active.break_end_ms ?? data.defaults?.break_end_ms ?? 100);
+      setSpeakNames(Boolean(data.active.speak_speaker_names));
+      setSpeakDirections(Boolean(data.active.speak_stage_directions));
+      setMaxVoices(data.active.max_character_voices ?? data.defaults?.max_character_voices ?? 3);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load narration settings.");
     } finally {
@@ -205,6 +223,15 @@ function NarrationSettings() {
         engine,
         gender,
         chirp_persona: engine === "chirp3" ? chirpPersona : "",
+        narrator_rate: narratorRate,
+        narrator_pitch: narratorPitch,
+        dialogue_rate: dialogueRate,
+        dialogue_pitch: dialoguePitch,
+        break_start_ms: breakStart,
+        break_end_ms: breakEnd,
+        speak_speaker_names: speakNames,
+        speak_stage_directions: speakDirections,
+        max_character_voices: maxVoices,
       });
       setPayload((prev) => (prev ? { ...prev, active: result.active } : prev));
       setStatus(`Saved · ${result.active.voice}`);
@@ -226,7 +253,7 @@ function NarrationSettings() {
         <div>
           <h2 className="text-lg font-semibold">Narration voice</h2>
           <p className="mt-1 text-sm text-[var(--ink-soft)]">
-            Admin-only. Changes apply immediately to new cloud narration requests.
+            Admin-only global defaults. Per-book cast overrides are on each book’s admin page in the app.
           </p>
         </div>
         {payload?.active.enabled === false && (
@@ -290,6 +317,46 @@ function NarrationSettings() {
           </label>
         )}
 
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Narrator rate (%)</span>
+            <input type="number" value={narratorRate} onChange={(e) => setNarratorRate(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Narrator pitch (st)</span>
+            <input type="number" value={narratorPitch} onChange={(e) => setNarratorPitch(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Dialogue rate (%)</span>
+            <input type="number" value={dialogueRate} onChange={(e) => setDialogueRate(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Dialogue pitch (st)</span>
+            <input type="number" value={dialoguePitch} onChange={(e) => setDialoguePitch(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Break before (ms)</span>
+            <input type="number" value={breakStart} onChange={(e) => setBreakStart(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Break after (ms)</span>
+            <input type="number" value={breakEnd} onChange={(e) => setBreakEnd(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+          <label className="grid gap-1.5 text-sm">
+            <span className="font-medium">Max character voices</span>
+            <input type="number" min={1} max={6} value={maxVoices} onChange={(e) => setMaxVoices(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+          </label>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={speakNames} onChange={(e) => setSpeakNames(e.target.checked)} />
+          Speak speaker names
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={speakDirections} onChange={(e) => setSpeakDirections(e.target.checked)} />
+          Speak stage directions
+        </label>
+
         <div className="rounded-xl border border-[var(--line)] bg-white/50 p-3">
           <div className="mb-2 flex items-center justify-between gap-2 text-sm">
             <span className="font-medium">Preview</span>
@@ -321,7 +388,7 @@ function NarrationSettings() {
           onClick={() => void onSave()}
           className="justify-self-start rounded-full bg-[var(--sage)] px-5 py-2.5 text-sm font-medium text-white transition hover:bg-[var(--sage-deep)] disabled:opacity-60"
         >
-          {saving ? "Saving…" : "Save narration voice"}
+          {saving ? "Saving…" : "Save narration settings"}
         </button>
       </div>
     </section>

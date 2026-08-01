@@ -31,6 +31,11 @@ export default function AdminReviewScreen() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [chaptersExpanded, setChaptersExpanded] = useState(false);
+  const CHAPTER_PREVIEW_COUNT = 3;
+  const visibleChapters = chaptersExpanded
+    ? chapters
+    : chapters.slice(0, CHAPTER_PREVIEW_COUNT);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -65,9 +70,18 @@ export default function AdminReviewScreen() {
     setError("");
     setMessage("");
     try {
-      await api.adminApprove(id!, featured);
-      setMessage(featured ? "Book approved and featured." : "Book approved and published.");
-      router.replace("/admin");
+      const result = await api.adminApprove(id!, featured);
+      const done = () => router.replace("/admin");
+      if (result.warnings?.length) {
+        Alert.alert(
+          featured ? "Approved & featured" : "Approved",
+          `Published with cast notes:\n\n${result.warnings.join("\n")}`,
+          [{ text: "OK", onPress: done }]
+        );
+      } else {
+        setMessage(featured ? "Book approved and featured." : "Book approved and published.");
+        done();
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Approve failed.");
     } finally {
@@ -180,19 +194,41 @@ export default function AdminReviewScreen() {
         </Pressable>
       ) : null}
 
+      <Pressable
+        style={styles.editCatalogBtn}
+        onPress={() => router.push(`/admin/${book.id}/audio`)}
+      >
+        <Text style={styles.editCatalogText}>Audio cast</Text>
+        <Text style={styles.editCatalogHint}>
+          Speaking voices · {book.cast_status || "draft"}
+        </Text>
+      </Pressable>
+
       <Text style={styles.section}>Chapters · {chapters.length}</Text>
       <View style={styles.list}>
-        {chapters.map((chapter) => (
+        {visibleChapters.map((chapter) => (
           <View key={chapter.id} style={styles.row}>
             <Text style={styles.rowTitle}>{chapter.title}</Text>
             <Text style={styles.rowMeta}>{chapter.word_count} words</Text>
             {chapter.content_preview ? (
-              <Text style={styles.preview} numberOfLines={4}>
+              <Text style={styles.preview} numberOfLines={2}>
                 {chapter.content_preview}
               </Text>
             ) : null}
           </View>
         ))}
+        {chapters.length > CHAPTER_PREVIEW_COUNT ? (
+          <Pressable
+            style={styles.seeMoreRow}
+            onPress={() => setChaptersExpanded((open) => !open)}
+          >
+            <Text style={styles.seeMoreText}>
+              {chaptersExpanded
+                ? "Show fewer chapters"
+                : `See ${chapters.length - CHAPTER_PREVIEW_COUNT} more chapters`}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {book.allowed_actions?.length ? (
@@ -375,6 +411,13 @@ const styles = StyleSheet.create({
   rowTitle: { color: colors.ink, fontWeight: "600" },
   rowMeta: { color: colors.inkSoft, fontSize: 13 },
   preview: { color: colors.inkSoft, fontSize: 13, lineHeight: 18, marginTop: 4 },
+  seeMoreRow: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    backgroundColor: "rgba(63,111,92,0.06)",
+  },
+  seeMoreText: { color: colors.sageDeep, fontWeight: "600", fontSize: 14 },
   input: {
     borderWidth: 1,
     borderColor: colors.line,

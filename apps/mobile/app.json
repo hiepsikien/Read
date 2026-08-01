@@ -15,14 +15,21 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "app.read.mobile"
+      "bundleIdentifier": "com.nguyendinhanh.read",
+      "buildNumber": "5",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#d5e2dd"
       },
-      "package": "app.read.mobile"
+      "package": "com.nguyendinhanh.read",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -32,13 +39,19 @@
         {
           "photosPermission": "Allow Read to choose a book cover from your photo library."
         }
-      ]
+      ],
+      "expo-asset",
+      "./plugins/withMetroHostFromIpTxt"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "apiUrl": "http://localhost:8000"
+      "apiUrl": "https://read-api.antunai.com",
+      "router": {},
+      "eas": {
+        "projectId": "cc55ce5a-9ec6-433e-882d-a0fb5b279c8f"
+      }
     }
   }
 }

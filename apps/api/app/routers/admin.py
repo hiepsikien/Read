@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
+import json
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -17,9 +18,21 @@ from ..covers import (
     save_cover_bytes,
 )
 from ..db import get_db
-from ..models import Book, Category, Chapter, ContentReport, ModerationEvent, User
+from ..models import Book, Category, Chapter, ContentReport, GlossaryEntry, ModerationEvent, User
 from ..moderation import allowed_admin_actions, event_payload, record_moderation_event
-from ..tts_settings import tts_settings_payload, upsert_tts_settings
+from ..glossary import aliases_from_storage, normalize_lookup
+from ..speaking_cast import speaking_cast_plan
+from ..tts_settings import active_payload, get_active_tts, tts_settings_payload, upsert_tts_settings
+from .. import tts
+from ..voice_cast import (
+    CAST_PERSONAS,
+    apply_cast_to_entries,
+    cast_profiles_for_entries,
+    ensure_entries_cast,
+    infer_age_band,
+    infer_gender,
+    infer_presence,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -50,6 +63,37 @@ class TtsSettingsBody(BaseModel):
     engine: str = Field(min_length=1, max_length=32)
     gender: str = Field(min_length=1, max_length=16)
     chirp_persona: str = Field(default="", max_length=64)
+    narrator_rate: int | None = Field(default=None, ge=80, le=120)
+    narrator_pitch: int | None = Field(default=None, ge=-6, le=6)
+    dialogue_rate: int | None = Field(default=None, ge=80, le=120)
+    dialogue_pitch: int | None = Field(default=None, ge=-6, le=6)
+    break_start_ms: int | None = Field(default=None, ge=0, le=800)
+    break_end_ms: int | None = Field(default=None, ge=0, le=800)
+    speak_speaker_names: bool | None = None
+    speak_stage_directions: bool | None = None
+    max_character_voices: int | None = Field(default=None, ge=1, le=6)
+
+
+class CastEntryUpdate(BaseModel):
+    id: str | None = Field(default=None, max_length=32)
+    speaker_key: str | None = Field(default=None, max_length=300)
+    gender: Literal["male", "female"]
+    age_band: Literal["youth", "adult", "elder"]
+    presence: Literal["soft", "neutral", "forceful"]
+    tts_voice: str = Field(min_length=1, max_length=128)
+    cast_locked: bool = True
+
+
+class CastUpdateBody(BaseModel):
+    entries: list[CastEntryUpdate] = Field(min_length=1)
+
+
+class CastRebuildBody(BaseModel):
+    unlock: bool = False
+
+
+class CastStatusBody(BaseModel):
+    status: Literal["draft", "ready"]
 
 
 class AdminCatalogBody(BaseModel):
@@ -102,6 +146,30 @@ def _get_category(db: Session, category_id: str | None) -> Category | None:
     return category
 
 
+def _load_cast_overrides(book: Book) -> dict:
+    raw = getattr(book, "cast_overrides", None) or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_cast_overrides(book: Book, overrides: dict) -> None:
+    book.cast_overrides = json.dumps(overrides, ensure_ascii=False)
+
+
+def _cast_warnings(book: Book, *, unmatched_count: int = 0, speaking_count: int = 0) -> list[str]:
+    warnings: list[str] = []
+    if (getattr(book, "cast_status", "draft") or "draft") != "ready":
+        warnings.append("Audio cast is not marked ready.")
+    if unmatched_count:
+        warnings.append(f"{unmatched_count} unmatched speaking cue(s).")
+    if speaking_count == 0:
+        warnings.append("No screenplay dialogue speakers were detected.")
+    return warnings
+
+
 def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
     return {
         "id": book.id,
@@ -126,6 +194,7 @@ def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
         "updated_at": book.updated_at.isoformat(),
         "review_note": book.review_note,
         "cover_url": cover_url_for(book.id, book.cover_path),
+        "cast_status": getattr(book, "cast_status", None) or "draft",
     }
 
 
@@ -546,11 +615,23 @@ def approve_book(
         payload={"featured": make_featured},
     )
     db.commit()
+    refreshed = db.get(Book, book_id)
+    plan = speaking_cast_plan(
+        list(db.scalars(select(Chapter).where(Chapter.book_id == book_id))),
+        list(db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book_id))),
+    )
+    warnings = _cast_warnings(
+        refreshed or book,
+        unmatched_count=plan["unmatched_count"],
+        speaking_count=plan["speaking_count"],
+    )
     return {
         "ok": True,
         "status": "published",
         "visibility": "listed",
         "featured": make_featured,
+        "cast_status": getattr(refreshed or book, "cast_status", None) or "draft",
+        "warnings": warnings,
     }
 
 
@@ -813,6 +894,15 @@ def update_tts_settings(
             engine=body.engine,
             gender=body.gender,
             chirp_persona=body.chirp_persona,
+            narrator_rate=body.narrator_rate,
+            narrator_pitch=body.narrator_pitch,
+            dialogue_rate=body.dialogue_rate,
+            dialogue_pitch=body.dialogue_pitch,
+            break_start_ms=body.break_start_ms,
+            break_end_ms=body.break_end_ms,
+            speak_speaker_names=body.speak_speaker_names,
+            speak_stage_directions=body.speak_stage_directions,
+            max_character_voices=body.max_character_voices,
             admin_id=admin.id,
         )
     except ValueError as exc:
@@ -820,15 +910,308 @@ def update_tts_settings(
 
     return {
         "ok": True,
-        "active": {
-            "engine": active.engine,
-            "gender": active.gender,
-            "chirp_persona": active.chirp_persona,
-            "voice_override": active.voice_override,
-            "voice": active.voice,
-            "enabled": active.enabled,
-            "source": active.source,
-        },
+        "active": active_payload(active),
+    }
+
+
+def _cast_entry_payload(
+    *,
+    entry: GlossaryEntry | None,
+    speaker_cue: str,
+    speaker_key: str,
+    matched: bool,
+    line_count: int,
+    first_chapter_id: str,
+    first_chapter_title: str,
+    first_chapter_position: int,
+    override: dict | None = None,
+    source: Literal["speaking", "glossary_only", "unmatched"] | None = None,
+) -> dict:
+    override = override or {}
+    if entry is not None:
+        return {
+            "id": entry.id,
+            "speaker_key": speaker_key,
+            "speaker_cue": speaker_cue,
+            "name": entry.name,
+            "aliases": aliases_from_storage(entry.aliases),
+            "episode_key": entry.episode_key,
+            "group_label": entry.group_label,
+            "summary": entry.summary,
+            "gender": override.get("gender") or entry.gender or None,
+            "age_band": override.get("age_band") or entry.age_band or None,
+            "presence": override.get("presence") or entry.presence or None,
+            "tts_voice": override.get("tts_voice") or entry.tts_voice or None,
+            "cast_locked": bool(
+                override.get("cast_locked")
+                if "cast_locked" in override
+                else entry.cast_locked
+            ),
+            "matched": matched,
+            "line_count": line_count,
+            "first_chapter_id": first_chapter_id,
+            "first_chapter_title": first_chapter_title,
+            "first_chapter_position": first_chapter_position,
+            "source": source or ("speaking" if matched else "glossary_only"),
+        }
+    return {
+        "id": None,
+        "speaker_key": speaker_key,
+        "speaker_cue": speaker_cue,
+        "name": speaker_cue,
+        "aliases": [],
+        "episode_key": "",
+        "group_label": "",
+        "summary": "",
+        "gender": override.get("gender") or infer_gender(speaker_cue, ""),
+        "age_band": override.get("age_band") or infer_age_band(speaker_cue, ""),
+        "presence": override.get("presence") or infer_presence(speaker_cue, ""),
+        "tts_voice": override.get("tts_voice") or None,
+        "cast_locked": bool(override.get("cast_locked", False)),
+        "matched": False,
+        "line_count": line_count,
+        "first_chapter_id": first_chapter_id,
+        "first_chapter_title": first_chapter_title,
+        "first_chapter_position": first_chapter_position,
+        "source": source or "unmatched",
+    }
+
+
+@router.get("/books/{book_id}/cast")
+def get_book_cast(
+    book_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+    scope: Literal["speaking", "all"] = "speaking",
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    active = get_active_tts(db)
+    rows = list(
+        db.scalars(
+            select(GlossaryEntry)
+            .where(GlossaryEntry.book_id == book.id)
+            .order_by(GlossaryEntry.episode_key, GlossaryEntry.sort_key)
+        )
+    )
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book.id)))
+    ensure_entries_cast(
+        rows,
+        engine=active.engine,
+        narrator_voice=active.voice,
+        max_voices=active.max_character_voices,
+    )
+    db.commit()
+
+    plan = speaking_cast_plan(chapters, rows)
+    overrides = _load_cast_overrides(book)
+    entries: list[dict] = []
+
+    for item in plan["speaking"]:
+        entry = item["glossary_entry"]
+        key = item["speaker_key"]
+        entries.append(
+            _cast_entry_payload(
+                entry=entry,
+                speaker_cue=item["speaker_cue"],
+                speaker_key=key,
+                matched=True,
+                line_count=item["line_count"],
+                first_chapter_id=item["first_chapter_id"],
+                first_chapter_title=item["first_chapter_title"],
+                first_chapter_position=item["first_chapter_position"],
+                override=overrides.get(key) if isinstance(overrides.get(key), dict) else None,
+                source="speaking",
+            )
+        )
+    for item in plan["unmatched"]:
+        key = item["speaker_key"]
+        entries.append(
+            _cast_entry_payload(
+                entry=None,
+                speaker_cue=item["speaker_cue"],
+                speaker_key=key,
+                matched=False,
+                line_count=item["line_count"],
+                first_chapter_id=item["first_chapter_id"],
+                first_chapter_title=item["first_chapter_title"],
+                first_chapter_position=item["first_chapter_position"],
+                override=overrides.get(key) if isinstance(overrides.get(key), dict) else None,
+                source="unmatched",
+            )
+        )
+
+    if scope == "all":
+        speaking_ids = {e["id"] for e in entries if e.get("id")}
+        for entry in plan["glossary_only"]:
+            if entry.id in speaking_ids:
+                continue
+            key = normalize_lookup(entry.name)
+            entries.append(
+                _cast_entry_payload(
+                    entry=entry,
+                    speaker_cue=entry.name,
+                    speaker_key=key,
+                    matched=True,
+                    line_count=0,
+                    first_chapter_id="",
+                    first_chapter_title="",
+                    first_chapter_position=0,
+                    override=overrides.get(key) if isinstance(overrides.get(key), dict) else None,
+                    source="glossary_only",
+                )
+            )
+
+    warnings = _cast_warnings(
+        book,
+        unmatched_count=plan["unmatched_count"],
+        speaking_count=plan["speaking_count"],
+    )
+    return {
+        "book_id": book.id,
+        "book_title": book.title,
+        "engine": active.engine,
+        "narrator_voice": active.voice,
+        "cast_status": getattr(book, "cast_status", None) or "draft",
+        "scope": scope,
+        "speaking_count": plan["speaking_count"],
+        "glossary_count": plan["glossary_count"],
+        "unmatched_count": plan["unmatched_count"],
+        "warnings": warnings,
+        "cast_personas": CAST_PERSONAS,
+        "voices": tts.voice_options(),
+        "entries": entries,
+    }
+
+
+@router.put("/books/{book_id}/cast")
+def update_book_cast(
+    book_id: str,
+    body: CastUpdateBody,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    active = get_active_tts(db)
+    rows = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    )
+    by_id = {row.id: row for row in rows}
+    overrides = _load_cast_overrides(book)
+    now = datetime.now(timezone.utc)
+    updated = 0
+    for item in body.entries:
+        gender = item.gender
+        persona = item.tts_voice.rsplit("-", 1)[-1]
+        if active.engine == "chirp3":
+            allowed = set(CAST_PERSONAS[gender]) | set(tts.CHIRP3_PERSONAS[gender])
+            if persona not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Voice {item.tts_voice} does not match gender {gender}.",
+                )
+
+        if item.id:
+            seed = by_id.get(item.id)
+            if seed is None or seed.book_id != book.id:
+                raise HTTPException(status_code=404, detail=f"Cast entry {item.id} not found.")
+            key = normalize_lookup(seed.name)
+            for row in rows:
+                if normalize_lookup(row.name) != key:
+                    continue
+                row.gender = gender
+                row.age_band = item.age_band
+                row.presence = item.presence
+                row.tts_voice = item.tts_voice
+                row.cast_locked = bool(item.cast_locked)
+                row.updated_at = now
+                updated += 1
+            # Keep override in sync for synthesis lookup by cue key.
+            overrides[key] = {
+                "gender": gender,
+                "age_band": item.age_band,
+                "presence": item.presence,
+                "tts_voice": item.tts_voice,
+                "cast_locked": bool(item.cast_locked),
+            }
+        else:
+            key = normalize_lookup(item.speaker_key or "")
+            if not key:
+                raise HTTPException(status_code=400, detail="speaker_key is required for unmatched cues.")
+            overrides[key] = {
+                "gender": gender,
+                "age_band": item.age_band,
+                "presence": item.presence,
+                "tts_voice": item.tts_voice,
+                "cast_locked": bool(item.cast_locked),
+            }
+            updated += 1
+
+    _save_cast_overrides(book, overrides)
+    if (getattr(book, "cast_status", None) or "draft") == "ready":
+        # Edits after ready send it back to draft until re-confirmed.
+        book.cast_status = "draft"
+    book.updated_at = now
+    db.commit()
+    return {"ok": True, "updated": updated, "cast_status": book.cast_status}
+
+
+@router.post("/books/{book_id}/cast/rebuild")
+def rebuild_book_cast(
+    book_id: str,
+    body: CastRebuildBody,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    active = get_active_tts(db)
+    rows = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    )
+    profiles = cast_profiles_for_entries(
+        rows,
+        engine=active.engine,
+        narrator_voice=active.voice,
+        max_voices=active.max_character_voices,
+    )
+    updated = apply_cast_to_entries(rows, profiles, unlock=body.unlock)
+    if body.unlock:
+        _save_cast_overrides(book, {})
+    book.cast_status = "draft"
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "updated": updated, "cast_status": book.cast_status}
+
+
+@router.post("/books/{book_id}/cast/status")
+def set_book_cast_status(
+    book_id: str,
+    body: CastStatusBody,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    book.cast_status = body.status
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book.id)))
+    rows = list(db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id)))
+    plan = speaking_cast_plan(chapters, rows)
+    return {
+        "ok": True,
+        "cast_status": book.cast_status,
+        "warnings": _cast_warnings(
+            book,
+            unmatched_count=plan["unmatched_count"],
+            speaking_count=plan["speaking_count"],
+        ),
     }
 
 

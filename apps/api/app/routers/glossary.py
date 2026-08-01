@@ -36,6 +36,8 @@ from ..glossary import (
     parse_glossary_docx,
 )
 from ..models import Book, Chapter, ExplainCache, GlossaryEntry, Purchase, User
+from ..tts_settings import get_active_tts
+from ..voice_cast import ensure_entries_cast
 
 router = APIRouter(prefix="/api/books", tags=["glossary"])
 
@@ -127,6 +129,9 @@ def _entry_list_item(entry: GlossaryEntry, *, compact: bool) -> dict:
     if not compact:
         item["summary"] = entry.summary
         item["episode_title"] = entry.episode_title
+        item["gender"] = entry.gender or None
+        item["age_band"] = entry.age_band or None
+        item["tts_voice"] = entry.tts_voice or None
     return item
 
 
@@ -201,22 +206,36 @@ async def upload_glossary(
     db.execute(delete(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
     db.execute(delete(ExplainCache).where(ExplainCache.book_id == book.id))
 
+    rows: list[GlossaryEntry] = []
     for item in parsed:
-        db.add(
-            GlossaryEntry(
-                id=generate(),
-                book_id=book.id,
-                episode_key=item.episode_key,
-                episode_title=item.episode_title,
-                group_label=item.group_label,
-                name=item.name,
-                aliases=aliases_to_storage(item.aliases),
-                summary=item.summary,
-                sort_key=item.sort_key,
-                created_at=now,
-                updated_at=now,
-            )
+        row = GlossaryEntry(
+            id=generate(),
+            book_id=book.id,
+            episode_key=item.episode_key,
+            episode_title=item.episode_title,
+            group_label=item.group_label,
+            name=item.name,
+            aliases=aliases_to_storage(item.aliases),
+            summary=item.summary,
+            sort_key=item.sort_key,
+            gender="",
+            age_band="",
+            presence="",
+            tts_voice="",
+            cast_locked=False,
+            created_at=now,
+            updated_at=now,
         )
+        db.add(row)
+        rows.append(row)
+
+    active = get_active_tts(db)
+    ensure_entries_cast(
+        rows,
+        engine=active.engine,
+        narrator_voice=active.voice,
+        max_voices=active.max_character_voices,
+    )
 
     if book.status == "rejected":
         book.status = "draft"
@@ -227,6 +246,10 @@ async def upload_glossary(
         "ok": True,
         "count": len(parsed),
         "episodes": sorted({item.episode_key for item in parsed if item.episode_key}),
+        "cast": {
+            "engine": active.engine,
+            "voices": sorted({row.tts_voice for row in rows if row.tts_voice}),
+        },
     }
 
 

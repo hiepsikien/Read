@@ -40,6 +40,8 @@ yarn-error.log*
 .env.*
 !.env.example
 !.env*.example
+deploy/.env.prod
+deploy/.env.sync
 
 # Firebase Admin credentials (server secret)
 apps/api/firebase-service-account.json
@@ -61,3 +63,8 @@ apps/api/uploads
 # expo
 apps/mobile/.expo/
 apps/mobile/dist/
+apps/mobile/ios/
+apps/mobile/ios.dev.bak/
+apps/mobile/*.ipa
+apps/mobile/eas-*.log
+apps/mobile/*.log

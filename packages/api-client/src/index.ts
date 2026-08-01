@@ -156,6 +156,7 @@ export interface BookListItem {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   cover_url?: string | null;
+  cast_status?: "draft" | "ready";
 }
 
 export interface ChapterListItem {
@@ -188,6 +189,9 @@ export interface ReadingShelfItem {
 export interface ChapterAudioSegment {
   index: number;
   paragraph_index: number;
+  kind?: "narration" | "dialogue";
+  speaker?: string | null;
+  voice?: string;
   url: string;
 }
 
@@ -207,19 +211,83 @@ export interface TtsActiveSettings {
   voice: string;
   enabled: boolean;
   source?: string;
+  narrator_rate?: number;
+  narrator_pitch?: number;
+  dialogue_rate?: number;
+  dialogue_pitch?: number;
+  break_start_ms?: number;
+  break_end_ms?: number;
+  speak_speaker_names?: boolean;
+  speak_stage_directions?: boolean;
+  max_character_voices?: number;
 }
 
 export interface TtsSettingsPayload {
   engines: Array<{ id: string; label: string }>;
   genders: string[];
+  age_bands?: string[];
+  presences?: string[];
   chirp3_personas: { male: string[]; female: string[] };
+  cast_personas?: { male: string[]; female: string[] };
   voices: Array<{
     engine: string;
     engine_label: string;
     gender: string;
     voice: string;
   }>;
+  defaults?: {
+    narrator_rate: number;
+    narrator_pitch: number;
+    dialogue_rate: number;
+    dialogue_pitch: number;
+    break_start_ms: number;
+    break_end_ms: number;
+    max_character_voices: number;
+  };
   active: TtsActiveSettings;
+}
+
+export interface BookCastEntry {
+  id: string | null;
+  speaker_key: string;
+  speaker_cue?: string;
+  name: string;
+  aliases: string[];
+  episode_key: string;
+  group_label: string;
+  summary: string;
+  gender: "male" | "female" | null;
+  age_band: "youth" | "adult" | "elder" | null;
+  presence: "soft" | "neutral" | "forceful" | null;
+  tts_voice: string | null;
+  cast_locked: boolean;
+  matched?: boolean;
+  line_count?: number;
+  first_chapter_id?: string;
+  first_chapter_title?: string;
+  first_chapter_position?: number;
+  source?: "speaking" | "glossary_only" | "unmatched";
+}
+
+export interface BookCastPayload {
+  book_id: string;
+  book_title: string;
+  engine: string;
+  narrator_voice: string;
+  cast_status?: "draft" | "ready";
+  scope?: "speaking" | "all";
+  speaking_count?: number;
+  glossary_count?: number;
+  unmatched_count?: number;
+  warnings?: string[];
+  cast_personas: { male: string[]; female: string[] };
+  voices: Array<{
+    engine: string;
+    engine_label: string;
+    gender: string;
+    voice: string;
+  }>;
+  entries: BookCastEntry[];
 }
 
 export interface GlossaryEntryCompact {
@@ -282,6 +350,7 @@ export interface BookDetail {
   submitted_at?: string | null;
   reviewed_at?: string | null;
   cover_url?: string | null;
+  cast_status?: "draft" | "ready";
 }
 
 export interface PublicProfile {
@@ -866,6 +935,8 @@ export function createApiClient(options: ApiClientOptions) {
         status: BookStatus;
         visibility: BookVisibility;
         featured: boolean;
+        cast_status?: "draft" | "ready";
+        warnings?: string[];
       }>(`/api/admin/books/${id}/approve`, {
         method: "POST",
         body: JSON.stringify({ featured }),
@@ -919,11 +990,61 @@ export function createApiClient(options: ApiClientOptions) {
       engine: string;
       gender: string;
       chirp_persona?: string;
+      narrator_rate?: number;
+      narrator_pitch?: number;
+      dialogue_rate?: number;
+      dialogue_pitch?: number;
+      break_start_ms?: number;
+      break_end_ms?: number;
+      speak_speaker_names?: boolean;
+      speak_stage_directions?: boolean;
+      max_character_voices?: number;
     }) {
       return request<{ ok: boolean; active: TtsActiveSettings }>("/api/admin/settings/tts", {
         method: "PUT",
         body: JSON.stringify(body),
       });
+    },
+    adminGetBookCast(bookId: string, scope: "speaking" | "all" = "speaking") {
+      return request<BookCastPayload>(`/api/admin/books/${bookId}/cast?scope=${scope}`);
+    },
+    adminUpdateBookCast(
+      bookId: string,
+      entries: Array<{
+        id?: string | null;
+        speaker_key?: string | null;
+        gender: "male" | "female";
+        age_band: "youth" | "adult" | "elder";
+        presence: "soft" | "neutral" | "forceful";
+        tts_voice: string;
+        cast_locked?: boolean;
+      }>
+    ) {
+      return request<{ ok: boolean; updated: number; cast_status?: string }>(
+        `/api/admin/books/${bookId}/cast`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ entries }),
+        }
+      );
+    },
+    adminRebuildBookCast(bookId: string, unlock = false) {
+      return request<{ ok: boolean; updated: number; cast_status?: string }>(
+        `/api/admin/books/${bookId}/cast/rebuild`,
+        {
+          method: "POST",
+          body: JSON.stringify({ unlock }),
+        }
+      );
+    },
+    adminSetBookCastStatus(bookId: string, status: "draft" | "ready") {
+      return request<{ ok: boolean; cast_status: string; warnings: string[] }>(
+        `/api/admin/books/${bookId}/cast/status`,
+        {
+          method: "POST",
+          body: JSON.stringify({ status }),
+        }
+      );
     },
     adminListUsers(options?: {
       q?: string;
