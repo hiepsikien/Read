@@ -33,6 +33,7 @@ import { BrandLogo } from "../../../components/BrandLogo";
 import { ExplainSheet } from "../../../components/ExplainSheet";
 import { FinishedBookOverlay } from "../../../components/FinishedBookOverlay";
 import { ReaderPagesView } from "../../../components/ReaderPagesView";
+import { getApiBaseUrl } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 import {
   FONT_SIZE_STEP,
@@ -126,11 +127,15 @@ export default function ReaderScreen() {
     async (paragraphIndex: number, scrollFraction: number) => {
       if (!bookId || !chapterId) return;
       latestProgressRef.current = { paragraphIndex, scrollFraction };
-      await writeLocalProgress(bookId, {
-        chapterId,
-        paragraphIndex,
-        scrollFraction,
-      });
+      try {
+        await writeLocalProgress(bookId, {
+          chapterId,
+          paragraphIndex,
+          scrollFraction,
+        });
+      } catch {
+        // Local write should not crash the reader (esp. while backgrounded).
+      }
       if (!user) return;
       try {
         await api.saveReadingProgress(bookId, {
@@ -394,11 +399,21 @@ export default function ReaderScreen() {
     toastOpacity,
   ]);
 
+  // Public cover endpoint — lock-screen artwork loads without Bearer.
+  const artworkUrl = useMemo(
+    () => (bookId ? `${getApiBaseUrl()}/api/books/${bookId}/cover` : null),
+    [bookId]
+  );
+
   const speech = useIosNarration({
     api,
     bookId,
     chapterId,
     paragraphs,
+    bookTitle: data?.book.title,
+    chapterTitle: data?.chapter.title,
+    artworkUrl,
+    artistName: data?.book.publisher_name,
     onChapterComplete: handleChapterComplete,
   });
   speechStopRef.current = speech.stop;
