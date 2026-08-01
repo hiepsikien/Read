@@ -33,8 +33,16 @@ function LibraryHeaderRight() {
     void refreshPending();
   }, [refreshPending, pathname]);
 
+  // Account action first so it stays visible if the header clips on the right.
   return (
     <View style={headerStyles.row}>
+      <Pressable
+        onPress={() => router.push(user ? "/settings" : "/login")}
+        hitSlop={8}
+        style={headerStyles.accountBtn}
+      >
+        <Text style={headerStyles.accountText}>{user ? "Settings" : "Sign in"}</Text>
+      </Pressable>
       {user?.role === "admin" ? (
         <Pressable
           onPress={() => router.push("/admin")}
@@ -51,25 +59,18 @@ function LibraryHeaderRight() {
           ) : null}
         </Pressable>
       ) : null}
-      <Pressable
-        onPress={() => router.push(user ? "/settings" : "/login")}
-        hitSlop={8}
-        style={{ paddingHorizontal: 4, paddingVertical: 6 }}
-      >
-        <Text style={{ color: colors.ink, fontWeight: "600", fontSize: 15 }}>
-          {user ? "Settings" : "Sign in"}
-        </Text>
-      </Pressable>
     </View>
   );
 }
 
 const headerStyles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", gap: 10 },
+  row: { flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 4 },
+  accountBtn: { paddingHorizontal: 4, paddingVertical: 6 },
+  accountText: { color: colors.ink, fontWeight: "600", fontSize: 15 },
   adminBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: 999,

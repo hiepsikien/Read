@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -41,6 +42,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const usingFirebase = firebaseConfigured();
+  // Bumps on sign-out so in-flight refresh/sync cannot rehydrate the old user.
+  const sessionEpoch = useRef(0);
 
   const api = useMemo(
     () =>
@@ -53,43 +56,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [usingFirebase]
   );
 
-  const syncProfile = useCallback(
-    async (nextToken: string | null) => {
-      setTokenState(nextToken);
-      if (!nextToken) {
-        setUser(null);
-        return null;
-      }
-      const client = createMobileApi(async () => nextToken);
-      const me = await client.me();
-      setUser(me.user);
-      return me.user;
-    },
-    []
-  );
+  const syncProfile = useCallback(async (nextToken: string | null, epoch: number) => {
+    if (epoch !== sessionEpoch.current) return null;
+    setTokenState(nextToken);
+    if (!nextToken) {
+      setUser(null);
+      return null;
+    }
+    const client = createMobileApi(async () => nextToken);
+    const me = await client.me();
+    if (epoch !== sessionEpoch.current) return null;
+    setUser(me.user);
+    return me.user;
+  }, []);
 
   const refresh = useCallback(async () => {
+    const epoch = sessionEpoch.current;
     try {
       if (usingFirebase) {
         const idToken = await getFirebaseIdToken();
+        if (epoch !== sessionEpoch.current) return;
         if (idToken) {
           await setToken(idToken);
-          await syncProfile(idToken);
+          await syncProfile(idToken, epoch);
           return;
         }
+        // Firebase is source of truth — never revive a stale SecureStore JWT
+        // after sign-out (onAuthStateChanged can race with signOut).
+        await setToken(null);
+        if (epoch !== sessionEpoch.current) return;
+        setUser(null);
+        setTokenState(null);
+        return;
       }
       const stored = await getToken();
+      if (epoch !== sessionEpoch.current) return;
       if (!stored) {
         setUser(null);
         setTokenState(null);
         return;
       }
-      await syncProfile(stored);
+      await syncProfile(stored, epoch);
     } catch {
+      if (epoch !== sessionEpoch.current) return;
       setUser(null);
       setTokenState(null);
     } finally {
-      setLoading(false);
+      if (epoch === sessionEpoch.current) setLoading(false);
     }
   }, [syncProfile, usingFirebase]);
 
@@ -153,7 +166,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const firebaseUser = await firebaseSignIn(email, password);
         const idToken = await firebaseUser.getIdToken();
         await setToken(idToken);
-        const profile = await syncProfile(idToken);
+        const epoch = sessionEpoch.current;
+        const profile = await syncProfile(idToken, epoch);
         if (!profile) throw new Error("Could not load profile.");
         return profile;
       }
@@ -174,7 +188,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const firebaseUser = await firebaseSignUp(email, password, name);
         const idToken = await firebaseUser.getIdToken();
         await setToken(idToken);
-        const profile = await syncProfile(idToken);
+        const epoch = sessionEpoch.current;
+        const profile = await syncProfile(idToken, epoch);
         if (!profile) throw new Error("Could not load profile.");
         return profile;
       }
@@ -190,12 +205,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
-    if (usingFirebase) {
-      await firebaseSignOutUser();
-    }
+    // Invalidate in-flight refresh/sync, then clear local session before Firebase
+    // so onAuthStateChanged cannot revive a SecureStore JWT.
+    sessionEpoch.current += 1;
     await setToken(null);
     setTokenState(null);
     setUser(null);
+    if (usingFirebase) {
+      await firebaseSignOutUser();
+    }
   }, [usingFirebase]);
 
   const enableAuthor = useCallback(async () => {

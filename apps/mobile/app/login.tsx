@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -13,6 +13,11 @@ import { BrandLogo } from "../components/BrandLogo";
 import { FormScroll } from "../components/FormScroll";
 import { useAuth } from "../lib/auth";
 import { CURRENT_LEGAL_VERSION } from "../lib/legal";
+import {
+  clearRememberedCredentials,
+  loadRememberedCredentials,
+  saveRememberedCredentials,
+} from "../lib/remembered-credentials";
 import { colors, radii, space } from "../lib/theme";
 
 const DEMOS = [
@@ -21,17 +26,34 @@ const DEMOS = [
   { role: "Admin", email: "admin@read.app", password: "admin123" },
 ];
 
+const DEFAULT_EMAIL = "reader@read.app";
+const DEFAULT_PASSWORD = "reader123";
+
 export default function LoginScreen() {
   const router = useRouter();
   const { signIn, signUp, acceptLegal, claimHandle, usingFirebase } = useAuth();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
-  const [email, setEmail] = useState("reader@read.app");
-  const [password, setPassword] = useState("reader123");
+  const [email, setEmail] = useState(DEFAULT_EMAIL);
+  const [password, setPassword] = useState(DEFAULT_PASSWORD);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [acceptedLegal, setAcceptedLegal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadRememberedCredentials().then((saved) => {
+      if (cancelled || !saved) return;
+      setEmail(saved.email);
+      setPassword(saved.password);
+      setRememberMe(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onSubmit() {
     if (mode === "signup" && !acceptedLegal) {
@@ -48,20 +70,28 @@ export default function LoginScreen() {
     setLoading(true);
     setError("");
     try {
+      const nextEmail = email.trim();
       let profile;
       if (mode === "signup") {
         profile = await signUp(
-          email.trim(),
+          nextEmail,
           password,
-          name.trim() || email.split("@")[0]
+          name.trim() || nextEmail.split("@")[0]
         );
         profile = await acceptLegal(profile.current_legal_version || CURRENT_LEGAL_VERSION);
         if (!profile.handle) {
           profile = await claimHandle(normalizeHandle(handle));
         }
       } else {
-        profile = await signIn(email.trim(), password);
+        profile = await signIn(nextEmail, password);
       }
+
+      if (rememberMe) {
+        await saveRememberedCredentials(nextEmail, password);
+      } else {
+        await clearRememberedCredentials();
+      }
+
       if (!profile.handle) {
         router.replace("/claim-handle");
         return;
@@ -156,6 +186,19 @@ export default function LoginScreen() {
           placeholder="Password"
           placeholderTextColor={colors.inkSoft}
         />
+        {mode === "signin" ? (
+          <Pressable
+            style={styles.checkRow}
+            onPress={() => setRememberMe((value) => !value)}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: rememberMe }}
+          >
+            <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+              <Text style={styles.checkmark}>{rememberMe ? "✓" : ""}</Text>
+            </View>
+            <Text style={styles.rememberText}>Remember email and password</Text>
+          </Pressable>
+        ) : null}
         {mode === "signup" ? (
           <View style={styles.legalBlock}>
             <Pressable
@@ -314,6 +357,7 @@ const styles = StyleSheet.create({
   },
   checkboxChecked: { backgroundColor: colors.sage },
   checkmark: { color: "#fff", fontWeight: "700", fontSize: 12 },
+  rememberText: { flex: 1, color: colors.inkSoft, lineHeight: 20, paddingTop: 1 },
   legalText: { flex: 1, color: colors.inkSoft, lineHeight: 20 },
   legalLinks: { flexDirection: "row", gap: 16, paddingLeft: 32 },
   legalLink: { color: colors.sage, fontWeight: "600", textDecorationLine: "underline" },
