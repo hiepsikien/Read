@@ -7,7 +7,19 @@ type PlaybackState = "idle" | "speaking" | "paused";
 
 const SPEECH_RATES = [0.8, 1, 1.2] as const;
 
-export function useIosSpeech(paragraphs: string[]) {
+type UseIosSpeechOptions = {
+  paragraphs: string[];
+  onChapterComplete?: () => void;
+};
+
+export function useIosSpeech(
+  paragraphsOrOptions: string[] | UseIosSpeechOptions
+) {
+  const options: UseIosSpeechOptions = Array.isArray(paragraphsOrOptions)
+    ? { paragraphs: paragraphsOrOptions }
+    : paragraphsOrOptions;
+  const { paragraphs, onChapterComplete } = options;
+
   const entries = useMemo(
     () =>
       paragraphs
@@ -31,6 +43,8 @@ export function useIosSpeech(paragraphs: string[]) {
   const generationRef = useRef(0);
   const currentQueueIndexRef = useRef(0);
   const rateRef = useRef<(typeof SPEECH_RATES)[number]>(1);
+  const onChapterCompleteRef = useRef(onChapterComplete);
+  onChapterCompleteRef.current = onChapterComplete;
 
   useEffect(() => {
     if (Platform.OS !== "ios" || !language) {
@@ -62,6 +76,7 @@ export function useIosSpeech(paragraphs: string[]) {
       if (!entry) {
         setPlaybackState("idle");
         setCurrentParagraph(null);
+        onChapterCompleteRef.current?.();
         return;
       }
 

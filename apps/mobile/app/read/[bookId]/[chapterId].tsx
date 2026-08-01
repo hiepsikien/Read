@@ -42,6 +42,11 @@ import {
   readLocalProgress,
   writeLocalProgress,
 } from "../../../lib/reading-progress";
+import {
+  consumeNarrationAutoPlay,
+  consumeSuppressNarrationStopOnBlur,
+  requestNarrationContinue,
+} from "../../../lib/narration-continue";
 import { useIosNarration } from "../../../lib/use-ios-narration";
 import { VoicePickerModal } from "../../../lib/voice-picker";
 import {
@@ -231,13 +236,6 @@ export default function ReaderScreen() {
     }
   }
 
-  // The book screen is already one level down in the stack, so popping avoids
-  // pushing a second copy of it that would need two back presses to clear.
-  const leaveReader = useCallback(() => {
-    if (router.canGoBack()) router.back();
-    else router.replace(`/books/${bookId}`);
-  }, [router, bookId]);
-
   const markFinished = useCallback(async () => {
     if (!bookId || !chapterId) return;
     const latest = latestProgressRef.current;
@@ -295,6 +293,8 @@ export default function ReaderScreen() {
       next: index >= 0 && index < data.chapters.length - 1 ? data.chapters[index + 1] : null,
     };
   }, [data]);
+  const neighborsRef = useRef(neighbors);
+  neighborsRef.current = neighbors;
 
   // Native text renders every newline as a hard break, so collapse the soft
   // line wrapping that survives inside a paragraph. Figures stay as markdown
@@ -311,7 +311,41 @@ export default function ReaderScreen() {
     () => parseContentBlocks(data?.chapter.content ?? ""),
     [data?.chapter.content]
   );
-  const speech = useIosNarration({ api, bookId, chapterId, paragraphs });
+
+  const handleChapterComplete = useCallback(() => {
+    if (!bookId) return;
+    const next = neighborsRef.current.next;
+    if (next && !next.locked) {
+      requestNarrationContinue();
+      void persistProgress(
+        Math.max(0, paragraphs.length - 1),
+        1
+      );
+      router.replace(`/read/${bookId}/${next.id}`);
+      return;
+    }
+    if (next?.locked) {
+      router.replace(`/read/${bookId}/${next.id}`);
+      return;
+    }
+    void markFinished();
+  }, [bookId, markFinished, paragraphs.length, persistProgress, router]);
+
+  const speech = useIosNarration({
+    api,
+    bookId,
+    chapterId,
+    paragraphs,
+    onChapterComplete: handleChapterComplete,
+  });
+
+  // The book screen is already one level down in the stack, so popping avoids
+  // pushing a second copy of it that would need two back presses to clear.
+  const leaveReader = useCallback(() => {
+    void speech.stop();
+    if (router.canGoBack()) router.back();
+    else router.replace(`/books/${bookId}`);
+  }, [router, bookId, speech.stop]);
 
   useEffect(() => {
     followNarrationRef.current = true;
@@ -436,10 +470,27 @@ export default function ReaderScreen() {
   useFocusEffect(
     useCallback(() => {
       return () => {
+        if (consumeSuppressNarrationStopOnBlur()) return;
         void speech.stop();
       };
     }, [speech.stop])
   );
+
+  useEffect(() => {
+    if (loading || locked || !data || paragraphs.length === 0) return;
+    // Wait until fetched chapter matches the route — avoid playing stale content.
+    if (data.chapter.id !== chapterId) return;
+    if (!consumeNarrationAutoPlay()) return;
+    followNarrationRef.current = true;
+    void speech.togglePlayback({ fromParagraphIndex: 0 });
+  }, [
+    loading,
+    locked,
+    data,
+    paragraphs.length,
+    chapterId,
+    speech.togglePlayback,
+  ]);
 
   useEffect(() => {
     if (!data || loading || readingMode !== "scroll") return;

@@ -18,7 +18,8 @@
       "bundleIdentifier": "com.nguyendinhanh.read",
       "buildNumber": "5",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio"]
       }
     },
     "android": {

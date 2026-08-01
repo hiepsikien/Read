@@ -20,6 +20,7 @@ type UseIosNarrationOptions = {
   bookId?: string;
   chapterId?: string;
   paragraphs: string[];
+  onChapterComplete?: () => void;
 };
 
 export function useIosNarration({
@@ -27,8 +28,15 @@ export function useIosNarration({
   bookId,
   chapterId,
   paragraphs,
+  onChapterComplete,
 }: UseIosNarrationOptions) {
-  const nativeSpeech = useIosSpeech(paragraphs);
+  const onChapterCompleteRef = useRef(onChapterComplete);
+  onChapterCompleteRef.current = onChapterComplete;
+
+  const nativeSpeech = useIosSpeech({
+    paragraphs,
+    onChapterComplete: () => onChapterCompleteRef.current?.(),
+  });
   const player = useAudioPlayer(null, {
     updateInterval: 250,
     keepAudioSessionActive: true,
@@ -45,12 +53,20 @@ export function useIosNarration({
   const didHandleFinishRef = useRef(false);
 
   const playerReleasedRef = useRef(false);
+  const manifestRef = useRef(manifest);
+  const currentSegmentRef = useRef(currentSegment);
+  const playbackStateRef = useRef(playbackState);
+  const providerRef = useRef(provider);
+  manifestRef.current = manifest;
+  currentSegmentRef.current = currentSegment;
+  playbackStateRef.current = playbackState;
+  providerRef.current = provider;
 
   useEffect(() => {
     if (Platform.OS !== "ios") return;
     void setAudioModeAsync({
       playsInSilentMode: true,
-      shouldPlayInBackground: false,
+      shouldPlayInBackground: true,
       interruptionMode: "doNotMix",
     });
   }, []);
@@ -103,6 +119,9 @@ export function useIosNarration({
     },
     [rate, runOnPlayer, sourceFor]
   );
+
+  const playSegmentRef = useRef(playSegment);
+  playSegmentRef.current = playSegment;
 
   const startCloudPlayback = useCallback(
     async (fromParagraphIndex = 0) => {
@@ -196,40 +215,31 @@ export function useIosNarration({
     runOnPlayer((instance) => instance.setPlaybackRate(nextRate, "high"));
   }, [nativeSpeech, provider, rate, runOnPlayer]);
 
-  // `didJustFinish` stays true until the next status tick, so advancing must be
-  // latched until a fresh status clears it. Otherwise the re-render caused by
-  // starting a segment reads the stale flag and skips the following segment.
+  // Advance from refs so background JS throttling / stale closures do not skip
+  // segments. `didJustFinish` stays true until the next status tick, so latch.
   useEffect(() => {
     if (!playerStatus.didJustFinish) {
       didHandleFinishRef.current = false;
       return;
     }
-    if (
-      didHandleFinishRef.current ||
-      provider !== "cloud" ||
-      playbackState !== "speaking" ||
-      !manifest ||
-      currentSegment === null
-    ) {
-      return;
-    }
+    if (didHandleFinishRef.current) return;
+    if (providerRef.current !== "cloud") return;
+    if (playbackStateRef.current !== "speaking") return;
+
+    const audioManifest = manifestRef.current;
+    const segment = currentSegmentRef.current;
+    if (!audioManifest || segment === null) return;
 
     didHandleFinishRef.current = true;
-    const nextSegment = currentSegment + 1;
-    if (nextSegment >= manifest.segments.length) {
+    const nextSegment = segment + 1;
+    if (nextSegment >= audioManifest.segments.length) {
       setPlaybackState("idle");
       setCurrentSegment(null);
+      onChapterCompleteRef.current?.();
       return;
     }
-    playSegment(manifest, nextSegment);
-  }, [
-    currentSegment,
-    manifest,
-    playbackState,
-    playSegment,
-    playerStatus.didJustFinish,
-    provider,
-  ]);
+    playSegmentRef.current(audioManifest, nextSegment);
+  }, [playerStatus.didJustFinish]);
 
   // Discards the cached manifest so the next play refetches it. Needed after the
   // server voice changes, because segment URLs are keyed by voice.

@@ -287,7 +287,7 @@ API tiêu biểu:
 
 ### Trải nghiệm đọc
 - ~~TTS đọc thành tiếng~~ ✅ cloud TTS (Google) + admin đổi giọng động, SSML cho hội thoại kịch bản, tự cuộn theo audio (xem §4b)
-- Còn lại: focus mode, tiếp tục audio sang chapter kế, lock-screen / background audio controls, transition chapter tinh gọn hơn
+- Còn lại: focus mode, lock-screen / Now Playing controls (mức đầy đủ), transition chapter tinh gọn hơn
 
 ### Rich format
 - Đã giữ **bold / italic** từ DOCX trên mobile + web reader
@@ -371,31 +371,25 @@ API tiêu biểu:
 - Bật Cloud Text-to-Speech API; xác thực bằng **Application Default Credentials** cho local: `gcloud auth application-default login` rồi `gcloud auth application-default set-quota-project <project>`.
 - Env TTS (xem `apps/api/.env.example`): `GOOGLE_TTS_ENABLED`, `GOOGLE_TTS_ENGINE`, `GOOGLE_TTS_GENDER`, `GOOGLE_TTS_CHIRP_PERSONA` (tùy chọn), `GOOGLE_TTS_VOICE` (override cứng, tùy chọn), `TTS_CACHE_DIR`. Giọng active lưu ở DB sẽ override env khi admin đổi.
 
-**Hoàn thiện audio — kế hoạch (đã bàn, sẽ quay lại sau):**
+**Hoàn thiện audio — kế hoạch:**
 
-> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker.
+> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker, **tự sang chapter kế** (unlocked → replace + auto-play; locked → màn mua; hết sách → finished overlay), **background audio mức nhẹ trên iOS** (`shouldPlayInBackground: true` + `UIBackgroundModes: ["audio"]`; stop khi rời reader / Back, không stop khi khóa màn; **chưa** có lock-screen / Control Center controls). Cần **rebuild native** sau khi đổi Info.plist.
 
-Còn lại, chia 4 nhóm theo thứ tự ưu tiên đề xuất **1 → 2 → 3** (4 xen kẽ):
+Còn lại:
 
 1. **Hỗ trợ Android** (dễ–trung bình, rủi ro thấp)
    - Đang khóa cứng `supported: Platform.OS === "ios"`; audio mode chỉ set cho iOS; hook đặt tên `use-ios-*`.
-   - `expo-audio` (cloud) và `expo-speech` (fallback) vốn chạy được Android → việc chính: bỏ gate iOS, set audio mode cho Android, đổi tên hook cho trung tính, kiểm định giọng máy Android ở nhánh fallback. **Cần máy Android thật để test.**
+   - `expo-audio` (cloud) và `expo-speech` (fallback) vốn chạy được Android → việc chính: bỏ gate iOS, set audio mode cho Android, đổi tên hook cho trung tính, kiểm định giọng máy Android ở nhánh fallback; foreground service nếu muốn nghe nền. **Cần máy Android thật để test.**
 
-2. **Tự động sang chapter kế** (trung bình)
-   - Hiện hết segment trong chapter → về `idle`; audio bị `stop()` khi rời màn hình.
-   - Việc: khi manifest hết → load chapter kế (nếu không bị khóa) → fetch manifest mới → phát tiếp, đồng thời cập nhật route + lưu vị trí đọc. Chapter khóa (paid) thì dừng + gợi ý mua.
+2. **Background / lock-screen controls (mức đầy đủ)** — chưa làm
+   - Hiện đã chốt và ship **mức nhẹ** (nghe khi khóa màn, không remote controls).
+   - **Mức đầy đủ:** Now Playing / lock-screen (bìa, tên chương). `expo-audio` không cấp remote controls → cần media-session library (vd `react-native-track-player`) + dev build, có thể viết lại pipeline phát.
 
-3. **Background / lock-screen audio** (KHÓ nhất — **quyết định kiến trúc CHƯA CHỐT**)
-   - Hiện `shouldPlayInBackground: false`, và reader chủ động `stop()` khi rời màn → ngược với ý "nghe khi tắt màn".
-   - **Mức nhẹ:** bật `shouldPlayInBackground: true` + khai báo background mode (`UIBackgroundModes: ["audio"]` iOS, foreground service Android). Audio chạy nền khi khóa màn, **nhưng không có nút điều khiển trên lock-screen / Control Center**. Rẻ, vẫn dùng được Expo Go/dev build hiện tại.
-   - **Mức đầy đủ:** có điều khiển lock-screen + Now Playing (bìa, tên chương). `expo-audio` **không** cấp remote controls/now-playing → cần thư viện media session (vd `react-native-track-player`) hoặc module native → **phải dùng dev build (không chạy Expo Go), thêm dependency lớn, có thể viết lại pipeline phát** (track-player tự quản queue).
-   - → Cần chốt mức nhẹ hay đầy đủ trước khi làm nhóm này.
-
-4. **Chi tiết nhỏ (tùy chọn, xen kẽ)**
+3. **Chi tiết nhỏ (tùy chọn)**
    - Cho reader thường (không phải admin) tự chọn giọng (giờ voice picker chỉ admin).
    - Mở rộng `detectSpeechLanguage` ngoài vi/en cho fallback giọng máy.
-   - Làm nhất quán mâu thuẫn "stop khi rời màn" vs "phát nền".
    - Tinh chỉnh thêm `_dialogue_prosody`; mở rộng `_SPELLED_ACRONYMS` khi gặp viết tắt mới.
+   - Fallback `expo-speech` khi nền có thể bị iOS cắt — chấp nhận; ưu tiên cloud path.
 
 ---
 
