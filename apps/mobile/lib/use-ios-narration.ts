@@ -456,7 +456,7 @@ export function useIosNarration({
     };
   }, [resumeCloudPlayback]);
 
-  // Mirror lock-screen remote Play/Pause into in-app state.
+  // Mirror lock-screen / Control Center Play/Pause into in-app state.
   useEffect(() => {
     if (providerRef.current !== "cloud") return;
     if (!lockScreenActiveRef.current) return;
@@ -464,12 +464,21 @@ export function useIosNarration({
     if (state !== "speaking" && state !== "paused") return;
     if (playerStatus.didJustFinish || advancingSegmentRef.current) return;
 
-    if (playerStatus.playing && state === "paused" && !intentionalPauseRef.current) {
+    if (playerStatus.playing && state === "paused") {
+      intentionalPauseRef.current = false;
       setPlaybackState("speaking");
       return;
     }
 
-    if (!playerStatus.playing && state === "speaking" && intentionalPauseRef.current) {
+    // Remote pause does not go through togglePlayback. Ignore near-end stops so
+    // the didJustFinish handler can auto-advance instead of latching paused.
+    if (!playerStatus.playing && state === "speaking") {
+      const duration = durationRef.current;
+      const currentTime = currentTimeRef.current;
+      const nearEnd =
+        duration > 0 && currentTime >= Math.max(0, duration - 0.5);
+      if (nearEnd) return;
+      intentionalPauseRef.current = true;
       setPlaybackState("paused");
     }
   }, [playerStatus.didJustFinish, playerStatus.playing]);

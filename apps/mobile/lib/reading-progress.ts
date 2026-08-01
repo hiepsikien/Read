@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import type { ReadingProgress } from "@read/api-client";
 
@@ -22,16 +23,12 @@ export function localProgressKey(bookId: string) {
   return `read_pos_${bookId}`;
 }
 
-export async function readLocalProgress(
-  bookId: string
-): Promise<LocalReadingProgress | null> {
+function parseProgressRaw(raw: string): LocalReadingProgress | null {
+  // Legacy format stored a bare chapter id string.
+  if (!raw.startsWith("{")) {
+    return { chapterId: raw, paragraphIndex: 0, scrollFraction: 0, at: 0 };
+  }
   try {
-    const raw = await SecureStore.getItemAsync(localProgressKey(bookId));
-    if (!raw) return null;
-    // Legacy format stored a bare chapter id string.
-    if (!raw.startsWith("{")) {
-      return { chapterId: raw, paragraphIndex: 0, scrollFraction: 0, at: 0 };
-    }
     const parsed = JSON.parse(raw) as Partial<LocalReadingProgress>;
     if (typeof parsed.chapterId !== "string" || !parsed.chapterId) return null;
     return {
@@ -55,6 +52,36 @@ export async function readLocalProgress(
   }
 }
 
+export async function readLocalProgress(
+  bookId: string
+): Promise<LocalReadingProgress | null> {
+  const key = localProgressKey(bookId);
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (raw) return parseProgressRaw(raw);
+  } catch {
+    // Fall through to legacy SecureStore.
+  }
+
+  // Migrate older SecureStore copies (Keychain fails while the device is locked).
+  try {
+    const legacy = await SecureStore.getItemAsync(key);
+    if (!legacy) return null;
+    const parsed = parseProgressRaw(legacy);
+    if (parsed) {
+      try {
+        await AsyncStorage.setItem(key, JSON.stringify(parsed));
+        await SecureStore.deleteItemAsync(key);
+      } catch {
+        // Keep serving the migrated value even if cleanup fails.
+      }
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export async function writeLocalProgress(
   bookId: string,
   progress: Omit<LocalReadingProgress, "at"> & { at?: number }
@@ -66,7 +93,9 @@ export async function writeLocalProgress(
     at: progress.at ?? Date.now(),
     completedAt: progress.completedAt ?? null,
   };
-  await SecureStore.setItemAsync(localProgressKey(bookId), JSON.stringify(payload));
+  // AsyncStorage — not SecureStore — so lock-screen / background auto-scroll
+  // can persist without Keychain "User interaction is not allowed".
+  await AsyncStorage.setItem(localProgressKey(bookId), JSON.stringify(payload));
 }
 
 /** Prefer the newer of server vs local progress. */

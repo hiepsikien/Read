@@ -127,11 +127,15 @@ export default function ReaderScreen() {
     async (paragraphIndex: number, scrollFraction: number) => {
       if (!bookId || !chapterId) return;
       latestProgressRef.current = { paragraphIndex, scrollFraction };
-      await writeLocalProgress(bookId, {
-        chapterId,
-        paragraphIndex,
-        scrollFraction,
-      });
+      try {
+        await writeLocalProgress(bookId, {
+          chapterId,
+          paragraphIndex,
+          scrollFraction,
+        });
+      } catch {
+        // Local write should not crash the reader (esp. while backgrounded).
+      }
       if (!user) return;
       try {
         await api.saveReadingProgress(bookId, {
