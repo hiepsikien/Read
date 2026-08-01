@@ -51,6 +51,10 @@ export function useIosNarration({
   const authorizationRef = useRef<Record<string, string>>({});
   const requestGenerationRef = useRef(0);
   const didHandleFinishRef = useRef(false);
+  // Only honor didJustFinish after the player has actually been playing this clip,
+  // so a sticky true from the previous segment cannot skip/finish instantly —
+  // and so we do not suppress the real end-of-chapter edge.
+  const armFinishDetectionRef = useRef(false);
 
   const playerReleasedRef = useRef(false);
   const manifestRef = useRef(manifest);
@@ -109,6 +113,11 @@ export function useIosNarration({
         setCurrentSegment(null);
         return;
       }
+      // New clip must see a fresh finish edge — clear latch so a sticky
+      // didJustFinish from the prior clip cannot be ignored forever (which
+      // blocked onChapterComplete / banner / auto-advance).
+      didHandleFinishRef.current = false;
+      armFinishDetectionRef.current = false;
       runOnPlayer((instance) => {
         instance.replace(sourceFor(audioManifest, index));
         instance.setPlaybackRate(rate, "high");
@@ -131,8 +140,10 @@ export function useIosNarration({
       setError("");
 
       try {
+        // Prefer ref so a stale callback cannot reuse the previous chapter's manifest.
+        const cached = manifestRef.current;
         const [audioManifest, token] = await Promise.all([
-          manifest ?? api.prepareChapterAudio(bookId, chapterId),
+          cached ?? api.prepareChapterAudio(bookId, chapterId),
           getToken(),
         ]);
         if (generation !== requestGenerationRef.current) return;
@@ -141,6 +152,7 @@ export function useIosNarration({
         }
 
         authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
+        manifestRef.current = audioManifest;
         setManifest(audioManifest);
 
         let startIndex = 0;
@@ -161,7 +173,7 @@ export function useIosNarration({
         await nativeSpeech.togglePlayback({ fromParagraphIndex });
       }
     },
-    [api, bookId, chapterId, manifest, nativeSpeech, playSegment]
+    [api, bookId, chapterId, nativeSpeech, playSegment]
   );
 
   const togglePlayback = useCallback(
@@ -184,6 +196,20 @@ export function useIosNarration({
       await startCloudPlayback(Math.max(0, options?.fromParagraphIndex ?? 0));
     },
     [nativeSpeech, playbackState, provider, runOnPlayer, startCloudPlayback]
+  );
+
+  /** Always begin playback (never pause/resume). Used for chapter auto-advance. */
+  const startPlayback = useCallback(
+    async (fromParagraphIndex = 0) => {
+      if (provider === "native") {
+        await nativeSpeech.stop();
+        await nativeSpeech.togglePlayback({ fromParagraphIndex });
+        return;
+      }
+      if (playbackState === "preparing") return;
+      await startCloudPlayback(Math.max(0, fromParagraphIndex));
+    },
+    [nativeSpeech, playbackState, provider, startCloudPlayback]
   );
 
   const stop = useCallback(async () => {
@@ -218,10 +244,15 @@ export function useIosNarration({
   // Advance from refs so background JS throttling / stale closures do not skip
   // segments. `didJustFinish` stays true until the next status tick, so latch.
   useEffect(() => {
+    if (playerStatus.playing && playbackStateRef.current === "speaking") {
+      armFinishDetectionRef.current = true;
+    }
+
     if (!playerStatus.didJustFinish) {
       didHandleFinishRef.current = false;
       return;
     }
+    if (!armFinishDetectionRef.current) return;
     if (didHandleFinishRef.current) return;
     if (providerRef.current !== "cloud") return;
     if (playbackStateRef.current !== "speaking") return;
@@ -231,6 +262,7 @@ export function useIosNarration({
     if (!audioManifest || segment === null) return;
 
     didHandleFinishRef.current = true;
+    armFinishDetectionRef.current = false;
     const nextSegment = segment + 1;
     if (nextSegment >= audioManifest.segments.length) {
       setPlaybackState("idle");
@@ -239,13 +271,14 @@ export function useIosNarration({
       return;
     }
     playSegmentRef.current(audioManifest, nextSegment);
-  }, [playerStatus.didJustFinish]);
+  }, [playerStatus.didJustFinish, playerStatus.playing]);
 
   // Discards the cached manifest so the next play refetches it. Needed after the
   // server voice changes, because segment URLs are keyed by voice.
   const reset = useCallback(() => {
     requestGenerationRef.current += 1;
     runOnPlayer((instance) => instance.pause());
+    manifestRef.current = null;
     setManifest(null);
     setProvider("cloud");
     setPlaybackState("idle");
@@ -254,8 +287,11 @@ export function useIosNarration({
   }, [runOnPlayer]);
 
   useEffect(() => {
+    // Only when the chapter identity changes — not when `reset` callback identity churns,
+    // which previously aborted in-flight prepareChapterAudio and killed autoplay.
     reset();
-  }, [bookId, chapterId, reset]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: bookId/chapterId only
+  }, [bookId, chapterId]);
 
   /**
    * Swaps to the voice the server now returns without losing the listener's
@@ -346,6 +382,7 @@ export function useIosNarration({
     provider,
     manifest,
     togglePlayback,
+    startPlayback,
     cycleRate,
     stop,
     pause,

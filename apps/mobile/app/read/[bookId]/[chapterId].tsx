@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
   FlatList,
   Modal,
@@ -43,9 +44,11 @@ import {
   writeLocalProgress,
 } from "../../../lib/reading-progress";
 import {
-  consumeNarrationAutoPlay,
-  consumeSuppressNarrationStopOnBlur,
+  clearNarrationContinue,
+  isNarrationAutoPlayPending,
+  isNarrationContinueActive,
   requestNarrationContinue,
+  type ChapterTransition,
 } from "../../../lib/narration-continue";
 import { useIosNarration } from "../../../lib/use-ios-narration";
 import { VoicePickerModal } from "../../../lib/voice-picker";
@@ -114,6 +117,10 @@ export default function ReaderScreen() {
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
   const [modeAnchorParagraph, setModeAnchorParagraph] = useState(0);
+  const [chapterToast, setChapterToast] = useState<ChapterTransition | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const contentOpacity = useRef(new Animated.Value(1)).current;
+  const speechStopRef = useRef<() => Promise<void>>(async () => undefined);
 
   const persistProgress = useCallback(
     async (paragraphIndex: number, scrollFraction: number) => {
@@ -140,12 +147,15 @@ export default function ReaderScreen() {
 
   const load = useCallback(async () => {
     if (!bookId || !chapterId) return;
-    setLoading(true);
+    // Keep prior chapter on screen during auto-advance so the handoff is not a blank spinner.
+    const softContinue = isNarrationContinueActive();
+    if (!softContinue) setLoading(true);
     setError("");
     setLocked(false);
     setResumeProgress(null);
     resumeProgressRef.current = null;
     restoredKeyRef.current = null;
+    const forceStart = softContinue;
     try {
       const payload = await api.getChapter(bookId, chapterId);
       setData(payload);
@@ -153,18 +163,20 @@ export default function ReaderScreen() {
         payload.progress?.chapter_id === chapterId ? payload.progress : null;
       const local = await readLocalProgress(bookId);
       const picked =
-        local?.chapterId === chapterId
-          ? pickNewerProgress(server, local)
-          : server
-            ? {
-                chapterId: server.chapter_id,
-                paragraphIndex: server.paragraph_index,
-                scrollFraction: server.scroll_fraction,
-                updatedAt: server.updated_at,
-                completedAt: server.completed_at,
-                source: "server" as const,
-              }
-            : null;
+        forceStart
+          ? null
+          : local?.chapterId === chapterId
+            ? pickNewerProgress(server, local)
+            : server
+              ? {
+                  chapterId: server.chapter_id,
+                  paragraphIndex: server.paragraph_index,
+                  scrollFraction: server.scroll_fraction,
+                  updatedAt: server.updated_at,
+                  completedAt: server.completed_at,
+                  source: "server" as const,
+                }
+              : null;
       const resolved = picked
         ? {
             chapter_id: picked.chapterId,
@@ -173,7 +185,15 @@ export default function ReaderScreen() {
             updated_at: picked.updatedAt,
             completed_at: picked.completedAt,
           }
-        : null;
+        : forceStart
+          ? {
+              chapter_id: chapterId,
+              paragraph_index: 0,
+              scroll_fraction: 0,
+              updated_at: new Date().toISOString(),
+              completed_at: null,
+            }
+          : null;
       setResumeProgress(resolved);
       resumeProgressRef.current = resolved;
       const paragraphIndex = resolved?.paragraph_index ?? 0;
@@ -201,8 +221,10 @@ export default function ReaderScreen() {
         setLocked(true);
         setPriceCents(body.book?.price_cents ?? 0);
         setData(null);
+        clearNarrationContinue();
       } else {
         setError(err instanceof ApiError ? err.message : "Could not load chapter.");
+        clearNarrationContinue();
       }
     } finally {
       setLoading(false);
@@ -316,7 +338,38 @@ export default function ReaderScreen() {
     if (!bookId) return;
     const next = neighborsRef.current.next;
     if (next && !next.locked) {
-      requestNarrationContinue();
+      requestNarrationContinue({
+        position: next.position,
+        title: next.title,
+      });
+      setChapterToast({
+        position: next.position,
+        title: next.title,
+      });
+      toastOpacity.setValue(0);
+      contentOpacity.setValue(0.25);
+      Animated.parallel([
+        Animated.timing(contentOpacity, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(toastOpacity, {
+            toValue: 1,
+            duration: 320,
+            useNativeDriver: true,
+          }),
+          Animated.delay(1600),
+          Animated.timing(toastOpacity, {
+            toValue: 0,
+            duration: 400,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start(({ finished }) => {
+        if (finished) setChapterToast(null);
+      });
       void persistProgress(
         Math.max(0, paragraphs.length - 1),
         1
@@ -325,11 +378,21 @@ export default function ReaderScreen() {
       return;
     }
     if (next?.locked) {
+      clearNarrationContinue();
       router.replace(`/read/${bookId}/${next.id}`);
       return;
     }
+    clearNarrationContinue();
     void markFinished();
-  }, [bookId, markFinished, paragraphs.length, persistProgress, router]);
+  }, [
+    bookId,
+    contentOpacity,
+    markFinished,
+    paragraphs.length,
+    persistProgress,
+    router,
+    toastOpacity,
+  ]);
 
   const speech = useIosNarration({
     api,
@@ -338,10 +401,12 @@ export default function ReaderScreen() {
     paragraphs,
     onChapterComplete: handleChapterComplete,
   });
+  speechStopRef.current = speech.stop;
 
   // The book screen is already one level down in the stack, so popping avoids
   // pushing a second copy of it that would need two back presses to clear.
   const leaveReader = useCallback(() => {
+    clearNarrationContinue();
     void speech.stop();
     if (router.canGoBack()) router.back();
     else router.replace(`/books/${bookId}`);
@@ -467,30 +532,67 @@ export default function ReaderScreen() {
     [persistProgress]
   );
 
+  // Stable deps: only stop on true blur/unmount. Dependency changes to
+  // speech.stop previously re-ran cleanup and killed autoplay mid-continue.
   useFocusEffect(
     useCallback(() => {
       return () => {
-        if (consumeSuppressNarrationStopOnBlur()) return;
-        void speech.stop();
+        if (isNarrationContinueActive()) return;
+        void speechStopRef.current();
       };
-    }, [speech.stop])
+    }, [])
   );
 
+  // Drop the continue latch only after audio is audibly going, so a late focus
+  // cleanup cannot race-stop prepare/play on the next chapter.
   useEffect(() => {
+    if (!isNarrationContinueActive()) return;
+    if (speech.playbackState === "speaking") {
+      clearNarrationContinue();
+    }
+  }, [speech.playbackState]);
+
+  // Retry-friendly autoplay: keep pending until speaking. Avoid depending on
+  // speech.startPlayback identity (churn would re-enter and fight prepare).
+  const startPlaybackRef = useRef(speech.startPlayback);
+  startPlaybackRef.current = speech.startPlayback;
+
+  useEffect(() => {
+    if (!isNarrationAutoPlayPending()) return;
     if (loading || locked || !data || paragraphs.length === 0) return;
-    // Wait until fetched chapter matches the route — avoid playing stale content.
     if (data.chapter.id !== chapterId) return;
-    if (!consumeNarrationAutoPlay()) return;
+    if (speech.playbackState === "preparing" || speech.playbackState === "speaking") {
+      return;
+    }
+
     followNarrationRef.current = true;
-    void speech.togglePlayback({ fromParagraphIndex: 0 });
+    // Let the chapter banner breathe before audio starts.
+    let cancelled = false;
+    const startTimer = setTimeout(() => {
+      if (cancelled || !isNarrationAutoPlayPending()) return;
+      void startPlaybackRef.current(0);
+    }, 700);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(startTimer);
+    };
   }, [
     loading,
     locked,
     data,
     paragraphs.length,
     chapterId,
-    speech.togglePlayback,
+    speech.playbackState,
   ]);
+
+  useEffect(() => {
+    if (!isNarrationContinueActive()) return;
+    const failSafe = setTimeout(() => {
+      if (isNarrationContinueActive()) clearNarrationContinue();
+    }, 25000);
+    return () => clearTimeout(failSafe);
+  }, [chapterId, speech.playbackState]);
 
   useEffect(() => {
     if (!data || loading || readingMode !== "scroll") return;
@@ -504,8 +606,10 @@ export default function ReaderScreen() {
     ? Math.max(0, data.chapters.findIndex((chapter) => chapter.id === data.chapter.id))
     : 0;
   const brandTone = theme === "ink" ? "white" : "color";
+  // Soft auto-advance keeps prior chapter painted; only block on cold loads.
+  const blockingLoad = loading && !data;
 
-  if (loading) {
+  if (blockingLoad) {
     return (
       <View style={[styles.centered, { backgroundColor: palette.bg }]}>
         <Stack.Screen options={{ headerShown: false }} />
@@ -645,7 +749,10 @@ export default function ReaderScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Stop reading"
                 style={chip(palette.fg)}
-                onPress={() => void speech.stop()}
+                onPress={() => {
+                  clearNarrationContinue();
+                  void speech.stop();
+                }}
               >
                 <Text style={{ color: palette.fg }}>Stop</Text>
               </Pressable>
@@ -667,6 +774,29 @@ export default function ReaderScreen() {
         </View>
       ) : null}
 
+      {chapterToast ? (
+        <Animated.View
+          pointerEvents="none"
+          accessibilityLiveRegion="polite"
+          style={[
+            styles.chapterToast,
+            {
+              opacity: toastOpacity,
+              backgroundColor: palette.bg,
+              borderColor: withAlpha(palette.fg, 0.14),
+            },
+          ]}
+        >
+          <Text style={[styles.chapterToastEyebrow, { color: palette.muted }]}>
+            Chapter {chapterToast.position}
+          </Text>
+          <Text style={[styles.chapterToastTitle, { color: palette.fg }]} numberOfLines={2}>
+            {chapterToast.title}
+          </Text>
+        </Animated.View>
+      ) : null}
+
+      <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
       {readingMode === "pages" ? (
         <View style={{ flex: 1 }}>
           <ReaderPagesView
@@ -895,6 +1025,7 @@ export default function ReaderScreen() {
         </View>
       </ScrollView>
       )}
+      </Animated.View>
 
       <FinishedBookOverlay
         visible={finishedOpen}
@@ -1075,6 +1206,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   speechError: { fontSize: 12, marginTop: 12 },
+  chapterToast: {
+    position: "absolute",
+    top: 108,
+    left: 20,
+    right: 20,
+    zIndex: 20,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  chapterToastEyebrow: {
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+  },
+  chapterToastTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    marginTop: 4,
+  },
   nav: {
     flexDirection: "row",
     justifyContent: "space-between",

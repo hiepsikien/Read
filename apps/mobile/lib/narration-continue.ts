@@ -3,24 +3,31 @@
  * Kept module-level so expo-router replace remounts still see them.
  */
 
-let suppressStopOnBlur = false;
+export type ChapterTransition = {
+  position: number;
+  title: string;
+};
+
+let continueActive = false;
 let pendingAutoPlay = false;
 
-export function requestNarrationContinue() {
-  suppressStopOnBlur = true;
+export function requestNarrationContinue(_transition?: ChapterTransition) {
+  continueActive = true;
   pendingAutoPlay = true;
 }
 
-export function consumeSuppressNarrationStopOnBlur() {
-  if (!suppressStopOnBlur) return false;
-  suppressStopOnBlur = false;
-  return true;
+/** Peek — do not clear. Used so focus cleanup cannot kill a mid-continue play. */
+export function isNarrationContinueActive() {
+  return continueActive;
 }
 
-export function consumeNarrationAutoPlay() {
-  if (!pendingAutoPlay) return false;
+/** Peek — stay true until playback is confirmed speaking (allows retries). */
+export function isNarrationAutoPlayPending() {
+  return pendingAutoPlay;
+}
+
+/** Clear after playback has actually started, or when leaving the reader. */
+export function clearNarrationContinue() {
+  continueActive = false;
   pendingAutoPlay = false;
-  // Param-only replaces may not blur; clear suppress so a later leave still stops.
-  suppressStopOnBlur = false;
-  return true;
 }

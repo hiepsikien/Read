@@ -293,7 +293,7 @@ API tiêu biểu:
 
 ### Trải nghiệm đọc
 - ~~TTS đọc thành tiếng~~ ✅ cloud TTS (Google) + admin đổi giọng động, SSML cho hội thoại kịch bản, tự cuộn theo audio (xem §4b)
-- Còn lại: focus mode, lock-screen / Now Playing controls (mức đầy đủ), transition chapter tinh gọn hơn
+- Còn lại: focus mode, lock-screen / Now Playing controls (mức đầy đủ)
 
 ### Rich format
 - Đã giữ **bold / italic** từ DOCX trên mobile + web reader
@@ -379,7 +379,7 @@ API tiêu biểu:
 
 **Hoàn thiện audio — kế hoạch:**
 
-> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker, **tự sang chapter kế** (unlocked → replace + auto-play; locked → màn mua; hết sách → finished overlay), **background audio mức nhẹ trên iOS** (`shouldPlayInBackground: true` + `UIBackgroundModes: ["audio"]`; stop khi rời reader / Back, không stop khi khóa màn; **chưa** có lock-screen / Control Center controls). Cần **rebuild native** sau khi đổi Info.plist.
+> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker, **tự sang chapter kế** (unlocked → replace + auto-play; locked → màn mua; hết sách → finished overlay), **handoff chapter khi nghe tiếp** (giữ màn hình cũ lúc soft-load, banner “Chapter N · title” + fade ngắn, latch continue chống race `stop`/autoplay), **background audio mức nhẹ trên iOS** (`shouldPlayInBackground: true` + `UIBackgroundModes: ["audio"]`; stop khi rời reader / Back, không stop khi khóa màn; **chưa** có lock-screen / Control Center controls). Cần **rebuild native** sau khi đổi Info.plist.
 
 Còn lại:
 
