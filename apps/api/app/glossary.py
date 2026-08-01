@@ -38,11 +38,15 @@ class ParsedGlossaryEntry:
 
 
 def normalize_lookup(value: str) -> str:
-    """Casefold + strip diacritics for fuzzy Vietnamese/Latin matching."""
+    """Casefold + strip diacritics for fuzzy Vietnamese/Latin matching.
+
+    Vietnamese Đ/đ does not decompose under NFD, so map it to plain ``d`` so
+    ASCII screenplay cues (``MAC DANG DUNG``) match glossary names with Đ.
+    """
     decomposed = unicodedata.normalize("NFD", value.strip())
     without_marks = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
     collapsed = re.sub(r"\s+", " ", without_marks).casefold().strip()
-    return collapsed
+    return collapsed.replace("đ", "d")
 
 
 def fold_keeping_offsets(value: str) -> str:
@@ -56,7 +60,8 @@ def fold_keeping_offsets(value: str) -> str:
     for char in value:
         decomposed = unicodedata.normalize("NFD", char)
         base = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
-        folded.append((base[:1] or char).casefold())
+        folded_char = (base[:1] or char).casefold()
+        folded.append("d" if folded_char == "đ" else folded_char)
     return "".join(folded)
 
 

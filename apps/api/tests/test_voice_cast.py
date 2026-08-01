@@ -4,6 +4,20 @@ from app import voice_cast
 from app.glossary import aliases_to_storage
 
 
+def test_chirp_cast_pool_honors_expanded_max_voices():
+    pool = voice_cast._gender_pool(
+        "chirp3",
+        "male",
+        "vi-VN-Chirp3-HD-Kore",
+        max_voices=12,
+    )
+    personas = [voice.rsplit("-", 1)[-1] for voice in pool]
+    assert len(personas) == 12
+    assert personas[:3] == ["Puck", "Orus", "Charon"]
+    assert "Alnilam" in personas
+    assert set(personas).issubset(set(voice_cast.CAST_PERSONAS["male"]))
+
+
 def test_infer_gender_from_summary_cues():
     assert voice_cast.infer_gender("Lê Thánh Tông", "Minh quân nhà Lê Sơ.") == "male"
     assert voice_cast.infer_gender("Vasco da Gama", "Nhà thám hiểm Bồ Đào Nha.") == "male"

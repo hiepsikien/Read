@@ -8,12 +8,42 @@ from dataclasses import dataclass
 from .glossary import aliases_from_storage, normalize_lookup
 from . import tts
 
-# Curated Chirp3 pool (~3 per gender). Age band picks a preferred slot;
+# Curated Chirp3 pool. Age band picks a preferred slot among the first 3;
 # collisions walk the same-gender list so casts stay gender-correct.
+# Cap for admin "max character voices". Pool length is CAST_PERSONAS per gender.
+MAX_CHARACTER_VOICES_CAP = 12
+
 CAST_PERSONAS: dict[str, list[str]] = {
-    # youth → adult → elder/deep. Forceful military profiles prefer the deep end.
-    "male": ["Puck", "Orus", "Charon"],
-    "female": ["Zephyr", "Aoede", "Kore"],
+    # First 3 keep youth → adult → elder slots used when max_voices is small.
+    # Remaining Chirp personas expand distinct cast capacity (admin max up to 12).
+    "male": [
+        "Puck",
+        "Orus",
+        "Charon",
+        "Achird",
+        "Algenib",
+        "Enceladus",
+        "Fenrir",
+        "Algieba",
+        "Iapetus",
+        "Schedar",
+        "Umbriel",
+        "Alnilam",
+    ],
+    "female": [
+        "Zephyr",
+        "Aoede",
+        "Kore",
+        "Leda",
+        "Achernar",
+        "Autonoe",
+        "Callirrhoe",
+        "Sulafat",
+        "Despina",
+        "Erinome",
+        "Laomedeia",
+        "Gacrux",
+    ],
 }
 
 AGE_INDEX = {"youth": 0, "adult": 1, "elder": 2}
@@ -130,6 +160,82 @@ def infer_presence(name: str, summary: str = "") -> str:
     return "neutral"
 
 
+def _first_match(pattern: re.Pattern[str], blob: str) -> str:
+    match = pattern.search(blob)
+    return match.group(0) if match else ""
+
+
+def explain_cast_inference(name: str, summary: str = "") -> tuple[dict[str, str], str]:
+    """Return inferred attrs plus a short Vietnamese rationale for the admin UI."""
+    blob = f"{name} {summary}".strip()
+    gender = infer_gender(name, summary)
+    age_band = infer_age_band(name, summary)
+    presence = infer_presence(name, summary)
+
+    gender_bits: list[str] = []
+    female_hit = _first_match(_FEMALE_CUES, blob)
+    male_hit = _first_match(_MALE_CUES, blob)
+    if gender == "female":
+        if female_hit:
+            gender_bits.append(f'nữ (gợi ý “{female_hit}”)')
+        elif re.search(r"\bThị\b", name or ""):
+            gender_bits.append("nữ (tên có “Thị”)")
+        else:
+            gender_bits.append("nữ")
+    else:
+        if male_hit:
+            gender_bits.append(f'nam (gợi ý “{male_hit}”)')
+        elif re.search(r"\bVăn\b", name or ""):
+            gender_bits.append("nam (tên có “Văn”)")
+        else:
+            gender_bits.append("nam (mặc định khi thiếu tín hiệu rõ)")
+
+    age_bits: list[str] = []
+    youth_hit = _first_match(_YOUTH_CUES, blob)
+    elder_hit = _first_match(_ELDER_CUES, blob)
+    year_hit = _YEAR_SPAN_RE.search(blob)
+    forceful_hit = _first_match(_FORCEFUL_CUES, blob)
+    soft_hit = _first_match(_SOFT_CUES, blob)
+    if age_band == "youth":
+        if youth_hit:
+            age_bits.append(f'trẻ (gợi ý “{youth_hit}”)')
+        elif year_hit:
+            age_bits.append(f"trẻ (năm sinh ~{year_hit.group(1)})")
+        else:
+            age_bits.append("trẻ")
+    elif age_band == "elder":
+        if elder_hit:
+            age_bits.append(f'già (gợi ý “{elder_hit}”)')
+        elif forceful_hit and not soft_hit:
+            age_bits.append(f'già/trầm (uy lực “{forceful_hit}”)')
+        elif year_hit:
+            age_bits.append(f"già (năm sinh ~{year_hit.group(1)})")
+        else:
+            age_bits.append("già")
+    else:
+        age_bits.append("trung niên (không có tín hiệu trẻ/già rõ)")
+
+    if presence == "forceful":
+        presence_bits = (
+            f'presence forceful (gợi ý “{forceful_hit}”)'
+            if forceful_hit
+            else "presence forceful"
+        )
+    elif presence == "soft":
+        presence_bits = (
+            f'presence soft (gợi ý “{soft_hit}”)' if soft_hit else "presence soft"
+        )
+    else:
+        presence_bits = "presence neutral"
+
+    attrs = {"gender": gender, "age_band": age_band, "presence": presence}
+    rationale = (
+        f"Suy ra {', '.join(gender_bits)}; {', '.join(age_bits)}; {presence_bits}. "
+        f"Persona sẽ được chọn theo nhóm {age_band}/{presence} trong pool cùng giới."
+    )
+    return attrs, rationale
+
+
 def _chirp_voice(persona: str) -> str:
     return f"vi-VN-Chirp3-HD-{persona}"
 
@@ -143,7 +249,7 @@ def _gender_pool(
 ) -> list[str]:
     engine_key = tts.normalize_engine(engine)
     gender_key = tts.normalize_gender(gender)
-    limit = max(1, min(6, int(max_voices)))
+    limit = max(1, min(MAX_CHARACTER_VOICES_CAP, int(max_voices)))
     if engine_key == "chirp3":
         personas = CAST_PERSONAS[gender_key][:limit]
         pool = [_chirp_voice(persona) for persona in personas]

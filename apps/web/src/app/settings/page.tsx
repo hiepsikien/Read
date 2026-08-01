@@ -344,7 +344,7 @@ function NarrationSettings() {
           </label>
           <label className="grid gap-1.5 text-sm">
             <span className="font-medium">Max character voices</span>
-            <input type="number" min={1} max={6} value={maxVoices} onChange={(e) => setMaxVoices(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
+            <input type="number" min={1} max={12} value={maxVoices} onChange={(e) => setMaxVoices(Number(e.target.value))} className="rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2.5" />
           </label>
         </div>
 

@@ -1160,6 +1160,31 @@ export function createApiClient(options: ApiClientOptions) {
         }
       );
     },
+    adminRecommendBookCast(
+      bookId: string,
+      body: {
+        entry_id?: string | null;
+        speaker_key?: string | null;
+        used_voices?: string[];
+      }
+    ) {
+      return request<{
+        ok: boolean;
+        entry_id: string | null;
+        speaker_key: string;
+        name: string;
+        gender: "male" | "female";
+        age_band: "youth" | "adult" | "elder";
+        presence: "soft" | "neutral" | "forceful";
+        tts_voice: string;
+        chirp_persona: string;
+        rationale: string;
+        source: "ai" | "heuristic";
+      }>(`/api/admin/books/${bookId}/cast/recommend`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
     adminSetBookCastStatus(bookId: string, status: "draft" | "ready") {
       return request<{ ok: boolean; cast_status: string; warnings: string[] }>(
         `/api/admin/books/${bookId}/cast/status`,

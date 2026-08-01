@@ -22,11 +22,13 @@ from ..models import Book, Category, Chapter, ContentReport, GlossaryEntry, Mode
 from ..moderation import allowed_admin_actions, event_payload, record_moderation_event
 from ..series_catalog import apply_series_placement, attach_series_fields
 from ..glossary import aliases_from_storage, normalize_lookup
+from ..cast_recommend import extract_dialogue_samples, recommend_cast_for_character
 from ..speaking_cast import speaking_cast_plan
 from ..tts_settings import active_payload, get_active_tts, tts_settings_payload, upsert_tts_settings
 from .. import tts
 from ..voice_cast import (
     CAST_PERSONAS,
+    MAX_CHARACTER_VOICES_CAP,
     apply_cast_to_entries,
     cast_profiles_for_entries,
     ensure_entries_cast,
@@ -72,7 +74,9 @@ class TtsSettingsBody(BaseModel):
     break_end_ms: int | None = Field(default=None, ge=0, le=800)
     speak_speaker_names: bool | None = None
     speak_stage_directions: bool | None = None
-    max_character_voices: int | None = Field(default=None, ge=1, le=6)
+    max_character_voices: int | None = Field(
+        default=None, ge=1, le=MAX_CHARACTER_VOICES_CAP
+    )
 
 
 class CastEntryUpdate(BaseModel):
@@ -95,6 +99,13 @@ class CastRebuildBody(BaseModel):
 
 class CastStatusBody(BaseModel):
     status: Literal["draft", "ready"]
+
+
+class CastRecommendBody(BaseModel):
+    entry_id: str | None = Field(default=None, max_length=32)
+    speaker_key: str | None = Field(default=None, max_length=300)
+    # Voices already chosen for other characters in the admin draft (optional).
+    used_voices: list[str] = Field(default_factory=list, max_length=200)
 
 
 class AdminCatalogBody(BaseModel):
@@ -1248,6 +1259,100 @@ def update_book_cast(
     book.updated_at = now
     db.commit()
     return {"ok": True, "updated": updated, "cast_status": book.cast_status}
+
+
+@router.post("/books/{book_id}/cast/recommend")
+async def recommend_book_cast_entry(
+    book_id: str,
+    body: CastRecommendBody,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+
+    entry_id = (body.entry_id or "").strip() or None
+    speaker_key = normalize_lookup(body.speaker_key or "")
+    if not entry_id and not speaker_key:
+        raise HTTPException(
+            status_code=400,
+            detail="entry_id or speaker_key is required.",
+        )
+
+    rows = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    )
+    chapters = list(
+        db.scalars(
+            select(Chapter)
+            .where(Chapter.book_id == book.id)
+            .order_by(Chapter.position.asc())
+        )
+    )
+
+    entry: GlossaryEntry | None = None
+    if entry_id:
+        entry = next((row for row in rows if row.id == entry_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Cast entry not found.")
+    else:
+        entry = next(
+            (row for row in rows if normalize_lookup(row.name) == speaker_key),
+            None,
+        )
+
+    name = (entry.name if entry else body.speaker_key or "").strip()
+    aliases = aliases_from_storage(entry.aliases) if entry else []
+    summary = (entry.summary if entry else "") or ""
+    cue = name
+    speaker_keys = {normalize_lookup(name)} if name else set()
+    if speaker_key:
+        speaker_keys.add(speaker_key)
+        cue = (body.speaker_key or cue).strip() or cue
+    for alias in aliases:
+        key = normalize_lookup(alias)
+        if key:
+            speaker_keys.add(key)
+
+    if not entry and body.speaker_key:
+        cue = body.speaker_key.strip()
+
+    dialogue = extract_dialogue_samples(chapters, speaker_keys=speaker_keys)
+    active = get_active_tts(db)
+
+    used = {
+        (getattr(row, "tts_voice", "") or "").strip()
+        for row in rows
+        if (getattr(row, "tts_voice", "") or "").strip()
+        and (entry is None or row.id != entry.id)
+    }
+    for voice in body.used_voices:
+        cleaned = (voice or "").strip()
+        if cleaned:
+            used.add(cleaned)
+    current_voice = (entry.tts_voice if entry else "") or ""
+    used.discard(current_voice.strip())
+
+    recommendation = await recommend_cast_for_character(
+        settings=get_settings(),
+        name=name or cue,
+        aliases=aliases,
+        summary=summary,
+        speaker_cue=cue,
+        dialogue_samples=dialogue,
+        engine=active.engine,
+        narrator_voice=active.voice,
+        used_voices=used,
+        max_voices=active.max_character_voices,
+    )
+    return {
+        "ok": True,
+        "entry_id": entry.id if entry else None,
+        "speaker_key": speaker_key or normalize_lookup(name),
+        "name": name or cue,
+        **recommendation,
+    }
 
 
 @router.post("/books/{book_id}/cast/rebuild")

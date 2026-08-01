@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .models import AppSetting
 from . import tts
-from .voice_cast import CAST_PERSONAS
+from .voice_cast import CAST_PERSONAS, MAX_CHARACTER_VOICES_CAP
 
 TTS_ENGINE_KEY = "tts_engine"
 TTS_GENDER_KEY = "tts_gender"
@@ -165,7 +165,11 @@ def get_active_tts(db: Session | None = None) -> ActiveTts:
         speak_speaker_names=_bool_setting(rows, TTS_SPEAK_SPEAKER_NAMES_KEY, True),
         speak_stage_directions=_bool_setting(rows, TTS_SPEAK_STAGE_DIRECTIONS_KEY, True),
         max_character_voices=_int_setting(
-            rows, TTS_MAX_CHARACTER_VOICES_KEY, DEFAULT_MAX_CHARACTER_VOICES, lo=1, hi=6
+            rows,
+            TTS_MAX_CHARACTER_VOICES_KEY,
+            DEFAULT_MAX_CHARACTER_VOICES,
+            lo=1,
+            hi=MAX_CHARACTER_VOICES_CAP,
         ),
     )
 
@@ -275,7 +279,7 @@ def upsert_tts_settings(
                 max_character_voices,
                 current.max_character_voices,
                 lo=1,
-                hi=6,
+                hi=MAX_CHARACTER_VOICES_CAP,
             )
         ),
     }

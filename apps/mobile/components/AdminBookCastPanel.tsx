@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -8,9 +9,16 @@ import {
   TextInput,
   View,
 } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { ApiError, type BookCastEntry, type BookCastPayload } from "@read/api-client";
 import { useAuth } from "../lib/auth";
 import { colors } from "../lib/theme";
+
+function castPreviewText(name: string): string {
+  const label = name.trim() || "nhân vật này";
+  return `${label}. Xin chào, đây là giọng của tôi.`;
+}
 
 type Draft = {
   id: string | null;
@@ -68,8 +76,41 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
   const [filter, setFilter] = useState<FilterId>("all");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingGlossary, setUploadingGlossary] = useState(false);
+  const [previewingKey, setPreviewingKey] = useState<string | null>(null);
+  const [recommendingKey, setRecommendingKey] = useState<string | null>(null);
+  const [rationales, setRationales] = useState<
+    Record<string, { text: string; source: "ai" | "heuristic" }>
+  >({});
+  const [entryErrors, setEntryErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+
+  const player = useAudioPlayer(null);
+  const playerStatus = useAudioPlayerStatus(player);
+  const playerReleased = useRef(false);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      interruptionMode: "doNotMix",
+    });
+  }, []);
+
+  useEffect(() => {
+    playerReleased.current = false;
+    return () => {
+      playerReleased.current = true;
+    };
+  }, [player]);
+
+  useEffect(() => {
+    if (playerStatus.didJustFinish) {
+      setPreviewingKey(null);
+    }
+  }, [playerStatus.didJustFinish]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -153,6 +194,80 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
     });
   }
 
+  function playCastPreview(key: string, draft: Draft, name: string) {
+    if (!payload || playerReleased.current) return;
+    const persona =
+      payload.engine === "chirp3" ? (draft.tts_voice.split("-").pop() ?? "") : "";
+    const uri = api.ttsPreviewUrl({
+      engine: payload.engine,
+      gender: draft.gender,
+      chirp_persona: persona || undefined,
+      voice: draft.tts_voice,
+      text: castPreviewText(name),
+    });
+    try {
+      setPreviewingKey(key);
+      setError("");
+      player.replace({ uri });
+      player.play();
+    } catch {
+      setPreviewingKey(null);
+      setError("Could not play the voice preview.");
+    }
+  }
+
+  async function recommendCast(key: string, draft: Draft) {
+    if (!payload) return;
+    setRecommendingKey(key);
+    setError("");
+    setStatus("");
+    setEntryErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    try {
+      const usedVoices = [
+        ...new Set(
+          Object.entries(drafts)
+            .filter(([otherKey]) => otherKey !== key)
+            .map(([, item]) => item.tts_voice)
+            .filter(Boolean)
+        ),
+      ];
+      const result = await api.adminRecommendBookCast(bookId, {
+        entry_id: draft.id,
+        speaker_key: draft.speaker_key,
+        used_voices: usedVoices,
+      });
+      updateDraft(key, {
+        gender: result.gender,
+        age_band: result.age_band,
+        presence: result.presence,
+        tts_voice: result.tts_voice,
+      });
+      const text =
+        result.rationale?.trim() ||
+        (result.source === "ai"
+          ? "AI đã gợi ý cast cho nhân vật này."
+          : "Heuristic đã gợi ý cast (Gemini chưa bật).");
+      setRationales((prev) => ({
+        ...prev,
+        [key]: { text, source: result.source },
+      }));
+      setStatus(
+        `Đã áp dụng gợi ý cho ${result.name || "nhân vật"} (chưa Save). Nghe Preview rồi Save.`
+      );
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : "Không gợi ý được cast.";
+      setEntryErrors((prev) => ({ ...prev, [key]: message }));
+      setError(message);
+    } finally {
+      setRecommendingKey(null);
+    }
+  }
+
   async function save() {
     if (!payload) return;
     setSaving(true);
@@ -176,6 +291,9 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
       });
       const result = await api.adminUpdateBookCast(bookId, entries);
       setStatus(`Saved ${result.updated} cast row(s).`);
+      if (result.warnings?.length) {
+        setStatus((prev) => `${prev} ${result.warnings!.join(" ")}`);
+      }
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not save cast.");
@@ -221,6 +339,38 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
     }
   }
 
+  async function uploadGlossary() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "org.openxmlformats.wordprocessingml.document",
+      ],
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    setUploadingGlossary(true);
+    setError("");
+    setStatus("");
+    try {
+      const form = new FormData();
+      form.append("file", {
+        uri: asset.uri,
+        name: asset.name || "glossary.docx",
+        type:
+          asset.mimeType ||
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      } as unknown as Blob);
+      const imported = await api.uploadGlossary(bookId, form);
+      setStatus(`Imported ${imported.count} character notes from glossary.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Glossary upload failed.");
+    } finally {
+      setUploadingGlossary(false);
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.card}>
@@ -233,6 +383,19 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
     return (
       <View style={styles.card}>
         <Text style={styles.error}>{error || "No cast data."}</Text>
+        <Text style={styles.sub}>
+          If this book has no character glossary yet, upload a NHÂN VẬT.docx below after reload —
+          or open Audio cast again once the book loads.
+        </Text>
+        <Pressable
+          style={[styles.secondaryBtn, uploadingGlossary && styles.btnDisabled]}
+          disabled={uploadingGlossary}
+          onPress={() => void uploadGlossary()}
+        >
+          <Text style={styles.secondaryBtnText}>
+            {uploadingGlossary ? "Uploading…" : "Upload NHÂN VẬT.docx"}
+          </Text>
+        </Pressable>
       </View>
     );
   }
@@ -251,6 +414,25 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
         {" · "}
         status {payload.cast_status || "draft"}
       </Text>
+
+      <Text style={styles.label}>Character glossary</Text>
+      <Text style={styles.sub}>
+        Upload NHÂN VẬT.docx so speaking cues can match cast voices. Replaces the current glossary
+        for this book.
+      </Text>
+      <Pressable
+        style={[styles.secondaryBtn, (saving || uploadingGlossary) && styles.btnDisabled]}
+        disabled={saving || uploadingGlossary}
+        onPress={() => void uploadGlossary()}
+      >
+        <Text style={styles.secondaryBtnText}>
+          {uploadingGlossary
+            ? "Uploading…"
+            : (payload.glossary_count ?? 0) > 0
+              ? "Replace NHÂN VẬT.docx"
+              : "Upload NHÂN VẬT.docx"}
+        </Text>
+      </Pressable>
 
       {(payload.warnings ?? []).map((warning, index) => (
         <Text key={`warn-${index}-${warning}`} style={styles.warn}>
@@ -370,6 +552,69 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
               ) : (
                 <Text style={styles.meta}>Voice: {draft.tts_voice}</Text>
               )}
+
+              {(() => {
+                const draftPersona = draft.tts_voice.split("-").pop() || "—";
+                const effective = entry.effective_tts_voice || entry.tts_voice || "";
+                const synthPersona = effective.split("-").pop() || "";
+                const conflict = Boolean(entry.voice_conflict);
+                return (
+                  <View style={[styles.synthBox, conflict && styles.synthBoxConflict]}>
+                    <Text style={styles.synthLabel}>Will speak as</Text>
+                    <Text style={styles.synthValue}>{draftPersona}</Text>
+                    {conflict && synthPersona && synthPersona !== draftPersona ? (
+                      <Text style={styles.synthHint}>
+                        Synth map still has {synthPersona}. Save cast (or clear stale
+                        override) so audio matches this row.
+                      </Text>
+                    ) : null}
+                  </View>
+                );
+              })()}
+
+              <View style={styles.actionRow}>
+                <Pressable
+                  style={[
+                    styles.secondaryBtn,
+                    styles.actionBtn,
+                    previewingKey === key && styles.previewActive,
+                  ]}
+                  onPress={() =>
+                    playCastPreview(key, draft, entry.name || entry.speaker_cue || "")
+                  }
+                >
+                  <Text style={styles.secondaryBtnText}>
+                    {previewingKey === key ? "Playing…" : "Preview"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.secondaryBtn,
+                    styles.actionBtn,
+                    recommendingKey === key && styles.previewActive,
+                    (saving || recommendingKey === key) && styles.btnDisabled,
+                  ]}
+                  disabled={saving || recommendingKey === key}
+                  onPress={() => void recommendCast(key, draft)}
+                >
+                  <Text style={styles.secondaryBtnText}>
+                    {recommendingKey === key ? "AI…" : "AI recommend"}
+                  </Text>
+                </Pressable>
+              </View>
+              {rationales[key] ? (
+                <View style={styles.rationaleBox}>
+                  <Text style={styles.rationaleLabel}>
+                    {rationales[key].source === "ai"
+                      ? "Why this voice (AI)"
+                      : "Why this voice (heuristic)"}
+                  </Text>
+                  <Text style={styles.rationale}>{rationales[key].text}</Text>
+                </View>
+              ) : null}
+              {entryErrors[key] ? (
+                <Text style={styles.error}>{entryErrors[key]}</Text>
+              ) : null}
 
               <View style={styles.switchRow}>
                 <Text style={styles.label}>Lock override</Text>
@@ -521,7 +766,52 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.6)",
   },
+  actionRow: { flexDirection: "row", gap: 8 },
+  actionBtn: { flex: 1 },
+  previewActive: {
+    borderColor: colors.sage,
+    backgroundColor: "rgba(110,139,116,0.12)",
+  },
   secondaryBtnText: { color: colors.ink, fontWeight: "500" },
+  rationaleBox: {
+    borderWidth: 1,
+    borderColor: "rgba(110,139,116,0.35)",
+    backgroundColor: "rgba(110,139,116,0.1)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  rationaleLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.sageDeep,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  rationale: { fontSize: 13, color: colors.ink, lineHeight: 18 },
+  synthBox: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2,
+    backgroundColor: "rgba(255,255,255,0.55)",
+  },
+  synthBoxConflict: {
+    borderColor: colors.danger,
+    backgroundColor: "rgba(180,60,60,0.08)",
+  },
+  synthLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.inkSoft,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  synthValue: { fontSize: 15, fontWeight: "600", color: colors.ink },
+  synthHint: { fontSize: 12, color: colors.danger, lineHeight: 17, marginTop: 2 },
   btnDisabled: { opacity: 0.6 },
   error: { color: colors.danger },
   ok: { color: colors.sageDeep },

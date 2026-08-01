@@ -65,6 +65,31 @@ def test_match_speaker_to_glossary_alias_and_partial():
     assert match_speaker_to_glossary(entries, "STRANGER") is None
 
 
+def test_match_speaker_maps_ascii_cues_with_vietnamese_d():
+    """Đ/đ must fold to d so ASCII ALL CAPS cues match glossary names."""
+    from app.glossary import normalize_lookup
+
+    assert normalize_lookup("Mạc Đăng Dung") == normalize_lookup("MAC DANG DUNG")
+    assert normalize_lookup("Nguyễn Bỉnh Khiêm") == normalize_lookup("NGUYEN BINH KHIEM")
+
+    entries = [
+        SimpleNamespace(
+            id="mac",
+            name="Mạc Đăng Dung",
+            aliases="[]",
+        ),
+        SimpleNamespace(
+            id="nbk",
+            name="Nguyễn Bỉnh Khiêm",
+            aliases=aliases_to_storage(["Trạng Trình"]),
+        ),
+    ]
+    assert match_speaker_to_glossary(entries, "MAC DANG DUNG").id == "mac"
+    assert match_speaker_to_glossary(entries, "MẠC ĐĂNG DUNG").id == "mac"
+    assert match_speaker_to_glossary(entries, "NGUYEN BINH KHIEM").id == "nbk"
+    assert match_speaker_to_glossary(entries, "TRANG TRINH").id == "nbk"
+
+
 def test_speaking_cast_plan_separates_unmatched_and_glossary_only():
     chapters = [SimpleNamespace(id="c1", title="One", position=1, content=SAMPLE)]
     glossary = [
