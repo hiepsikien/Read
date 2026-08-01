@@ -1,15 +1,23 @@
 import Link from "next/link";
-import type { ReadingShelfItem } from "@read/api-client";
+import type { ReadingShelfItem, SeriesContinueItem, SeriesListItem } from "@read/api-client";
+import { formatEpisodeCode } from "@read/api-client";
 import { BookCard } from "@/components/BookCard";
 import { createServerApi } from "@/lib/api-server";
+import { formatPrice } from "@/lib/format";
 import { formatProgressLabel } from "@/lib/reading-progress";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const api = await createServerApi();
-  const { books } = await api.listBooks();
+  const [{ books }, seriesPayload] = await Promise.all([
+    api.listBooks(),
+    api.listSeries().catch(() => ({ series: [] as SeriesListItem[] })),
+  ]);
+  const seriesList = seriesPayload.series;
+
   let continueItems: ReadingShelfItem[] = [];
+  let seriesContinue: SeriesContinueItem[] = [];
   try {
     const reading = await api.listReading();
     const seen = new Set<string>();
@@ -18,8 +26,10 @@ export default async function HomePage() {
       seen.add(item.book.id);
       return true;
     });
+    seriesContinue = reading.series_continue || [];
   } catch {
     continueItems = [];
+    seriesContinue = [];
   }
 
   return (
@@ -49,33 +59,136 @@ export default async function HomePage() {
             </h2>
           </div>
           <ul className="divide-y divide-[var(--line)]">
-            {continueItems.map((item) => (
-              <li key={item.book.id} className="flex items-center justify-between gap-4 py-5">
-                <div className="min-w-0">
+            {continueItems.map((item) => {
+              const code = formatEpisodeCode(item.book.season_number, item.book.episode_number);
+              return (
+                <li key={item.book.id} className="flex items-center justify-between gap-4 py-5">
+                  <div className="min-w-0">
+                    {item.book.series ? (
+                      <Link
+                        href={`/series/${item.book.series.id}`}
+                        className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] hover:underline"
+                      >
+                        {item.book.series.title}
+                        {code ? ` · ${code}` : ""}
+                      </Link>
+                    ) : null}
+                    <Link
+                      href={`/read/${item.book.id}/${item.progress.chapter_id}`}
+                      className="brand-mark mt-1 block text-xl font-semibold text-[var(--ink)] hover:underline"
+                    >
+                      {item.book.title}
+                    </Link>
+                    <p className="mt-1 text-xs font-medium text-[var(--sage-deep)]">
+                      {formatProgressLabel(
+                        item.progress.chapter_position,
+                        item.progress.chapter_count,
+                        item.progress.scroll_fraction
+                      )}
+                      {" · "}
+                      {item.progress.chapter_title}
+                    </p>
+                  </div>
                   <Link
                     href={`/read/${item.book.id}/${item.progress.chapter_id}`}
-                    className="brand-mark text-xl font-semibold text-[var(--ink)] hover:underline"
+                    className="shrink-0 text-sm text-[var(--sage)]"
+                  >
+                    Resume →
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {seriesContinue.length > 0 ? (
+        <section className="surface fade-up mb-8 rounded-2xl px-5 py-2 sm:px-8">
+          <div className="border-b border-[var(--line)] py-5">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
+              Continue series
+            </h2>
+          </div>
+          <ul className="divide-y divide-[var(--line)]">
+            {seriesContinue.map((item) => (
+              <li key={item.book.id} className="flex items-center justify-between gap-4 py-5">
+                <div className="min-w-0">
+                  {item.series ? (
+                    <Link
+                      href={`/series/${item.series.id}`}
+                      className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] hover:underline"
+                    >
+                      {item.series.title}
+                      {item.episode_code ? ` · ${item.episode_code}` : ""}
+                    </Link>
+                  ) : null}
+                  <Link
+                    href={`/books/${item.book.id}`}
+                    className="brand-mark mt-1 block text-xl font-semibold text-[var(--ink)] hover:underline"
                   >
                     {item.book.title}
                   </Link>
-                  <p className="mt-1 text-xs font-medium text-[var(--sage-deep)]">
-                    {formatProgressLabel(
-                      item.progress.chapter_position,
-                      item.progress.chapter_count,
-                      item.progress.scroll_fraction
-                    )}
-                    {" · "}
-                    {item.progress.chapter_title}
+                  <p className="mt-1 text-xs text-[var(--ink-soft)]">
+                    {item.owned
+                      ? "Next episode ready"
+                      : `Unlock · ${formatPrice(item.book.price_cents)}`}
                   </p>
                 </div>
-                <Link
-                  href={`/read/${item.book.id}/${item.progress.chapter_id}`}
-                  className="shrink-0 text-sm text-[var(--sage)]"
-                >
-                  Resume →
+                <Link href={`/books/${item.book.id}`} className="shrink-0 text-sm text-[var(--sage)]">
+                  {item.owned ? "Continue →" : "View →"}
                 </Link>
               </li>
             ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {seriesList.length > 0 ? (
+        <section className="surface fade-up mb-8 rounded-2xl px-5 py-2 sm:px-8">
+          <div className="border-b border-[var(--line)] py-5">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
+              Series
+            </h2>
+          </div>
+          <ul className="divide-y divide-[var(--line)]">
+            {seriesList.map((item) => {
+              const coverUrl = api.bookCoverUrl(item.cover_url, { cacheKey: item.updated_at });
+              return (
+              <li key={item.id} className="flex items-center justify-between gap-4 py-5">
+                <div className="flex min-w-0 items-center gap-4">
+                  {coverUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={coverUrl}
+                      alt=""
+                      className="h-16 w-12 shrink-0 rounded-md border border-[var(--line)] object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-12 shrink-0 items-end rounded-md border border-[var(--line)] bg-[var(--mist)] p-1.5">
+                      <span className="line-clamp-3 text-[10px] font-semibold leading-tight text-[var(--ink)]">
+                        {item.title}
+                      </span>
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <Link
+                      href={`/series/${item.id}`}
+                      className="brand-mark text-xl font-semibold text-[var(--ink)] hover:underline"
+                    >
+                      {item.title}
+                    </Link>
+                    <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                      {item.episode_count} episode{item.episode_count === 1 ? "" : "s"}
+                      {item.publisher_name ? ` · ${item.publisher_name}` : ""}
+                    </p>
+                  </div>
+                </div>
+                <Link href={`/series/${item.id}`} className="shrink-0 text-sm text-[var(--sage)]">
+                  Browse →
+                </Link>
+              </li>
+              );
+            })}
           </ul>
         </section>
       ) : null}
@@ -100,6 +213,9 @@ export default async function HomePage() {
               publisher_name={book.publisher_name || "Publisher"}
               publisher_handle={book.publisher_handle}
               chapter_count={book.chapter_count}
+              series={book.series}
+              season_number={book.season_number}
+              episode_number={book.episode_number}
             />
           ))
         )}

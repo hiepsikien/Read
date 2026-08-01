@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -9,13 +10,14 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import type { BookListItem, Category, ReadingShelfItem } from "@read/api-client";
+import type { BookListItem, Category, ReadingShelfItem, SeriesContinueItem, SeriesListItem } from "@read/api-client";
 import { BookTile } from "../components/BookTile";
+import { BookCover } from "../components/BookCover";
 import { CategoryChips } from "../components/CategoryChips";
 import { SearchField } from "../components/SearchField";
 import { useAuth } from "../lib/auth";
 import { formatProgressLabel } from "../lib/reading-progress";
-import { colors, radii, space } from "../lib/theme";
+import { colors, coverHeightForWidth, radii, space } from "../lib/theme";
 
 const H_PAD = 20;
 const GAP = 14;
@@ -26,6 +28,8 @@ export default function LibraryScreen() {
   const { api, user, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [continueItems, setContinueItems] = useState<ReadingShelfItem[]>([]);
+  const [seriesContinue, setSeriesContinue] = useState<SeriesContinueItem[]>([]);
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -36,21 +40,30 @@ export default function LibraryScreen() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [bookPayload, categoryPayload, readingPayload] = await Promise.all([
+      const [bookPayload, categoryPayload, readingPayload, seriesPayload] = await Promise.all([
         api.listBooks(),
         api.listCategories(),
         user
-          ? api.listReading().catch(() => ({ items: [] as ReadingShelfItem[] }))
-          : Promise.resolve({ items: [] as ReadingShelfItem[] }),
+          ? api.listReading().catch(() => ({
+              items: [] as ReadingShelfItem[],
+              series_continue: [] as SeriesContinueItem[],
+            }))
+          : Promise.resolve({
+              items: [] as ReadingShelfItem[],
+              series_continue: [] as SeriesContinueItem[],
+            }),
+        api.listSeries().catch(() => ({ series: [] as SeriesListItem[] })),
       ]);
       setBooks(bookPayload.books);
       setCategories(categoryPayload.categories);
+      setSeriesList(seriesPayload.series);
       setContinueItems(
         readingPayload.items.filter(
           (item, index, all) =>
             all.findIndex((other) => other.book.id === item.book.id) === index
         )
       );
+      setSeriesContinue(readingPayload.series_continue || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load library.");
     } finally {
@@ -148,6 +161,11 @@ export default function LibraryScreen() {
                   onPress={() =>
                     router.push(`/read/${item.book.id}/${item.progress.chapter_id}`)
                   }
+                  onPressSeries={
+                    item.book.series
+                      ? () => router.push(`/series/${item.book.series!.id}`)
+                      : undefined
+                  }
                 />
                 <Text style={styles.continueMeta} numberOfLines={1}>
                   {formatProgressLabel(
@@ -157,6 +175,67 @@ export default function LibraryScreen() {
                   )}
                 </Text>
               </View>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {seriesContinue.length > 0 ? (
+        <View style={styles.continueBlock}>
+          <Text style={styles.section}>Continue series</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.continueRow}
+          >
+            {seriesContinue.map((item) => (
+              <View key={item.book.id} style={{ width: CONTINUE_TILE, gap: 6 }}>
+                <BookTile
+                  book={item.book}
+                  width={CONTINUE_TILE}
+                  onPress={() => router.push(`/books/${item.book.id}`)}
+                  onPressSeries={
+                    item.series ? () => router.push(`/series/${item.series!.id}`) : undefined
+                  }
+                />
+                <Text style={styles.continueMeta} numberOfLines={1}>
+                  {item.owned ? "Next episode" : "Unlock next"}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {seriesList.length > 0 ? (
+        <View style={styles.continueBlock}>
+          <Text style={styles.section}>Series</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.continueRow}
+          >
+            {seriesList.map((item) => (
+              <Pressable
+                key={item.id}
+                style={[styles.seriesChip, { width: CONTINUE_TILE }]}
+                onPress={() => router.push(`/series/${item.id}`)}
+              >
+                <BookCover
+                  title={item.title}
+                  coverUrl={api.bookCoverUrl(item.cover_url, { cacheKey: item.updated_at })}
+                  width={CONTINUE_TILE}
+                  height={coverHeightForWidth(CONTINUE_TILE)}
+                  authenticated={false}
+                  showTitle={false}
+                />
+                <Text style={styles.seriesChipTitle} numberOfLines={2}>
+                  {item.title}
+                </Text>
+                <Text style={styles.seriesChipMeta}>
+                  {item.episode_count} ep{item.episode_count === 1 ? "" : "s"}
+                </Text>
+              </Pressable>
             ))}
           </ScrollView>
         </View>
@@ -205,8 +284,11 @@ export default function LibraryScreen() {
               book={book}
               width={tileWidth}
               onPress={() => router.push(`/books/${book.id}`)}
+              onPressSeries={
+                book.series ? () => router.push(`/series/${book.series!.id}`) : undefined
+              }
               onPressPublisher={
-                book.publisher_handle
+                !book.series && book.publisher_handle
                   ? () => router.push(`/@${book.publisher_handle}`)
                   : undefined
               }
@@ -243,6 +325,11 @@ const styles = StyleSheet.create({
   continueBlock: { gap: space.md },
   continueRow: { gap: space.md, paddingRight: space.lg },
   continueMeta: { color: colors.sageDeep, fontSize: 11, fontWeight: "600" },
+  seriesChip: {
+    gap: 8,
+  },
+  seriesChipTitle: { color: colors.ink, fontWeight: "700", fontSize: 14, lineHeight: 18 },
+  seriesChipMeta: { color: colors.inkSoft, fontSize: 12 },
   chipScroll: { paddingRight: space.lg },
   sectionRow: {
     flexDirection: "row",

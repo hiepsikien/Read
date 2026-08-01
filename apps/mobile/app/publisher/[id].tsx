@@ -21,6 +21,7 @@ import {
   type Category,
   type ChapterListItem,
   type SegmentTitleComponent,
+  type SeriesListItem,
   type SplitLength,
   type SuggestLanguage,
 } from "@read/api-client";
@@ -49,13 +50,17 @@ export default function ManageBookScreen() {
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
   const [categoryId, setCategoryId] = useState("");
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
+  const [seriesId, setSeriesId] = useState("");
+  const [seasonNumber, setSeasonNumber] = useState("1");
+  const [episodeNumber, setEpisodeNumber] = useState("1");
   const [splitLength, setSplitLength] = useState<SplitLength>("standard");
   const [suggestLanguage, setSuggestLanguage] = useState<SuggestLanguage>("en");
   const [titleComponents, setTitleComponents] = useState<SegmentTitleComponent[]>(
     DEFAULT_SEGMENT_TITLE_COMPONENTS
   );
   const [busy, setBusy] = useState<
-    "" | "split" | "submit" | "cover" | "glossary" | "suggest" | "discard" | "titles"
+    "" | "split" | "submit" | "cover" | "glossary" | "suggest" | "discard" | "titles" | "series"
   >("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -74,18 +79,23 @@ export default function ManageBookScreen() {
     if (!id) return;
     setError("");
     try {
-      const [data, categoryPayload] = await Promise.all([
+      const [data, categoryPayload, mineSeries] = await Promise.all([
         api.getBook(id),
         api.listCategories(),
+        api.listSeries({ mine: true }),
       ]);
       setBook(data.book);
       setChapters(data.chapters);
       setCategories(categoryPayload.categories);
+      setSeriesList(mineSeries.series);
       setTitle(data.book.title);
       setDescription(data.book.description);
       setPricing(data.book.price_cents > 0 ? "paid" : "free");
       setPrice(((data.book.price_cents || 499) / 100).toFixed(2));
       setCategoryId(data.book.category?.id || categoryPayload.categories[0]?.id || "");
+      setSeriesId(data.book.series?.id || "");
+      setSeasonNumber(String(data.book.season_number || 1));
+      setEpisodeNumber(String(data.book.episode_number || 1));
       try {
         const glossary = await api.listGlossary(id);
         setGlossaryCount(glossary.count);
@@ -114,6 +124,31 @@ export default function ManageBookScreen() {
       category_id: current.categoryId,
     });
     formRef.current = current;
+  }
+
+  async function saveSeriesPlacement() {
+    if (!id) return;
+    setBusy("series");
+    setMessage("");
+    setError("");
+    try {
+      if (!seriesId) {
+        await api.updateBook(id, { clear_series: true });
+        setMessage("Removed from series.");
+      } else {
+        await api.updateBook(id, {
+          series_id: seriesId,
+          season_number: Number(seasonNumber),
+          episode_number: Number(episodeNumber),
+        });
+        setMessage("Series placement saved.");
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save series placement.");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function suggestWithAi() {
@@ -530,6 +565,68 @@ export default function ManageBookScreen() {
           placeholderTextColor={colors.inkSoft}
         />
       ) : null}
+
+      <Text style={styles.section}>Series placement</Text>
+      <Text style={styles.hint}>
+        Each book is one episode. Attach it to a series with season and episode numbers.
+      </Text>
+      <View style={styles.categoryWrap}>
+        <Pressable
+          style={[styles.categoryChip, !seriesId && styles.categoryChipActive]}
+          onPress={() => setSeriesId("")}
+        >
+          <Text style={[styles.categoryText, !seriesId && styles.categoryTextActive]}>
+            Not in a series
+          </Text>
+        </Pressable>
+        {seriesList.map((item) => {
+          const active = seriesId === item.id;
+          return (
+            <Pressable
+              key={item.id}
+              style={[styles.categoryChip, active && styles.categoryChipActive]}
+              onPress={() => setSeriesId(item.id)}
+            >
+              <Text style={[styles.categoryText, active && styles.categoryTextActive]}>
+                {item.title}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {seriesId ? (
+        <View style={styles.pricingRow}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={seasonNumber}
+            onChangeText={setSeasonNumber}
+            keyboardType="number-pad"
+            placeholder="Season"
+            placeholderTextColor={colors.inkSoft}
+          />
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={episodeNumber}
+            onChangeText={setEpisodeNumber}
+            keyboardType="number-pad"
+            placeholder="Episode"
+            placeholderTextColor={colors.inkSoft}
+          />
+        </View>
+      ) : null}
+      <Pressable
+        style={[styles.secondaryBtn, styles.saveBtn]}
+        onPress={() => void saveSeriesPlacement()}
+        disabled={busy === "series"}
+      >
+        <Text style={styles.secondaryBtnText}>
+          {busy === "series" ? "Saving…" : "Save series placement"}
+        </Text>
+      </Pressable>
+      <Pressable onPress={() => router.push("/publisher/series-new")}>
+        <Text style={styles.link}>Create series</Text>
+      </Pressable>
+
       <Text style={styles.section}>Character notes</Text>
       <Text style={styles.hint}>
         Upload a NHÂN VẬT.docx glossary so readers can long-press names for book notes
@@ -866,6 +963,13 @@ const styles = StyleSheet.create({
   choiceHint: { color: colors.inkSoft, fontSize: 11, marginTop: 2 },
   choiceHintActive: { color: "rgba(255,255,255,0.85)" },
   hint: { color: colors.inkSoft, fontSize: 13, marginTop: 6 },
+  link: {
+    color: colors.sage,
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 10,
+    textDecorationLine: "underline",
+  },
   primaryBtn: {
     marginTop: 12,
     backgroundColor: colors.sage,

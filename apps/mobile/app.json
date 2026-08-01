@@ -18,7 +18,10 @@
       "bundleIdentifier": "com.nguyendinhanh.read",
       "buildNumber": "5",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
@@ -27,6 +30,7 @@
         "backgroundColor": "#d5e2dd"
       },
       "package": "com.nguyendinhanh.read",
+      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ]

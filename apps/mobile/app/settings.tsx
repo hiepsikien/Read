@@ -67,17 +67,18 @@ export default function SettingsScreen() {
           if (user.handle) router.push(`/@${user.handle}`);
           else router.push("/claim-handle");
         }}
-        onSignOut={() => void signOut().then(() => router.replace("/"))}
       />
 
       <WorkspaceSection
         role={user.role}
         authorBusy={authorBusy}
         authorError={authorError}
-        onAdmin={() => router.push("/admin")}
+        onAdminSection={(section) => router.push(`/admin?section=${section}`)}
         onPublisher={() => router.push("/publisher")}
         onBecomeAuthor={becomeAuthor}
       />
+
+      <ReadingSection />
 
       <LegalSection
         acceptedVersion={user.accepted_legal_version}
@@ -87,7 +88,12 @@ export default function SettingsScreen() {
         onAccept={() => router.push("/legal/accept")}
       />
 
-      <ReadingSection />
+      <Pressable
+        style={styles.signOutBtn}
+        onPress={() => void signOut().then(() => router.replace("/"))}
+      >
+        <Text style={styles.signOutText}>Sign out</Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -98,14 +104,12 @@ function AccountSection({
   email,
   role,
   onOpenProfile,
-  onSignOut,
 }: {
   name: string;
   handle?: string | null;
   email: string;
   role: string;
   onOpenProfile: () => void;
-  onSignOut: () => void;
 }) {
   return (
     <View style={styles.card}>
@@ -130,10 +134,6 @@ function AccountSection({
         <Text style={styles.kvKey}>Role</Text>
         <Text style={styles.kvValue}>{role}</Text>
       </View>
-
-      <Pressable style={styles.secondaryBtn} onPress={onSignOut}>
-        <Text style={styles.secondaryBtnText}>Sign out</Text>
-      </Pressable>
     </View>
   );
 }
@@ -142,14 +142,14 @@ function WorkspaceSection({
   role,
   authorBusy,
   authorError,
-  onAdmin,
+  onAdminSection,
   onPublisher,
   onBecomeAuthor,
 }: {
   role: string;
   authorBusy: boolean;
   authorError: string;
-  onAdmin: () => void;
+  onAdminSection: (section: "content" | "audio" | "users") => void;
   onPublisher: () => void;
   onBecomeAuthor: () => void;
 }) {
@@ -163,13 +163,26 @@ function WorkspaceSection({
 
       <View style={styles.workspaceList}>
         {role === "admin" ? (
-          <Pressable style={styles.workspaceRow} onPress={onAdmin}>
-            <View style={styles.workspaceCopy}>
-              <Text style={styles.workspaceTitle}>Admin center</Text>
-              <Text style={styles.workspaceHint}>Moderation, narration, users</Text>
+          <View style={styles.adminBlock}>
+            <Text style={styles.workspaceTitle}>Admin center</Text>
+            <View style={styles.adminChips}>
+              {(
+                [
+                  { value: "content" as const, label: "Content" },
+                  { value: "audio" as const, label: "Audio" },
+                  { value: "users" as const, label: "Users" },
+                ] as const
+              ).map((item) => (
+                <Pressable
+                  key={item.value}
+                  style={styles.adminChip}
+                  onPress={() => onAdminSection(item.value)}
+                >
+                  <Text style={styles.adminChipText}>{item.label}</Text>
+                </Pressable>
+              ))}
             </View>
-            <Text style={styles.workspaceChevron}>›</Text>
-          </Pressable>
+          </View>
         ) : null}
 
         {role === "publisher" || role === "admin" ? (
@@ -257,8 +270,11 @@ function ReadingSection() {
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>Reading</Text>
-      <Text style={styles.cardSub}>Applies to the in-app reader.</Text>
+      <Text style={styles.cardTitle}>Reader preferences</Text>
+      <Text style={styles.cardSub}>
+        Your personal reading view — text size, theme, and layout in the in-app reader.
+        Not admin settings.
+      </Text>
 
       <View style={styles.inlineRow}>
         <Text style={styles.kvKey}>Text size</Text>
@@ -332,6 +348,25 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   workspaceList: { gap: 8, marginTop: 4 },
+  adminBlock: {
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(63,111,92,0.08)",
+  },
+  adminChips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  adminChip: {
+    borderWidth: 1,
+    borderColor: colors.sage,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "rgba(255,255,255,0.7)",
+  },
+  adminChipText: { color: colors.sageDeep, fontWeight: "700", fontSize: 13 },
   workspaceRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -403,6 +438,16 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.6)",
   },
   secondaryBtnText: { color: colors.ink, fontWeight: "500" },
+  signOutBtn: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "rgba(155,28,28,0.35)",
+    backgroundColor: "rgba(155,28,28,0.08)",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  signOutText: { color: colors.danger, fontWeight: "700", fontSize: 16 },
   accountActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   meta: { color: colors.inkSoft, fontSize: 13 },
   error: { color: colors.danger },

@@ -24,6 +24,7 @@ RESERVED_HANDLES = frozenset(
         "null",
         "publisher",
         "read",
+        "series",
         "settings",
         "static",
         "support",

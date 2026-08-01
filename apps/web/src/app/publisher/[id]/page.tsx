@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
-import { ApiError, SPLIT_LENGTH_OPTIONS, type SplitLength } from "@read/api-client";
+import {
+  ApiError,
+  SPLIT_LENGTH_OPTIONS,
+  type SeriesListItem,
+  type SplitLength,
+} from "@read/api-client";
 import { createBrowserApi } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 
@@ -16,6 +21,9 @@ type BookPayload = {
     status: string;
     source_filename: string | null;
     has_raw_text: boolean;
+    series?: { id: string; title: string } | null;
+    season_number?: number | null;
+    episode_number?: number | null;
   };
   chapters: Array<{ id: string; position: number; title: string; word_count: number }>;
 };
@@ -24,10 +32,14 @@ export default function ManageBookPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [data, setData] = useState<BookPayload | null>(null);
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
+  const [seriesId, setSeriesId] = useState("");
+  const [seasonNumber, setSeasonNumber] = useState("1");
+  const [episodeNumber, setEpisodeNumber] = useState("1");
   const [splitLength, setSplitLength] = useState<SplitLength>("standard");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -35,12 +47,20 @@ export default function ManageBookPage() {
 
   async function load() {
     try {
-      const payload = await createBrowserApi().getBook(params.id);
+      const api = createBrowserApi();
+      const [payload, mineSeries] = await Promise.all([
+        api.getBook(params.id),
+        api.listSeries({ mine: true }),
+      ]);
       setData(payload);
+      setSeriesList(mineSeries.series);
       setTitle(payload.book.title);
       setDescription(payload.book.description);
       setPricing(payload.book.price_cents > 0 ? "paid" : "free");
       setPrice(((payload.book.price_cents || 499) / 100).toFixed(2));
+      setSeriesId(payload.book.series?.id || "");
+      setSeasonNumber(String(payload.book.season_number || 1));
+      setEpisodeNumber(String(payload.book.episode_number || 1));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
     }
@@ -67,6 +87,31 @@ export default function ManageBookPage() {
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Save failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSeriesPlacement(event: FormEvent) {
+    event.preventDefault();
+    setBusy("series");
+    setMessage("");
+    setError("");
+    try {
+      if (!seriesId) {
+        await createBrowserApi().updateBook(params.id, { clear_series: true });
+        setMessage("Removed from series.");
+      } else {
+        await createBrowserApi().updateBook(params.id, {
+          series_id: seriesId,
+          season_number: Number(seasonNumber),
+          episode_number: Number(episodeNumber),
+        });
+        setMessage("Series placement saved.");
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save series placement.");
     } finally {
       setBusy("");
     }
@@ -130,6 +175,9 @@ export default function ManageBookPage() {
       <p className="mt-2 text-sm text-[var(--ink-soft)]">
         Status: {data.book.status} · {formatPrice(data.book.price_cents)}
         {data.book.source_filename ? ` · ${data.book.source_filename}` : ""}
+        {data.book.series
+          ? ` · S${data.book.season_number}E${data.book.episode_number} · ${data.book.series.title}`
+          : ""}
       </p>
 
       <form onSubmit={saveMeta} className="surface mt-8 space-y-4 rounded-2xl p-6">
@@ -189,6 +237,69 @@ export default function ManageBookPage() {
         >
           {busy === "save" ? "Saving…" : "Save details"}
         </button>
+      </form>
+
+      <form onSubmit={saveSeriesPlacement} className="surface mt-6 space-y-4 rounded-2xl p-6">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--ink-soft)]">
+          Series placement
+        </h2>
+        <p className="text-sm text-[var(--ink-soft)]">
+          Each book is one episode. Attach it with season and episode numbers.
+        </p>
+        <label className="block text-sm">
+          <span className="mb-1.5 block text-[var(--ink-soft)]">Series</span>
+          <select
+            value={seriesId}
+            onChange={(e) => setSeriesId(e.target.value)}
+            className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
+          >
+            <option value="">Not in a series</option>
+            {seriesList.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        {seriesId ? (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1.5 block text-[var(--ink-soft)]">Season</span>
+              <input
+                type="number"
+                min={1}
+                value={seasonNumber}
+                onChange={(e) => setSeasonNumber(e.target.value)}
+                className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1.5 block text-[var(--ink-soft)]">Episode</span>
+              <input
+                type="number"
+                min={1}
+                value={episodeNumber}
+                onChange={(e) => setEpisodeNumber(e.target.value)}
+                className="w-full rounded-lg border border-[var(--line)] bg-white/70 px-3 py-2.5 outline-none ring-[var(--sage)] focus:ring-2"
+              />
+            </label>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="submit"
+            disabled={busy === "series"}
+            className="rounded-lg border border-[var(--line)] bg-white/70 px-4 py-2.5 text-sm font-medium"
+          >
+            {busy === "series" ? "Saving…" : "Save placement"}
+          </button>
+          <Link
+            href="/publisher/series/new"
+            className="rounded-lg px-4 py-2.5 text-sm text-[var(--sage)] underline underline-offset-4"
+          >
+            Create series
+          </Link>
+        </div>
       </form>
 
       <section className="surface mt-6 rounded-2xl p-6">

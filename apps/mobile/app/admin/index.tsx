@@ -9,28 +9,33 @@ import {
   Text,
   View,
 } from "react-native";
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   ApiError,
+  formatEpisodeCode,
   type BookListItem,
   type ContentReport,
   type ReportStatus,
+  type SeriesListItem,
   type UserRole,
 } from "@read/api-client";
 import { AdminNarrationPanel } from "../../components/AdminNarrationPanel";
+import { BookCover } from "../../components/BookCover";
 import { SearchField } from "../../components/SearchField";
 import { useAuth } from "../../lib/auth";
 import { bookActivityLine } from "../../lib/book-labels";
-import { colors, formatPrice, radii, space } from "../../lib/theme";
+import { colors, coverHeightForWidth, formatPrice, radii, space } from "../../lib/theme";
 
 type AdminSection = "moderation" | "narration" | "users";
-type AdminTab = "queue" | "library" | "reports";
+type AdminTab = "queue" | "library" | "reports" | "series";
+type AudioTab = "general" | "casting";
 type LibraryFilter = "listed" | "featured" | "rejected" | "hidden" | "removed";
 
 type AdminCounts = {
   pending_count: number;
   library_count: number;
   report_count: number;
+  series_count: number;
   library_counts: Record<LibraryFilter, number>;
   report_counts: Record<ReportStatus, number>;
 };
@@ -49,6 +54,7 @@ const EMPTY_COUNTS: AdminCounts = {
   pending_count: 0,
   library_count: 0,
   report_count: 0,
+  series_count: 0,
   library_counts: {
     listed: 0,
     featured: 0,
@@ -64,27 +70,44 @@ const EMPTY_COUNTS: AdminCounts = {
 };
 
 const SECTIONS: Array<{ value: AdminSection; label: string }> = [
-  { value: "moderation", label: "Moderation" },
-  { value: "narration", label: "Narration" },
+  { value: "moderation", label: "Content" },
+  { value: "narration", label: "Audio" },
   { value: "users", label: "Users" },
 ];
 
+function sectionFromParam(raw: string | string[] | undefined): AdminSection {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (value === "audio" || value === "narration") return "narration";
+  if (value === "users") return "users";
+  return "moderation";
+}
+
 export default function AdminQueueScreen() {
   const router = useRouter();
+  const { section: sectionParam } = useLocalSearchParams<{ section?: string }>();
   const { user, api, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
   const [reports, setReports] = useState<ContentReport[]>([]);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [counts, setCounts] = useState<AdminCounts>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [section, setSection] = useState<AdminSection>("moderation");
-  const [tab, setTab] = useState<AdminTab>("queue");
+  const [section, setSection] = useState<AdminSection>(() => sectionFromParam(sectionParam));
+  const [tab, setTab] = useState<AdminTab>("library");
+  const [audioTab, setAudioTab] = useState<AudioTab>("general");
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("listed");
   const [reportStatus, setReportStatus] = useState<ReportStatus>("open");
   const [query, setQuery] = useState("");
+  const [castQuery, setCastQuery] = useState("");
   const [userQuery, setUserQuery] = useState("");
+  const [castBooks, setCastBooks] = useState<BookListItem[]>([]);
+
+  useEffect(() => {
+    const next = sectionFromParam(sectionParam);
+    setSection((current) => (current === next ? current : next));
+  }, [sectionParam]);
 
   const loadModeration = useCallback(async () => {
     setError("");
@@ -118,6 +141,13 @@ export default function AdminQueueScreen() {
         ]);
         setBooks(data.books);
         if (summary) setCounts(summary);
+      } else if (tab === "series") {
+        const [data, summary] = await Promise.all([
+          api.listSeries({ all: true }),
+          summaryPromise,
+        ]);
+        setSeriesList(data.series);
+        if (summary) setCounts(summary);
       } else {
         const [data, summary] = await Promise.all([
           api.adminReports(reportStatus),
@@ -149,6 +179,44 @@ export default function AdminQueueScreen() {
     }
   }, [api, userQuery]);
 
+  const loadCastingBooks = useCallback(async () => {
+    setError("");
+    try {
+      const [queue, listed, summary] = await Promise.all([
+        api.adminQueue(),
+        api.adminListBooks({
+          status: "published",
+          visibility: "listed",
+          q: castQuery || undefined,
+        }),
+        api.adminSummary().catch(() => null),
+      ]);
+      if (summary) setCounts(summary);
+      const byId = new Map<string, BookListItem>();
+      for (const book of [...queue.books, ...listed.books]) {
+        if (castQuery.trim()) {
+          const needle = castQuery.trim().toLowerCase();
+          const hay = `${book.title} ${book.publisher_name || ""}`.toLowerCase();
+          if (!hay.includes(needle)) continue;
+        }
+        byId.set(book.id, book);
+      }
+      setCastBooks(
+        Array.from(byId.values()).sort((a, b) => {
+          const aReady = a.cast_status === "ready" ? 1 : 0;
+          const bReady = b.cast_status === "ready" ? 1 : 0;
+          if (aReady !== bReady) return aReady - bReady;
+          return a.title.localeCompare(b.title);
+        })
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not load books for casting.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [api, castQuery]);
+
   const load = useCallback(async () => {
     if (section === "moderation") {
       await loadModeration();
@@ -158,12 +226,16 @@ export default function AdminQueueScreen() {
       await loadUsers();
       return;
     }
-    // Narration panel loads itself.
+    if (audioTab === "casting") {
+      await loadCastingBooks();
+      return;
+    }
+    // General TTS panel loads itself.
     const summary = await api.adminSummary().catch(() => null);
     if (summary) setCounts(summary);
     setLoading(false);
     setRefreshing(false);
-  }, [api, loadModeration, loadUsers, section]);
+  }, [api, audioTab, loadCastingBooks, loadModeration, loadUsers, section]);
 
   useFocusEffect(
     useCallback(() => {
@@ -189,7 +261,19 @@ export default function AdminQueueScreen() {
     return () => clearTimeout(timer);
   }, [userQuery, section, loadUsers]);
 
-  if (authLoading || (loading && section !== "narration")) {
+  useEffect(() => {
+    if (section !== "narration" || audioTab !== "casting") return;
+    const timer = setTimeout(() => {
+      setLoading(true);
+      void loadCastingBooks();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [castQuery, section, audioTab, loadCastingBooks]);
+
+  const showFullScreenLoader =
+    authLoading || (loading && !(section === "narration" && audioTab === "general"));
+
+  if (showFullScreenLoader) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.sage} />
@@ -199,8 +283,9 @@ export default function AdminQueueScreen() {
 
   const tabCounts: Record<AdminTab, number> = {
     queue: counts.pending_count,
-    library: counts.library_count,
+    library: counts.library_counts.listed,
     reports: counts.report_count,
+    series: counts.series_count,
   };
 
   function confirmReportAction(
@@ -284,8 +369,15 @@ export default function AdminQueueScreen() {
               style={[styles.sectionChip, active && styles.sectionChipActive]}
               onPress={() => {
                 setError("");
-                setLoading(item.value !== "narration");
+                setLoading(item.value !== "narration" || audioTab === "casting");
                 setSection(item.value);
+                const param =
+                  item.value === "narration"
+                    ? "audio"
+                    : item.value === "users"
+                      ? "users"
+                      : "content";
+                router.setParams({ section: param });
               }}
             >
               <Text style={[styles.sectionText, active && styles.sectionTextActive]}>
@@ -298,7 +390,77 @@ export default function AdminQueueScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      {section === "narration" ? <AdminNarrationPanel /> : null}
+      {section === "narration" ? (
+        <>
+          <View style={styles.tabs}>
+            {(
+              [
+                { value: "general" as const, label: "General" },
+                { value: "casting" as const, label: "Book casting" },
+              ] as const
+            ).map((item) => (
+              <Pressable
+                key={item.value}
+                style={[styles.tab, audioTab === item.value && styles.tabActive]}
+                onPress={() => {
+                  setError("");
+                  setLoading(item.value === "casting");
+                  setAudioTab(item.value);
+                }}
+              >
+                <Text style={[styles.tabText, audioTab === item.value && styles.tabTextActive]}>
+                  {item.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {audioTab === "general" ? <AdminNarrationPanel /> : null}
+
+          {audioTab === "casting" ? (
+            <>
+              <Text style={styles.meta}>
+                Open a book to edit speaking voices without going through Content.
+              </Text>
+              <SearchField
+                value={castQuery}
+                onChangeText={setCastQuery}
+                placeholder="Search title or publisher"
+              />
+              <View style={styles.list}>
+                {castBooks.length === 0 ? (
+                  <Text style={styles.meta}>No books to cast yet.</Text>
+                ) : (
+                  castBooks.map((book) => (
+                    <Pressable
+                      key={book.id}
+                      style={styles.row}
+                      onPress={() => router.push(`/admin/${book.id}/audio`)}
+                    >
+                      <View style={styles.rowTop}>
+                        <Text style={styles.rowTitle}>{book.title}</Text>
+                        <Text
+                          style={[
+                            styles.badge,
+                            book.cast_status === "ready" && styles.castReady,
+                          ]}
+                        >
+                          {book.cast_status === "ready" ? "Ready" : "Draft"}
+                        </Text>
+                      </View>
+                      <Text style={styles.rowMeta}>
+                        {book.publisher_name || "Publisher"}
+                        {book.status === "pending_review" ? " · In review" : ""}
+                        {book.status === "published" ? " · Published" : ""}
+                      </Text>
+                    </Pressable>
+                  ))
+                )}
+              </View>
+            </>
+          ) : null}
+        </>
+      ) : null}
 
       {section === "users" ? (
         <>
@@ -354,7 +516,7 @@ export default function AdminQueueScreen() {
       {section === "moderation" ? (
         <>
           <View style={styles.tabs}>
-            {(["queue", "library", "reports"] as AdminTab[]).map((item) => (
+            {(["queue", "library", "series", "reports"] as AdminTab[]).map((item) => (
               <Pressable
                 key={item}
                 style={[styles.tab, tab === item && styles.tabActive]}
@@ -383,7 +545,7 @@ export default function AdminQueueScreen() {
                 ).map((item) => (
                   <FilterChip
                     key={item}
-                    label={`${item} (${counts.library_counts[item]})`}
+                    label={`${item[0].toUpperCase() + item.slice(1)} (${counts.library_counts[item]})`}
                     active={libraryFilter === item}
                     onPress={() => {
                       setLoading(true);
@@ -450,6 +612,43 @@ export default function AdminQueueScreen() {
                 ))
               )}
             </View>
+          ) : tab === "series" ? (
+            <View style={styles.list}>
+              {seriesList.length === 0 ? (
+                <Text style={styles.meta}>No series yet.</Text>
+              ) : (
+                seriesList.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    style={styles.row}
+                    onPress={() => router.push(`/publisher/series/${item.id}`)}
+                  >
+                    <View style={styles.seriesAdminRow}>
+                      <BookCover
+                        title={item.title}
+                        coverUrl={api.bookCoverUrl(item.cover_url, { cacheKey: item.updated_at })}
+                        width={40}
+                        height={coverHeightForWidth(40)}
+                        showTitle={false}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <View style={styles.rowTop}>
+                          <Text style={styles.rowTitle}>{item.title}</Text>
+                          <Text style={styles.badge}>
+                            {item.episode_count} ep{item.episode_count === 1 ? "" : "s"}
+                          </Text>
+                        </View>
+                        <Text style={styles.rowMeta}>
+                          {item.publisher_name || "Publisher"}
+                          {item.publisher_handle ? ` · @${item.publisher_handle}` : ""}
+                          {item.visibility === "hidden" ? " · Hidden" : ""}
+                        </Text>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))
+              )}
+            </View>
           ) : (
             <View style={styles.list}>
               {books.length === 0 ? (
@@ -459,33 +658,42 @@ export default function AdminQueueScreen() {
                     : "No books in this view."}
                 </Text>
               ) : (
-                books.map((book) => (
-                  <Pressable
-                    key={book.id}
-                    style={styles.row}
-                    onPress={() => router.push(`/admin/${book.id}`)}
-                  >
-                    <View style={styles.rowTop}>
-                      <Text style={styles.rowTitle}>{book.title}</Text>
-                      {book.featured ? (
-                        <Text style={styles.featured}>Featured</Text>
+                books.map((book) => {
+                  const code = formatEpisodeCode(book.season_number, book.episode_number);
+                  return (
+                    <Pressable
+                      key={book.id}
+                      style={styles.row}
+                      onPress={() => router.push(`/admin/${book.id}`)}
+                    >
+                      <View style={styles.rowTop}>
+                        <Text style={styles.rowTitle}>{book.title}</Text>
+                        {book.featured ? (
+                          <Text style={styles.featured}>Featured</Text>
+                        ) : null}
+                      </View>
+                      {book.series ? (
+                        <Text style={styles.seriesMeta}>
+                          {book.series.title}
+                          {code ? ` · ${code}` : ""}
+                        </Text>
                       ) : null}
-                    </View>
-                    <Text style={styles.rowMeta}>
-                      {book.category?.label ? `${book.category.label} · ` : ""}
-                      {book.publisher_name} · {formatPrice(book.price_cents)}
-                    </Text>
-                    <Text style={styles.rowMeta}>
-                      {bookActivityLine(book, { includeFilename: false })}
-                      {book.visibility && book.visibility !== "listed"
-                        ? ` · ${book.visibility}`
-                        : ""}
-                      {book.report_count
-                        ? ` · ${book.report_count} open report(s)`
-                        : ""}
-                    </Text>
-                  </Pressable>
-                ))
+                      <Text style={styles.rowMeta}>
+                        {book.category?.label ? `${book.category.label} · ` : ""}
+                        {book.publisher_name} · {formatPrice(book.price_cents)}
+                      </Text>
+                      <Text style={styles.rowMeta}>
+                        {bookActivityLine(book, { includeFilename: false })}
+                        {book.visibility && book.visibility !== "listed"
+                          ? ` · ${book.visibility}`
+                          : ""}
+                        {book.report_count
+                          ? ` · ${book.report_count} open report(s)`
+                          : ""}
+                      </Text>
+                    </Pressable>
+                  );
+                })
               )}
             </View>
           )}
@@ -600,6 +808,20 @@ const styles = StyleSheet.create({
   },
   rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   rowTitle: { fontSize: 17, fontWeight: "600", color: colors.ink },
+  seriesAdminRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  seriesMeta: {
+    color: colors.inkSoft,
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 4,
+  },
+  seriesLink: {
+    color: colors.sage,
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 4,
+    textDecorationLine: "underline",
+  },
   rowMeta: { fontSize: 13, color: colors.inkSoft },
   featured: { color: colors.sageDeep, fontSize: 11, fontWeight: "700" },
   badge: {
@@ -610,6 +832,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginVertical: 4,
   },
+  castReady: { color: colors.sage },
   reportList: { gap: space.md },
   reportCard: {
     borderWidth: 1,

@@ -177,6 +177,21 @@ export default function AdminReviewScreen() {
             {book.category?.label || "Uncategorized"} · {formatPrice(book.price_cents)}
           </Text>
           <Text style={styles.sub}>By {book.publisher_name}</Text>
+          {book.series ? (
+            <Pressable
+              onPress={() => router.push(`/publisher/series/${book.series!.id}`)}
+              hitSlop={6}
+            >
+              <Text style={styles.seriesLink}>
+                {book.series.title}
+                {book.season_number != null && book.episode_number != null
+                  ? ` · S${book.season_number}E${book.episode_number}`
+                  : ""}
+              </Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.sub}>Not in a series</Text>
+          )}
           {book.report_count ? (
             <Text style={styles.reportCount}>{book.report_count} open report(s)</Text>
           ) : null}
@@ -184,15 +199,21 @@ export default function AdminReviewScreen() {
       </View>
       <Text style={styles.body}>{book.description || "No description provided."}</Text>
 
-      {book.status === "published" && book.visibility === "listed" ? (
-        <Pressable
-          style={styles.editCatalogBtn}
-          onPress={() => router.push(`/admin/${book.id}/edit`)}
-        >
-          <Text style={styles.editCatalogText}>Edit catalog</Text>
-          <Text style={styles.editCatalogHint}>Title, description, category, price, cover</Text>
-        </Pressable>
-      ) : null}
+      <Pressable
+        style={styles.editCatalogBtn}
+        onPress={() => router.push(`/admin/${book.id}/edit`)}
+      >
+        <Text style={styles.editCatalogText}>
+          {book.status === "published" && book.visibility === "listed"
+            ? "Edit catalog"
+            : "Edit series placement"}
+        </Text>
+        <Text style={styles.editCatalogHint}>
+          {book.status === "published" && book.visibility === "listed"
+            ? "Title, description, category, price, cover, series placement"
+            : "Attach season/episode even while the book is not listed"}
+        </Text>
+      </Pressable>
 
       <Pressable
         style={styles.editCatalogBtn}
@@ -373,6 +394,13 @@ const styles = StyleSheet.create({
   hero: { flexDirection: "row", gap: 14, alignItems: "flex-start" },
   heroCopy: { flex: 1, gap: 5 },
   sub: { color: colors.inkSoft },
+  seriesLink: {
+    color: colors.sage,
+    fontSize: 13,
+    fontWeight: "700",
+    marginTop: 4,
+    textDecorationLine: "underline",
+  },
   body: { color: colors.inkSoft, lineHeight: 21, marginTop: 8 },
   editCatalogBtn: {
     marginTop: 14,

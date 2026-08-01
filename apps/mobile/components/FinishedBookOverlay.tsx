@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   Modal,
   Pressable,
@@ -9,10 +10,10 @@ import {
   Text,
   View,
 } from "react-native";
-import type { BookListItem } from "@read/api-client";
+import { ApiError, formatEpisodeCode, type BookListItem } from "@read/api-client";
 import { BookTile } from "./BookTile";
 import { useAuth } from "../lib/auth";
-import { colors, radii, space } from "../lib/theme";
+import { colors, formatPrice, radii, space } from "../lib/theme";
 
 const TILE = Math.min(120, Math.round(Dimensions.get("window").width * 0.3));
 
@@ -35,10 +36,13 @@ export function FinishedBookOverlay({
   onReadAgain,
   onOpenBook,
 }: Props) {
-  const { api } = useAuth();
+  const { api, user } = useAuth();
+  const [nextEpisode, setNextEpisode] = useState<BookListItem | null>(null);
+  const [nextOwned, setNextOwned] = useState<boolean | null>(null);
   const [sameAuthor, setSameAuthor] = useState<BookListItem[]>([]);
   const [related, setRelated] = useState<BookListItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [buying, setBuying] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -48,11 +52,15 @@ export function FinishedBookOverlay({
       .getBookRecommendations(bookId)
       .then((payload) => {
         if (cancelled) return;
+        setNextEpisode(payload.next_episode);
+        setNextOwned(payload.next_episode_owned);
         setSameAuthor(payload.same_author);
         setRelated(payload.related);
       })
       .catch(() => {
         if (cancelled) return;
+        setNextEpisode(null);
+        setNextOwned(null);
         setSameAuthor([]);
         setRelated([]);
       })
@@ -64,6 +72,32 @@ export function FinishedBookOverlay({
     };
   }, [api, bookId, visible]);
 
+  async function unlockNext() {
+    if (!nextEpisode) return;
+    if (!user) {
+      Alert.alert("Sign in required", "Sign in to unlock the next episode.");
+      return;
+    }
+    setBuying(true);
+    try {
+      await api.purchaseBook(nextEpisode.id);
+      setNextOwned(true);
+      onOpenBook(nextEpisode.id);
+    } catch (err) {
+      Alert.alert(
+        "Could not unlock",
+        err instanceof ApiError ? err.message : "Try again from the episode page."
+      );
+    } finally {
+      setBuying(false);
+    }
+  }
+
+  const code = nextEpisode
+    ? formatEpisodeCode(nextEpisode.season_number, nextEpisode.episode_number)
+    : null;
+  const needsPurchase = Boolean(nextEpisode && nextOwned === false && nextEpisode.price_cents > 0);
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
       <View style={styles.root}>
@@ -73,12 +107,36 @@ export function FinishedBookOverlay({
           <Text style={styles.body}>Nice work. Pick another title, or start this one again.</Text>
 
           <View style={styles.actions}>
-            <Pressable style={styles.primary} onPress={onClose}>
-              <Text style={styles.primaryText}>Back to book</Text>
-            </Pressable>
+            {nextEpisode ? (
+              <Pressable
+                style={styles.primary}
+                disabled={buying}
+                onPress={() => {
+                  if (needsPurchase) void unlockNext();
+                  else onOpenBook(nextEpisode.id);
+                }}
+              >
+                <Text style={styles.primaryText}>
+                  {buying
+                    ? "Unlocking…"
+                    : needsPurchase
+                      ? `Unlock next${code ? ` · ${code}` : ""} · ${formatPrice(nextEpisode.price_cents)}`
+                      : `Next episode${code ? ` · ${code}` : ""}`}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.primary} onPress={onClose}>
+                <Text style={styles.primaryText}>Back to book</Text>
+              </Pressable>
+            )}
             {firstChapterId ? (
               <Pressable style={styles.secondary} onPress={onReadAgain}>
                 <Text style={styles.secondaryText}>Read again</Text>
+              </Pressable>
+            ) : null}
+            {nextEpisode ? (
+              <Pressable style={styles.secondary} onPress={onClose}>
+                <Text style={styles.secondaryText}>Back to book</Text>
               </Pressable>
             ) : null}
           </View>

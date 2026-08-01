@@ -536,6 +536,7 @@ def test_admin_summary_pending_count(client, db_session, seeded):
     assert empty.json()["pending_count"] == 0
     assert empty.json()["library_count"] == 0
     assert empty.json()["report_count"] == 0
+    assert empty.json()["series_count"] == 0
     assert empty.json()["library_counts"] == {
         "listed": 0,
         "featured": 0,
