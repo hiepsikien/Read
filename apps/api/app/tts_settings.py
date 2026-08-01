@@ -67,8 +67,8 @@ class ActiveTts:
     dialogue_pitch: int = DEFAULT_DIALOGUE_PITCH
     break_start_ms: int = DEFAULT_BREAK_START_MS
     break_end_ms: int = DEFAULT_BREAK_END_MS
-    speak_speaker_names: bool = False
-    speak_stage_directions: bool = False
+    speak_speaker_names: bool = True
+    speak_stage_directions: bool = True
     max_character_voices: int = DEFAULT_MAX_CHARACTER_VOICES
 
     def narration_style(self) -> tts.NarrationStyle:
@@ -162,8 +162,8 @@ def get_active_tts(db: Session | None = None) -> ActiveTts:
         break_end_ms=_int_setting(
             rows, TTS_BREAK_END_MS_KEY, DEFAULT_BREAK_END_MS, lo=0, hi=800
         ),
-        speak_speaker_names=_bool_setting(rows, TTS_SPEAK_SPEAKER_NAMES_KEY, False),
-        speak_stage_directions=_bool_setting(rows, TTS_SPEAK_STAGE_DIRECTIONS_KEY, False),
+        speak_speaker_names=_bool_setting(rows, TTS_SPEAK_SPEAKER_NAMES_KEY, True),
+        speak_stage_directions=_bool_setting(rows, TTS_SPEAK_STAGE_DIRECTIONS_KEY, True),
         max_character_voices=_int_setting(
             rows, TTS_MAX_CHARACTER_VOICES_KEY, DEFAULT_MAX_CHARACTER_VOICES, lo=1, hi=6
         ),

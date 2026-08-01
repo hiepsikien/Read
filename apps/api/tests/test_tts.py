@@ -16,6 +16,11 @@ from app.main import app
 from app.models import Book, Chapter, User
 from app.routers import books
 
+QUIET_CUES = tts.NarrationStyle(
+    speak_speaker_names=False,
+    speak_stage_directions=False,
+)
+
 
 @pytest.fixture()
 def db_session():
@@ -103,6 +108,7 @@ def test_screenplay_dialogue_uses_contrast_without_spoken_cues():
             "nguoi thu ky": "vi-VN-Chirp3-HD-Aoede",
         },
         narrator_gender="male",
+        style=QUIET_CUES,
     )
 
     assert len(segments) == 3
@@ -136,10 +142,66 @@ def test_screenplay_dialogue_uses_contrast_without_spoken_cues():
     assert 'rate="98%"' in segments[2].text
 
 
+def test_narrator_speaks_name_and_direction_before_character_line():
+    content = (
+        "THOMAS CROMWELL *(Giọng lạnh lùng, dứt khoát)* "
+        "Bệ hạ, bộ luật này quy định rất rõ."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={"thomas cromwell": "vi-VN-Chirp3-HD-Orus"},
+        narrator_gender="male",
+    )
+
+    assert len(segments) == 2
+    assert segments[0].kind == "narration"
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Charon"
+    assert segments[0].speaker == "Thomas Cromwell"
+    assert "Thomas Cromwell." in segments[0].text
+    assert "Giọng lạnh lùng, dứt khoát." in segments[0].text
+    assert "Bệ hạ" not in segments[0].text
+
+    assert segments[1].kind == "dialogue"
+    assert segments[1].voice == "vi-VN-Chirp3-HD-Orus"
+    assert segments[1].speaker == "Thomas Cromwell"
+    assert "Bệ hạ, bộ luật này quy định rất rõ." in segments[1].text
+    assert "Thomas Cromwell." not in segments[1].text
+    assert "Giọng lạnh lùng, dứt khoát." not in segments[1].text
+    assert 'pitch="-1st"' in segments[1].text  # direction still shapes prosody
+
+
+def test_narrator_speaks_role_and_direction_with_name():
+    content = (
+        "NGƯỜI THƯ KÝ (Hộ tống) *(Thì thầm, mắt đầy kinh ngạc)* "
+        "Thưa thuyền trưởng, đây là Calicut."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={"nguoi thu ky": "vi-VN-Chirp3-HD-Aoede"},
+        narrator_gender="male",
+    )
+
+    assert [segment.kind for segment in segments] == ["narration", "dialogue"]
+    assert "Người Thư Ký." in segments[0].text
+    assert "Hộ tống." in segments[0].text
+    assert "Thì thầm, mắt đầy kinh ngạc." in segments[0].text
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Charon"
+    assert segments[1].voice == "vi-VN-Chirp3-HD-Aoede"
+    assert "Thưa thuyền trưởng, đây là Calicut." in segments[1].text
+
+
 def test_shouted_dialogue_raises_rate_and_pitch():
     content = "COLUMBUS *(Hét lớn, vang dội)* Lui binh!"
 
-    segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
+    segments = tts.chapter_audio_segments(
+        content, "vi-VN-Neural2-D", style=QUIET_CUES
+    )
 
     assert len(segments) == 1
     assert segments[0].kind == "dialogue"
@@ -157,15 +219,32 @@ def test_leading_stage_direction_shapes_prosody_without_reading_cue():
         "vi-VN-Chirp3-HD-Charon",
         engine="chirp3",
         narrator_gender="male",
+        style=QUIET_CUES,
     )
 
     assert len(segments) == 1
     assert segments[0].is_ssml is True
     assert segments[0].kind == "dialogue"
-    assert segments[0].voice.rsplit("-", 1)[-1] in {"Puck", "Orus", "Charon"}
+    assert segments[0].voice.rsplit("-", 1)[-1] in {"Puck", "Orus", "Charon", "Algieba", "Fenrir"}
     assert "Ông nhìn ra đại dương bao la phía sau." not in segments[0].text
     assert '<break time="200ms"/>' in segments[0].text
     assert "Hãy nhìn cho kỹ." in segments[0].text
+
+
+def test_leading_stage_direction_is_spoken_by_narrator_by_default():
+    content = "*(Ông nhìn ra đại dương bao la phía sau)* Hãy nhìn cho kỹ."
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        narrator_gender="male",
+    )
+
+    assert [segment.kind for segment in segments] == ["narration", "dialogue"]
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Charon"
+    assert "Ông nhìn ra đại dương bao la phía sau." in segments[0].text
+    assert "Hãy nhìn cho kỹ." in segments[1].text
 
 
 def test_screenplay_dialogue_without_direction_casts_distinct_voices():
@@ -187,6 +266,7 @@ def test_screenplay_dialogue_without_direction_casts_distinct_voices():
             "noi thi": "vi-VN-Chirp3-HD-Kore",
         },
         narrator_gender="male",
+        style=QUIET_CUES,
     )
 
     assert len(segments) == 4
@@ -225,6 +305,7 @@ def test_dash_led_paragraphs_continue_previous_speaker():
         engine="chirp3",
         glossary_voices={"nguyen binh khiem": "vi-VN-Chirp3-HD-Orus"},
         narrator_gender="male",
+        style=QUIET_CUES,
     )
 
     assert len(segments) == 4
@@ -267,6 +348,72 @@ def test_dash_bullets_after_narration_stay_narration():
     assert "Hai là mở cửa biển." in segments[2].text
 
 
+def test_dash_continues_after_one_narrative_bridge():
+    content = (
+        "MẠC ĐĂNG DUNG *(quay sang nhìn Giáp Hải)* Giáp khanh, ngươi là học trò.\n\n"
+        "Thượng hoàng nghiêm nét mặt, vẫy tay gọi Mạc Kính Điển lại gần chiếc bản đồ.\n\n"
+        "– Kính Điển! Con là thống soái quân đội, là cột trụ bảo vệ bờ cõi."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Aoede",
+        engine="chirp3",
+        glossary_voices={"mac đang dung": "vi-VN-Chirp3-HD-Algieba"},
+        style=QUIET_CUES,
+    )
+
+    kinds = [segment.kind for segment in segments]
+    assert kinds == ["dialogue", "narration", "dialogue"]
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Algieba"
+    assert segments[0].speaker == "Mạc Đăng Dung"
+    assert segments[1].voice == "vi-VN-Chirp3-HD-Aoede"
+    assert segments[1].speaker is None
+    assert segments[2].voice == "vi-VN-Chirp3-HD-Algieba"
+    assert segments[2].speaker == "Mạc Đăng Dung"
+    assert "Kính Điển!" in segments[2].text
+
+
+def test_run_ray_stage_direction_does_not_raise_pitch():
+    content = (
+        "MẠC ĐĂNG DUNG *(ho khan vài tiếng, đưa bàn tay run rẩy nắm lấy tay con)* "
+        "Con ơi, gánh nặng thiên hạ đã đè lên vai con."
+    )
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Aoede",
+        engine="chirp3",
+        glossary_voices={"mac đang dung": "vi-VN-Chirp3-HD-Algieba"},
+        style=QUIET_CUES,
+    )
+    dialogue = next(segment for segment in segments if segment.kind == "dialogue")
+    assert 'pitch="+3st"' not in dialogue.text
+    assert 'pitch="-1st"' in dialogue.text or 'pitch="+0st"' in dialogue.text
+
+
+def test_glossary_voice_matches_speaker_after_normalize():
+    content = (
+        "MẠC ĐĂNG DUNG *(ho khan vài tiếng)* "
+        "Hải nhi… Ta đã nhường ngôi cho con."
+    )
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Despina",
+        engine="chirp3",
+        glossary_voices={
+            "mac đang dung": "vi-VN-Chirp3-HD-Algieba",
+            "mac dang dung": "vi-VN-Chirp3-HD-Charon",
+        },
+        narrator_gender="female",
+        style=QUIET_CUES,
+    )
+    dialogue = [segment for segment in segments if segment.kind == "dialogue"]
+    assert dialogue
+    # Speaker normalizes with đ preserved, so the matching override wins.
+    assert dialogue[0].voice == "vi-VN-Chirp3-HD-Algieba"
+    assert dialogue[0].speaker == "Mạc Đăng Dung"
+
+
 def test_italic_paragraphs_continue_previous_speaker_without_dash():
     content = (
         "THOMAS CROMWELL *(Giọng lạnh lùng, dứt khoát)* "
@@ -288,23 +435,28 @@ def test_italic_paragraphs_continue_previous_speaker_without_dash():
         narrator_gender="male",
     )
 
-    assert len(segments) == 5
+    # Opening line: narrator cue + character line; italic continuations keep cast
+    # voice without re-announcing the name.
     assert [segment.kind for segment in segments] == [
+        "narration",
         "dialogue",
         "dialogue",
         "dialogue",
         "dialogue",
         "narration",
     ]
-    assert [segment.speaker for segment in segments[:4]] == ["Thomas Cromwell"] * 4
-    assert [segment.voice for segment in segments[:4]] == ["vi-VN-Chirp3-HD-Orus"] * 4
-    assert "Bệ hạ, để hợp thức hóa" in segments[0].text
-    assert "Điều thứ nhất:" in segments[1].text
-    assert "Điều thứ hai:" in segments[2].text
-    assert "Điều thứ ba:" in segments[3].text
-    assert all("Thomas Cromwell." not in segment.text for segment in segments[:4])
-    assert 'pitch="-1st"' in segments[0].text  # lạnh lùng cue on opening line
-    assert segments[4].kind == "narration"
+    assert segments[0].voice == "vi-VN-Chirp3-HD-Charon"
+    assert "Thomas Cromwell." in segments[0].text
+    assert "Giọng lạnh lùng, dứt khoát." in segments[0].text
+    assert [segment.speaker for segment in segments[1:5]] == ["Thomas Cromwell"] * 4
+    assert [segment.voice for segment in segments[1:5]] == ["vi-VN-Chirp3-HD-Orus"] * 4
+    assert "Bệ hạ, để hợp thức hóa" in segments[1].text
+    assert "Điều thứ nhất:" in segments[2].text
+    assert "Điều thứ hai:" in segments[3].text
+    assert "Điều thứ ba:" in segments[4].text
+    assert all("Thomas Cromwell." not in segment.text for segment in segments[1:5])
+    assert 'pitch="-1st"' in segments[1].text  # lạnh lùng cue still shapes prosody
+    assert segments[5].kind == "narration"
 
 
 def test_horizontal_bar_and_minus_dashes_continue_speaker():
@@ -319,6 +471,7 @@ def test_horizontal_bar_and_minus_dashes_continue_speaker():
         "vi-VN-Chirp3-HD-Charon",
         engine="chirp3",
         glossary_voices={"columbus": "vi-VN-Chirp3-HD-Orus"},
+        style=QUIET_CUES,
     )
 
     assert [segment.kind for segment in segments] == ["dialogue", "dialogue", "dialogue"]
@@ -343,6 +496,7 @@ def test_chirp3_assigns_unique_character_personas():
             "vasco da gama": "vi-VN-Chirp3-HD-Puck",
             "nguoi thu ky": "vi-VN-Chirp3-HD-Aoede",
         },
+        style=QUIET_CUES,
     )
 
     assert [segment.voice for segment in segments] == [

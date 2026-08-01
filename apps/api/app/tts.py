@@ -14,7 +14,7 @@ from google.cloud import texttospeech
 from .config import Settings
 
 MAX_TTS_INPUT_BYTES = 4500
-TTS_CACHE_VERSION = "v6"
+TTS_CACHE_VERSION = "v7"
 
 # Narrator stays a touch under dialogue pace with a slightly lower pitch so
 # multi-voice character casting can still contrast on top of prosody.
@@ -38,8 +38,9 @@ class NarrationStyle:
     dialogue_volume: int = DIALOGUE_BASE_VOLUME
     break_start_ms: int = DIALOGUE_BREAK_START_MS
     break_end_ms: int = DIALOGUE_BREAK_END_MS
-    speak_speaker_names: bool = False
-    speak_stage_directions: bool = False
+    # Narrator announces the cue before the character line by default.
+    speak_speaker_names: bool = True
+    speak_stage_directions: bool = True
     max_character_voices: int = 3
 
 
@@ -358,16 +359,26 @@ class SpeakerVoiceCast:
         self._infer_gender = infer_gender
         self._infer_presence = infer_presence
         self._max_character_voices = max_character_voices
-        self._glossary_voices = {
-            self._normalize(key): voice
-            for key, voice in (glossary_voices or {}).items()
-            if key and voice
-        }
-        self._glossary_presence = {
-            self._normalize(key): value
-            for key, value in (glossary_presence or {}).items()
-            if key and value
-        }
+        self._glossary_voices: dict[str, str] = {}
+        for raw_key, voice in (glossary_voices or {}).items():
+            if not raw_key or not voice:
+                continue
+            key = self._normalize(raw_key)
+            if not key:
+                continue
+            # Prefer already-canonical keys ("mac dang dung") over legacy keys that
+            # still contain đ ("mac đang dung") so bad overrides cannot clobber cast.
+            if key not in self._glossary_voices or raw_key == key:
+                self._glossary_voices[key] = voice
+        self._glossary_presence: dict[str, str] = {}
+        for raw_key, value in (glossary_presence or {}).items():
+            if not raw_key or not value:
+                continue
+            key = self._normalize(raw_key)
+            if not key:
+                continue
+            if key not in self._glossary_presence or raw_key == key:
+                self._glossary_presence[key] = value
         if narrator_gender in {"male", "female"}:
             self._narrator_gender = narrator_gender
         else:
@@ -572,9 +583,17 @@ def _dialogue_prosody(
         rate = max(rate, 106)
         pitch = max(pitch, 3)
         volume = 2
-    if re.search(r"run|sợ hãi|kinh hoàng|hoảng|lạc đi", cue):
+    # Avoid bare "run" — Vietnamese "run rẩy" (tremble) is not English "run".
+    if re.search(
+        r"sợ hãi|kinh hoàng|hoảng loạn|hoảng sợ|hoảng hốt|lạc đi|run sợ|bỏ chạy|chạy trốn",
+        cue,
+    ):
         rate = max(rate, 107)
         pitch = max(pitch, 3)
+    if re.search(r"run rẩy|run run|tay run|giọng run", cue):
+        rate = min(rate, 94)
+        pitch = min(pitch, -1)
+        volume = min(volume, -1)
     if re.search(r"tức giận|giận dữ|răn đe|đe dọa", cue):
         rate = max(rate, 105)
         pitch = max(pitch, 2)
@@ -648,39 +667,72 @@ def _parse_dialogue_continuation(paragraph: str) -> str | None:
     return dialogue or None
 
 
+def _spoken_cue_ssml(
+    *,
+    speaker: str,
+    role: str,
+    direction: str,
+    style: NarrationStyle = DEFAULT_NARRATION_STYLE,
+) -> str | None:
+    """Narrator-voiced intro: name, then role/direction notes, before dialogue."""
+    parts = ["<speak>"]
+    spoke = False
+    if style.speak_speaker_names and speaker:
+        parts.append(
+            _prosody_ssml(
+                _as_sentence(speaker),
+                rate=style.narrator_rate,
+                pitch=style.narrator_pitch,
+                volume=style.narrator_volume,
+            )
+        )
+        parts.append('<break time="200ms"/>')
+        spoke = True
+    if style.speak_stage_directions and role:
+        parts.append(
+            _prosody_ssml(
+                _as_sentence(role),
+                rate=max(88, style.narrator_rate - 6),
+                pitch=style.narrator_pitch,
+                volume=min(style.narrator_volume, -1),
+            )
+        )
+        parts.append('<break time="150ms"/>')
+        spoke = True
+    if style.speak_stage_directions and direction:
+        parts.append(
+            _prosody_ssml(
+                _as_sentence(direction),
+                rate=max(88, style.narrator_rate - 6),
+                pitch=style.narrator_pitch,
+                volume=min(style.narrator_volume, -1),
+            )
+        )
+        parts.append('<break time="200ms"/>')
+        spoke = True
+    if not spoke:
+        return None
+    parts.append("</speak>")
+    return "".join(parts)
+
+
 def _dialogue_ssml_chunks(
     dialogue: str,
     direction: str,
     max_bytes: int = MAX_TTS_INPUT_BYTES,
     *,
     presence: str = "neutral",
-    speaker: str = "",
-    role: str = "",
     style: NarrationStyle = DEFAULT_NARRATION_STYLE,
 ) -> list[str] | None:
-    # Leave room for the SSML envelope and boundary breaks. Long dialogue is
-    # split; delivery cues shape prosody but are not spoken aloud by default.
+    # Spoken name/direction cues are separate narrator segments. This SSML is
+    # only the character line; delivery cues still shape prosody.
     dialogue_chunks = _chunks_within_limit(dialogue, max_bytes=max(1000, max_bytes - 900))
     rate, pitch, volume = _dialogue_prosody(direction, presence=presence, style=style)
     rendered: list[str] = []
     for index, chunk in enumerate(dialogue_chunks):
         parts = ["<speak>"]
-        if index == 0:
-            if style.speak_speaker_names and speaker:
-                parts.append(f"<s>{_ssml_text(_as_sentence(speaker))}</s>")
-                parts.append('<break time="200ms"/>')
-            if style.speak_stage_directions and role:
-                parts.append(
-                    _prosody_ssml(_as_sentence(role), rate=90, pitch=-1, volume=-2)
-                )
-                parts.append('<break time="150ms"/>')
-            if style.speak_stage_directions and direction:
-                parts.append(
-                    _prosody_ssml(_as_sentence(direction), rate=90, pitch=-1, volume=-2)
-                )
-                parts.append('<break time="200ms"/>')
-            elif style.break_start_ms > 0:
-                parts.append(f'<break time="{style.break_start_ms}ms"/>')
+        if index == 0 and style.break_start_ms > 0:
+            parts.append(f'<break time="{style.break_start_ms}ms"/>')
         parts.append(
             _prosody_ssml(
                 chunk,
@@ -799,6 +851,11 @@ def chapter_audio_segments(
     )
     segments: list[AudioSegment] = []
     active_speaker = ""
+    # Allow one narrative beat between a cue and a dashed continuation
+    # (common in Vietnamese novels: action line, then "– …"). Two or more
+    # narration paragraphs in a row clear the speaker so list bullets stay
+    # narration.
+    narration_since_dialogue = 0
 
     def append_segment(
         *,
@@ -829,7 +886,7 @@ def chapter_audio_segments(
     for paragraph_index, paragraph in enumerate(paragraphs):
         parsed = _parse_screenplay_paragraph(paragraph)
         is_continuation = False
-        if not parsed and active_speaker:
+        if not parsed and active_speaker and narration_since_dialogue <= 1:
             continuation = _parse_dialogue_continuation(paragraph)
             if continuation:
                 parsed = (active_speaker, "", "", continuation)
@@ -839,17 +896,33 @@ def chapter_audio_segments(
             speaker, role, direction, dialogue = parsed
             if speaker:
                 active_speaker = speaker
+            narration_since_dialogue = 0
             presence = cast.presence_for(speaker or None)
             dialogue_chunks = _dialogue_ssml_chunks(
                 dialogue,
                 direction,
                 presence=presence,
-                # Continuations keep the cast voice but do not re-announce the name.
-                speaker="" if is_continuation else speaker,
-                role="" if is_continuation else role,
                 style=narration_style,
             )
             if dialogue_chunks:
+                # Narrator speaks the cue first (separate voice), then the cast
+                # voice delivers the line. Continuations skip the re-announce.
+                if not is_continuation:
+                    cue_ssml = _spoken_cue_ssml(
+                        speaker=speaker,
+                        role=role,
+                        direction=direction,
+                        style=narration_style,
+                    )
+                    if cue_ssml:
+                        append_segment(
+                            paragraph_index=paragraph_index,
+                            text=cue_ssml,
+                            segment_voice=voice,
+                            is_ssml=True,
+                            kind="narration",
+                            speaker=speaker or None,
+                        )
                 segment_voice = cast.voice_for(speaker or None)
                 for chunk in dialogue_chunks:
                     append_segment(
@@ -862,7 +935,9 @@ def chapter_audio_segments(
                     )
                 continue
 
-        active_speaker = ""
+        narration_since_dialogue += 1
+        if narration_since_dialogue > 1:
+            active_speaker = ""
         normalized = normalize_for_speech(paragraph)
         if not normalized:
             continue
