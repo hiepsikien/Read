@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 import json
 
+from nanoid import generate
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, update
@@ -22,6 +23,7 @@ from ..models import Book, Category, Chapter, ContentReport, GlossaryEntry, Mode
 from ..moderation import allowed_admin_actions, event_payload, record_moderation_event
 from ..series_catalog import apply_series_placement, attach_series_fields
 from ..glossary import aliases_from_storage, normalize_lookup
+from ..cast_import import import_cast_from_source
 from ..cast_recommend import extract_dialogue_samples, recommend_cast_for_character
 from ..speaking_cast import speaking_cast_plan
 from ..tts_settings import active_payload, get_active_tts, tts_settings_payload, upsert_tts_settings
@@ -106,6 +108,10 @@ class CastRecommendBody(BaseModel):
     speaker_key: str | None = Field(default=None, max_length=300)
     # Voices already chosen for other characters in the admin draft (optional).
     used_voices: list[str] = Field(default_factory=list, max_length=200)
+
+
+class CastImportBody(BaseModel):
+    source_book_id: str = Field(min_length=1, max_length=32)
 
 
 class AdminCatalogBody(BaseModel):
@@ -218,6 +224,30 @@ def _cast_warnings(book: Book, *, unmatched_count: int = 0, speaking_count: int 
     if speaking_count == 0:
         warnings.append("No screenplay dialogue speakers were detected.")
     return warnings
+
+
+def _cast_import_sources(db: Session, book: Book) -> list[dict]:
+    """Sibling episodes in the same series, ordered season → episode."""
+    series_id = getattr(book, "series_id", None)
+    if not series_id:
+        return []
+    siblings = list(
+        db.scalars(
+            select(Book)
+            .where(Book.series_id == series_id, Book.id != book.id)
+            .order_by(Book.season_number.asc(), Book.episode_number.asc(), Book.title.asc())
+        )
+    )
+    return [
+        {
+            "id": sibling.id,
+            "title": sibling.title,
+            "season_number": sibling.season_number,
+            "episode_number": sibling.episode_number,
+            "cast_status": getattr(sibling, "cast_status", None) or "draft",
+        }
+        for sibling in siblings
+    ]
 
 
 def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
@@ -1189,6 +1219,10 @@ def get_book_cast(
         "cast_personas": CAST_PERSONAS,
         "voices": tts.voice_options(),
         "entries": entries,
+        "series_id": book.series_id,
+        "season_number": book.season_number,
+        "episode_number": book.episode_number,
+        "import_sources": _cast_import_sources(db, book),
     }
 
 
@@ -1382,6 +1416,101 @@ def rebuild_book_cast(
     book.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True, "updated": updated, "cast_status": book.cast_status}
+
+
+@router.post("/books/{book_id}/cast/import-from")
+def import_book_cast(
+    book_id: str,
+    body: CastImportBody,
+    db: Annotated[Session, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_admin)],
+):
+    """Inherit cast from a sibling episode: update matches + carry forward missing."""
+    book = db.get(Book, book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found.")
+    source_id = (body.source_book_id or "").strip()
+    if not source_id or source_id == book.id:
+        raise HTTPException(status_code=400, detail="source_book_id must be a different book.")
+    source = db.get(Book, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source book not found.")
+    if not book.series_id or book.series_id != source.series_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cast import is only allowed between episodes in the same series.",
+        )
+
+    target_rows = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    )
+    source_rows = list(
+        db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == source.id))
+    )
+    if not source_rows and not (getattr(source, "cast_overrides", None) or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Source book has no cast to import.",
+        )
+
+    episode_key = ""
+    episode_title = ""
+    if book.season_number and book.episode_number:
+        episode_key = f"S{book.season_number}E{book.episode_number}"
+        episode_title = book.title or episode_key
+
+    overrides = _load_cast_overrides(book)
+    now = datetime.now(timezone.utc)
+    result = import_cast_from_source(
+        target_entries=target_rows,
+        target_overrides=overrides,
+        source_entries=source_rows,
+        source_overrides_raw=getattr(source, "cast_overrides", None) or "{}",
+        lock_imported=True,
+        carry_forward=True,
+        episode_key=episode_key,
+        episode_title=episode_title,
+        now=now,
+    )
+
+    carried = 0
+    for spec in result.pop("carry_forward", []):
+        row = GlossaryEntry(
+            id=generate(),
+            book_id=book.id,
+            episode_key=spec["episode_key"],
+            episode_title=spec["episode_title"],
+            group_label=spec["group_label"],
+            name=spec["name"],
+            aliases=spec["aliases"],
+            summary=spec["summary"],
+            sort_key=spec["sort_key"],
+            gender=spec["gender"],
+            age_band=spec["age_band"],
+            presence=spec["presence"],
+            tts_voice=spec["tts_voice"],
+            cast_locked=bool(spec["cast_locked"]),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        carried += 1
+
+    _save_cast_overrides(book, overrides)
+    book.cast_status = "draft"
+    book.updated_at = now
+    db.commit()
+    return {
+        "ok": True,
+        "cast_status": book.cast_status,
+        "source_book_id": source.id,
+        "source_title": source.title,
+        "updated": result["updated"],
+        "skipped_locked": result["skipped_locked"],
+        "matched": result["matched"],
+        "unmatched": result["unmatched"],
+        "carried": carried,
+    }
 
 
 @router.post("/books/{book_id}/cast/status")

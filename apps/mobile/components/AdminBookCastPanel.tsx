@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,13 +12,51 @@ import {
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
-import { ApiError, type BookCastEntry, type BookCastPayload } from "@read/api-client";
+import {
+  ApiError,
+  type BookCastEntry,
+  type BookCastImportSource,
+  type BookCastPayload,
+} from "@read/api-client";
 import { useAuth } from "../lib/auth";
 import { colors } from "../lib/theme";
 
 function castPreviewText(name: string): string {
   const label = name.trim() || "nhân vật này";
   return `${label}. Xin chào, đây là giọng của tôi.`;
+}
+
+function episodeLabel(source: BookCastImportSource): string {
+  const season = source.season_number;
+  const episode = source.episode_number;
+  if (season != null && episode != null) {
+    return `S${season}E${episode} · ${source.title}`;
+  }
+  return source.title;
+}
+
+function preferredImportSource(
+  sources: BookCastImportSource[],
+  current?: { season_number?: number | null; episode_number?: number | null }
+): BookCastImportSource | null {
+  if (!sources.length) return null;
+  const season = current?.season_number;
+  const episode = current?.episode_number;
+  if (season != null && episode != null) {
+    const earlier = sources.filter((item) => {
+      if (item.season_number == null || item.episode_number == null) return false;
+      if (item.season_number < season) return true;
+      return item.season_number === season && item.episode_number < episode;
+    });
+    if (earlier.length) {
+      const readyEarlier = [...earlier].reverse().find((item) => item.cast_status === "ready");
+      if (readyEarlier) return readyEarlier;
+      return earlier[earlier.length - 1] ?? null;
+    }
+  }
+  const ready = sources.find((item) => item.cast_status === "ready");
+  if (ready) return ready;
+  return sources[0] ?? null;
 }
 
 type Draft = {
@@ -30,7 +69,7 @@ type Draft = {
   cast_locked: boolean;
 };
 
-type FilterId = "all" | "unmatched" | "locked" | "unlocked";
+type FilterId = "all" | "matched" | "unmatched" | "locked" | "unlocked";
 
 /** Stable React/list key — unmatched rows have id=null, so never key on id alone. */
 function entryKey(entry: BookCastEntry, index = 0): string {
@@ -73,7 +112,7 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [scope, setScope] = useState<"speaking" | "all">("speaking");
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<FilterId>("all");
+  const [filter, setFilter] = useState<FilterId>("matched");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingGlossary, setUploadingGlossary] = useState(false);
@@ -85,6 +124,8 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
   const [entryErrors, setEntryErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [importSourceId, setImportSourceId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const player = useAudioPlayer(null);
   const playerStatus = useAudioPlayerStatus(player);
@@ -138,6 +179,16 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
       });
       setDrafts(next);
       setPayload(data);
+      const sources = data.import_sources ?? [];
+      setImportSourceId((prev) => {
+        if (prev && sources.some((item) => item.id === prev)) return prev;
+        return (
+          preferredImportSource(sources, {
+            season_number: data.season_number,
+            episode_number: data.episode_number,
+          })?.id ?? null
+        );
+      });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load cast.");
     } finally {
@@ -158,6 +209,9 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
     if (!payload) return [];
     const q = query.trim().toLowerCase();
     return payload.entries.filter((entry) => {
+      if (filter === "matched") {
+        if (entry.matched === false || entry.source === "unmatched") return false;
+      }
       if (filter === "unmatched" && entry.matched !== false && entry.source !== "unmatched") {
         return false;
       }
@@ -371,6 +425,56 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
     }
   }
 
+  function confirmImportCast() {
+    if (!payload || !importSourceId) return;
+    const source = (payload.import_sources ?? []).find((item) => item.id === importSourceId);
+    if (!source) return;
+    Alert.alert(
+      "Import cast from episode?",
+      `Inherit voices from ${episodeLabel(source)}. Matching characters are updated; missing ones are carried forward (even if they do not speak yet). Locked rows here stay unchanged — you can still edit age/voice after import.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Import",
+          onPress: () => void runImportCast(source.id),
+        },
+      ]
+    );
+  }
+
+  async function runImportCast(sourceBookId: string) {
+    setImporting(true);
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const result = await api.adminImportBookCast(bookId, sourceBookId);
+      const parts = [
+        `Inherited from ${result.source_title}:`,
+        `${result.updated} updated`,
+        `${result.matched} matched`,
+      ];
+      if (result.carried) {
+        parts.push(`${result.carried} carried forward`);
+      }
+      if (result.skipped_locked) {
+        parts.push(`${result.skipped_locked} skipped (locked)`);
+      }
+      if (result.unmatched) {
+        parts.push(`${result.unmatched} new on this episode`);
+      }
+      setStatus(
+        `${parts.join(" · ")}. Focus Matched for speaking cast; edit age/voice anytime, then Mark ready.`
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not import cast.");
+    } finally {
+      setImporting(false);
+      setSaving(false);
+    }
+  }
+
   if (loading) {
     return (
       <View style={styles.card}>
@@ -434,6 +538,46 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
         </Text>
       </Pressable>
 
+      {(payload.import_sources ?? []).length > 0 ? (
+        <>
+          <Text style={styles.label}>Import cast from series episode</Text>
+          <Text style={styles.sub}>
+            Flexible inheritance: update matching characters and carry forward the rest so the
+            cast stays covered. Speaking (Matched) characters matter most for audio — tweak
+            age/voice anytime after import.
+          </Text>
+          <View style={styles.chipWrap}>
+            {(payload.import_sources ?? []).map((source) => {
+              const active = importSourceId === source.id;
+              return (
+                <Pressable
+                  key={source.id}
+                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => setImportSourceId(source.id)}
+                >
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                    {episodeLabel(source)}
+                    {source.cast_status === "ready" ? " · ready" : ""}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Pressable
+            style={[
+              styles.secondaryBtn,
+              (saving || importing || !importSourceId) && styles.btnDisabled,
+            ]}
+            disabled={saving || importing || !importSourceId}
+            onPress={confirmImportCast}
+          >
+            <Text style={styles.secondaryBtnText}>
+              {importing ? "Importing…" : "Import cast from episode"}
+            </Text>
+          </Pressable>
+        </>
+      ) : null}
+
       {(payload.warnings ?? []).map((warning, index) => (
         <Text key={`warn-${index}-${warning}`} style={styles.warn}>
           {warning}
@@ -459,7 +603,7 @@ export function AdminBookCastPanel({ bookId }: { bookId: string }) {
 
       <Text style={styles.label}>Filter</Text>
       <ChipRow
-        options={["all", "unmatched", "locked", "unlocked"]}
+        options={["all", "matched", "unmatched", "locked", "unlocked"]}
         value={filter}
         onChange={(value) => setFilter(value)}
       />

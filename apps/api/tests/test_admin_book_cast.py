@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 from nanoid import generate
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -12,7 +12,7 @@ from app.db import Base, get_db
 from app.glossary import aliases_to_storage
 from app.main import app
 from app.legal import CURRENT_LEGAL_VERSION
-from app.models import Book, Chapter, GlossaryEntry, User
+from app.models import Book, Chapter, GlossaryEntry, Series, User
 
 
 SAMPLE = """
@@ -323,3 +323,128 @@ def test_admin_cast_lock_save_applies_to_short_speaker_cue(client, seeded, db_se
     afonso_row = next(e for e in after.json()["entries"] if e["id"] == afonso.id)
     assert afonso_row["cast_locked"] is True
     assert afonso_row["tts_voice"] == "vi-VN-Chirp3-HD-Algieba"
+
+
+def test_admin_cast_import_from_sibling_episode(client, seeded, db_session):
+    now = datetime.now(timezone.utc)
+    publisher_id = seeded["book"].publisher_id
+    series = Series(
+        id=generate(),
+        publisher_id=publisher_id,
+        title="Đại Lộ Đại Dương",
+        description="",
+        created_at=now,
+        updated_at=now,
+    )
+    source = seeded["book"]
+    source.series_id = series.id
+    source.season_number = 1
+    source.episode_number = 1
+    source.cast_status = "ready"
+    seeded["vasco"].cast_locked = True
+    seeded["vasco"].tts_voice = "vi-VN-Chirp3-HD-Algieba"
+    seeded["afonso"].cast_locked = True
+    seeded["afonso"].tts_voice = "vi-VN-Chirp3-HD-Charon"
+
+    target = Book(
+        id=generate(),
+        publisher_id=publisher_id,
+        title="Cast Book Ep2",
+        description="Episode 2",
+        price_cents=0,
+        status="pending_review",
+        cast_status="draft",
+        cast_overrides="{}",
+        series_id=series.id,
+        season_number=1,
+        episode_number=2,
+        created_at=now,
+        updated_at=now,
+        submitted_at=now,
+    )
+    target_vasco = GlossaryEntry(
+        id=generate(),
+        book_id=target.id,
+        name="Vasco",
+        aliases="[]",
+        episode_key="S1E2",
+        group_label="Nhân vật",
+        summary="Nhà thám hiểm.",
+        sort_key="vasco",
+        gender="male",
+        age_band="adult",
+        presence="neutral",
+        tts_voice="vi-VN-Chirp3-HD-Puck",
+        cast_locked=False,
+        created_at=now,
+        updated_at=now,
+    )
+    target_new = GlossaryEntry(
+        id=generate(),
+        book_id=target.id,
+        name="Nhân vật mới",
+        aliases="[]",
+        episode_key="S1E2",
+        group_label="Nhân vật",
+        summary="Xuất hiện ở ep2.",
+        sort_key="nhanvatmoi",
+        gender="female",
+        age_band="youth",
+        presence="soft",
+        tts_voice="vi-VN-Chirp3-HD-Zephyr",
+        cast_locked=False,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add_all([series, target, target_vasco, target_new])
+    db_session.commit()
+
+    listed = client.get(
+        f"/api/admin/books/{target.id}/cast?scope=all",
+        headers=auth_header(seeded["admin"]),
+    )
+    assert listed.status_code == 200
+    sources = listed.json()["import_sources"]
+    assert len(sources) == 1
+    assert sources[0]["id"] == source.id
+    assert sources[0]["episode_number"] == 1
+
+    db_session.refresh(target_new)
+    new_voice_before = target_new.tts_voice
+
+    response = client.post(
+        f"/api/admin/books/{target.id}/cast/import-from",
+        headers=auth_header(seeded["admin"]),
+        json={"source_book_id": source.id},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["matched"] == 1
+    assert body["unmatched"] == 1
+    assert body["updated"] == 1
+    assert body["carried"] >= 2  # Afonso + An Vi from ep1, not on target
+    assert body["cast_status"] == "draft"
+
+    db_session.refresh(target_vasco)
+    db_session.refresh(target_new)
+    assert target_vasco.tts_voice == "vi-VN-Chirp3-HD-Algieba"
+    assert target_vasco.cast_locked is True
+    assert target_new.tts_voice == new_voice_before
+    assert target_new.cast_locked is False
+
+    carried_names = {
+        row.name
+        for row in db_session.scalars(
+            select(GlossaryEntry).where(GlossaryEntry.book_id == target.id)
+        )
+    }
+    assert "Afonso de Albuquerque" in carried_names
+    assert "Công chúa An Vi" in carried_names
+
+    rejected = client.post(
+        f"/api/admin/books/{target.id}/cast/import-from",
+        headers=auth_header(seeded["admin"]),
+        json={"source_book_id": generate()},
+    )
+    assert rejected.status_code == 404

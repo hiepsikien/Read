@@ -311,6 +311,14 @@ export interface BookCastEntry {
   source?: "speaking" | "glossary_only" | "unmatched";
 }
 
+export interface BookCastImportSource {
+  id: string;
+  title: string;
+  season_number: number | null;
+  episode_number: number | null;
+  cast_status: "draft" | "ready" | string;
+}
+
 export interface BookCastPayload {
   book_id: string;
   book_title: string;
@@ -330,6 +338,10 @@ export interface BookCastPayload {
     voice: string;
   }>;
   entries: BookCastEntry[];
+  series_id?: string | null;
+  season_number?: number | null;
+  episode_number?: number | null;
+  import_sources?: BookCastImportSource[];
 }
 
 export interface GlossaryEntryCompact {
@@ -1159,6 +1171,22 @@ export function createApiClient(options: ApiClientOptions) {
           body: JSON.stringify({ unlock }),
         }
       );
+    },
+    adminImportBookCast(bookId: string, sourceBookId: string) {
+      return request<{
+        ok: boolean;
+        cast_status: string;
+        source_book_id: string;
+        source_title: string;
+        updated: number;
+        skipped_locked: number;
+        matched: number;
+        unmatched: number;
+        carried: number;
+      }>(`/api/admin/books/${bookId}/cast/import-from`, {
+        method: "POST",
+        body: JSON.stringify({ source_book_id: sourceBookId }),
+      });
     },
     adminRecommendBookCast(
       bookId: string,
