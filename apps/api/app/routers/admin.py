@@ -164,6 +164,40 @@ def _save_cast_overrides(book: Book, overrides: dict) -> None:
     book.cast_overrides = json.dumps(overrides, ensure_ascii=False)
 
 
+def _resolve_cast_override(overrides: dict, *keys: str) -> dict | None:
+    """Pick the best override among cue/name keys.
+
+    Screenplay cues are often short (Xavier) while glossary names are full
+    (Francis Xavier). Saves historically keyed by name; UI/TTS look up by cue.
+    Prefer a locked override when keys disagree so stale cue rows cannot hide a
+    locked glossary save.
+    """
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for key in keys:
+        normalized = normalize_lookup(key or "")
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        meta = overrides.get(normalized)
+        if isinstance(meta, dict):
+            candidates.append(meta)
+    if not candidates:
+        return None
+    for meta in candidates:
+        if bool(meta.get("cast_locked")):
+            return meta
+    return candidates[0]
+
+
+def _write_cast_override(overrides: dict, meta: dict, *keys: str) -> None:
+    """Store the same override under every provided lookup key (cue + name)."""
+    for key in keys:
+        normalized = normalize_lookup(key or "")
+        if normalized:
+            overrides[normalized] = meta
+
+
 def _cast_warnings(book: Book, *, unmatched_count: int = 0, speaking_count: int = 0) -> list[str]:
     warnings: list[str] = []
     if (getattr(book, "cast_status", "draft") or "draft") != "ready":
@@ -1081,7 +1115,9 @@ def get_book_cast(
                 first_chapter_id=item["first_chapter_id"],
                 first_chapter_title=item["first_chapter_title"],
                 first_chapter_position=item["first_chapter_position"],
-                override=overrides.get(key) if isinstance(overrides.get(key), dict) else None,
+                override=_resolve_cast_override(
+                    overrides, key, normalize_lookup(entry.name)
+                ),
                 source="speaking",
             )
         )
@@ -1174,6 +1210,13 @@ def update_book_cast(
                     detail=f"Voice {item.tts_voice} does not match gender {gender}.",
                 )
 
+        meta = {
+            "gender": gender,
+            "age_band": item.age_band,
+            "presence": item.presence,
+            "tts_voice": item.tts_voice,
+            "cast_locked": bool(item.cast_locked),
+        }
         if item.id:
             seed = by_id.get(item.id)
             if seed is None or seed.book_id != book.id:
@@ -1189,25 +1232,13 @@ def update_book_cast(
                 row.cast_locked = bool(item.cast_locked)
                 row.updated_at = now
                 updated += 1
-            # Keep override in sync for synthesis lookup by cue key.
-            overrides[key] = {
-                "gender": gender,
-                "age_band": item.age_band,
-                "presence": item.presence,
-                "tts_voice": item.tts_voice,
-                "cast_locked": bool(item.cast_locked),
-            }
+            # Write under glossary name and screenplay cue so TTS/UI both hit.
+            _write_cast_override(overrides, meta, key, item.speaker_key or "")
         else:
             key = normalize_lookup(item.speaker_key or "")
             if not key:
                 raise HTTPException(status_code=400, detail="speaker_key is required for unmatched cues.")
-            overrides[key] = {
-                "gender": gender,
-                "age_band": item.age_band,
-                "presence": item.presence,
-                "tts_voice": item.tts_voice,
-                "cast_locked": bool(item.cast_locked),
-            }
+            _write_cast_override(overrides, meta, key)
             updated += 1
 
     _save_cast_overrides(book, overrides)

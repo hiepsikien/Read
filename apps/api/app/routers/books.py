@@ -73,7 +73,9 @@ def _glossary_voice_map(
 ) -> tuple[dict[str, str], dict[str, str]]:
     import json
 
-    from ..models import Book
+    from ..glossary import normalize_lookup
+    from ..models import Book, Chapter
+    from ..speaking_cast import collect_speaking_appearances, match_speaker_to_glossary
     from ..voice_cast import apply_cast_to_entries, cast_profiles_for_entries
 
     entries = list(
@@ -110,6 +112,28 @@ def _glossary_voice_map(
             value = (meta.get("presence") or "").strip()
             if value:
                 presence[str(key)] = value
+
+    # Screenplay cues are often short (Xavier) while glossary names are full
+    # (Francis Xavier). Bind locked glossary voices onto speaking cues so TTS
+    # does not keep a stale cue-keyed override after an admin lock/save.
+    chapters = list(db.scalars(select(Chapter).where(Chapter.book_id == book_id)))
+    for appearance in collect_speaking_appearances(chapters):
+        entry = match_speaker_to_glossary(entries, appearance.cue)
+        if entry is None or not bool(getattr(entry, "cast_locked", False)):
+            continue
+        voice = (getattr(entry, "tts_voice", None) or "").strip()
+        value = (getattr(entry, "presence", None) or "").strip()
+        if voice:
+            voices[appearance.key] = voice
+            name_key = normalize_lookup(getattr(entry, "name", "") or "")
+            if name_key:
+                voices[name_key] = voice
+        if value:
+            presence[appearance.key] = value
+            name_key = normalize_lookup(getattr(entry, "name", "") or "")
+            if name_key:
+                presence[name_key] = value
+
     return voices, presence
 
 router = APIRouter(prefix="/api/books", tags=["books"])

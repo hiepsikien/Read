@@ -228,3 +228,98 @@ def test_admin_approve_returns_cast_warnings(client, seeded, db_session):
     assert "Audio cast is not marked ready." in body["warnings"]
     db_session.refresh(seeded["book"])
     assert seeded["book"].status == "published"
+
+
+def test_admin_cast_get_prefers_locked_name_override_over_stale_cue(client, seeded, db_session):
+    import json
+
+    afonso = seeded["afonso"]
+    afonso.cast_locked = True
+    afonso.tts_voice = "vi-VN-Chirp3-HD-Algieba"
+    seeded["book"].cast_overrides = json.dumps(
+        {
+            "afonso": {
+                "gender": "male",
+                "age_band": "elder",
+                "presence": "forceful",
+                "tts_voice": "vi-VN-Chirp3-HD-Puck",
+                "cast_locked": False,
+            },
+            "afonso de albuquerque": {
+                "gender": "male",
+                "age_band": "elder",
+                "presence": "forceful",
+                "tts_voice": "vi-VN-Chirp3-HD-Algieba",
+                "cast_locked": True,
+            },
+        }
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/api/admin/books/{seeded['book'].id}/cast?scope=speaking",
+        headers=auth_header(seeded["admin"]),
+    )
+    assert response.status_code == 200
+    afonso_row = next(e for e in response.json()["entries"] if e["id"] == afonso.id)
+    assert afonso_row["speaker_key"] == "afonso"
+    assert afonso_row["cast_locked"] is True
+    assert afonso_row["tts_voice"] == "vi-VN-Chirp3-HD-Algieba"
+
+
+def test_admin_cast_lock_save_applies_to_short_speaker_cue(client, seeded, db_session):
+    """Cue AFONSO matches glossary Afonso de Albuquerque; lock must stick on cue key."""
+    import json
+
+    afonso = seeded["afonso"]
+    # Stale cue-keyed override (unlocked) that previously shadowed glossary saves.
+    seeded["book"].cast_overrides = json.dumps(
+        {
+            "afonso": {
+                "gender": "male",
+                "age_band": "elder",
+                "presence": "forceful",
+                "tts_voice": "vi-VN-Chirp3-HD-Puck",
+                "cast_locked": False,
+            }
+        }
+    )
+    db_session.commit()
+
+    response = client.put(
+        f"/api/admin/books/{seeded['book'].id}/cast",
+        headers=auth_header(seeded["admin"]),
+        json={
+            "entries": [
+                {
+                    "id": afonso.id,
+                    "speaker_key": "afonso",
+                    "gender": "male",
+                    "age_band": "elder",
+                    "presence": "forceful",
+                    "tts_voice": "vi-VN-Chirp3-HD-Algieba",
+                    "cast_locked": True,
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+
+    db_session.refresh(seeded["book"])
+    db_session.refresh(afonso)
+    overrides = json.loads(seeded["book"].cast_overrides)
+    assert overrides["afonso"]["cast_locked"] is True
+    assert overrides["afonso"]["tts_voice"] == "vi-VN-Chirp3-HD-Algieba"
+    assert overrides["afonso de albuquerque"]["cast_locked"] is True
+    assert overrides["afonso de albuquerque"]["tts_voice"] == "vi-VN-Chirp3-HD-Algieba"
+    assert afonso.cast_locked is True
+    assert afonso.tts_voice == "vi-VN-Chirp3-HD-Algieba"
+
+    after = client.get(
+        f"/api/admin/books/{seeded['book'].id}/cast?scope=speaking",
+        headers=auth_header(seeded["admin"]),
+    )
+    assert after.status_code == 200
+    afonso_row = next(e for e in after.json()["entries"] if e["id"] == afonso.id)
+    assert afonso_row["cast_locked"] is True
+    assert afonso_row["tts_voice"] == "vi-VN-Chirp3-HD-Algieba"
