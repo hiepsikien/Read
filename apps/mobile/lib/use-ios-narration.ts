@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import {
   setAudioModeAsync,
   useAudioPlayer,
   useAudioPlayerStatus,
+  type AudioMetadata,
   type AudioSource,
 } from "expo-audio";
 import type { ApiClient, ChapterAudioManifest } from "@read/api-client";
@@ -15,19 +16,64 @@ type PlaybackRate = 0.8 | 1 | 1.2;
 
 const PLAYBACK_RATES: PlaybackRate[] = [0.8, 1, 1.2];
 
+const LOCK_SCREEN_OPTIONS = {
+  showSeekForward: false,
+  showSeekBackward: false,
+} as const;
+
 type UseIosNarrationOptions = {
   api: ApiClient;
   bookId?: string;
   chapterId?: string;
   paragraphs: string[];
+  bookTitle?: string;
+  chapterTitle?: string;
+  /** Absolute cover URL (no auth). Public for published books. */
+  artworkUrl?: string | null;
+  artistName?: string | null;
   onChapterComplete?: () => void;
 };
+
+function buildLockScreenMetadata(options: {
+  bookTitle?: string;
+  chapterTitle?: string;
+  artworkUrl?: string | null;
+  artistName?: string | null;
+}): AudioMetadata {
+  const book = options.bookTitle?.trim() || undefined;
+  const chapter = options.chapterTitle?.trim() || undefined;
+  const artist = options.artistName?.trim() || book;
+  const artwork = options.artworkUrl?.trim() || undefined;
+  return {
+    title: chapter || book || "Read",
+    albumTitle: book,
+    artist,
+    artworkUrl: artwork,
+  };
+}
+
+async function ensureBackgroundAudioMode() {
+  if (Platform.OS !== "ios") return;
+  try {
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: "doNotMix",
+    });
+  } catch {
+    // Best-effort — playback may still work with the previous mode.
+  }
+}
 
 export function useIosNarration({
   api,
   bookId,
   chapterId,
   paragraphs,
+  bookTitle,
+  chapterTitle,
+  artworkUrl,
+  artistName,
   onChapterComplete,
 }: UseIosNarrationOptions) {
   const onChapterCompleteRef = useRef(onChapterComplete);
@@ -57,6 +103,26 @@ export function useIosNarration({
   const armFinishDetectionRef = useRef(false);
 
   const playerReleasedRef = useRef(false);
+  const lockScreenActiveRef = useRef(false);
+  const advancingSegmentRef = useRef(false);
+  const intentionalPauseRef = useRef(false);
+  const playingRef = useRef(playerStatus.playing);
+  const durationRef = useRef(playerStatus.duration);
+  const currentTimeRef = useRef(playerStatus.currentTime);
+  playingRef.current = playerStatus.playing;
+  durationRef.current = playerStatus.duration;
+  currentTimeRef.current = playerStatus.currentTime;
+
+  const lockScreenMetaRef = useRef<AudioMetadata>(
+    buildLockScreenMetadata({ bookTitle, chapterTitle, artworkUrl, artistName })
+  );
+  lockScreenMetaRef.current = buildLockScreenMetadata({
+    bookTitle,
+    chapterTitle,
+    artworkUrl,
+    artistName,
+  });
+
   const manifestRef = useRef(manifest);
   const currentSegmentRef = useRef(currentSegment);
   const playbackStateRef = useRef(playbackState);
@@ -67,12 +133,7 @@ export function useIosNarration({
   providerRef.current = provider;
 
   useEffect(() => {
-    if (Platform.OS !== "ios") return;
-    void setAudioModeAsync({
-      playsInSilentMode: true,
-      shouldPlayInBackground: true,
-      interruptionMode: "doNotMix",
-    });
+    void ensureBackgroundAudioMode();
   }, []);
 
   useEffect(() => {
@@ -97,6 +158,54 @@ export function useIosNarration({
     [player]
   );
 
+  const clearLockScreen = useCallback(() => {
+    const wasActive = lockScreenActiveRef.current;
+    lockScreenActiveRef.current = false;
+    if (!wasActive) return;
+    runOnPlayer((instance) => {
+      try {
+        instance.clearLockScreenControls();
+      } catch {
+        // Ignore — native object may already be gone.
+      }
+    });
+  }, [runOnPlayer]);
+
+  const activateOrUpdateLockScreen = useCallback(() => {
+    if (Platform.OS !== "ios") return;
+    const meta = lockScreenMetaRef.current;
+    runOnPlayer((instance) => {
+      try {
+        if (!lockScreenActiveRef.current) {
+          instance.setActiveForLockScreen(true, meta, { ...LOCK_SCREEN_OPTIONS });
+          lockScreenActiveRef.current = true;
+        } else {
+          instance.updateLockScreenMetadata(meta);
+        }
+      } catch {
+        // Lock-screen APIs are best-effort; never break playback.
+      }
+    });
+  }, [runOnPlayer]);
+
+  useEffect(() => {
+    return () => {
+      clearLockScreen();
+    };
+  }, [clearLockScreen]);
+
+  // Keep Now Playing text/artwork current when chapter or book metadata changes.
+  useEffect(() => {
+    if (!lockScreenActiveRef.current) return;
+    runOnPlayer((instance) => {
+      try {
+        instance.updateLockScreenMetadata(lockScreenMetaRef.current);
+      } catch {
+        // Best-effort.
+      }
+    });
+  }, [artistName, artworkUrl, bookTitle, chapterTitle, runOnPlayer]);
+
   const sourceFor = useCallback(
     (audioManifest: ChapterAudioManifest, index: number): AudioSource => ({
       uri: audioManifest.segments[index].url,
@@ -109,6 +218,7 @@ export function useIosNarration({
     (audioManifest: ChapterAudioManifest, index: number) => {
       const segment = audioManifest.segments[index];
       if (!segment) {
+        clearLockScreen();
         setPlaybackState("idle");
         setCurrentSegment(null);
         return;
@@ -118,26 +228,86 @@ export function useIosNarration({
       // blocked onChapterComplete / banner / auto-advance).
       didHandleFinishRef.current = false;
       armFinishDetectionRef.current = false;
-      runOnPlayer((instance) => {
-        instance.replace(sourceFor(audioManifest, index));
-        instance.setPlaybackRate(rate, "high");
-        instance.play();
+      intentionalPauseRef.current = false;
+      advancingSegmentRef.current = true;
+      void ensureBackgroundAudioMode().then(() => {
+        if (playerReleasedRef.current) return;
+        runOnPlayer((instance) => {
+          instance.replace(sourceFor(audioManifest, index));
+          instance.setPlaybackRate(rate, "high");
+          instance.play();
+        });
+        // Activate after play() so the audio session is already running.
+        // Now Playing keeps iOS from suspending playback when the screen locks.
+        activateOrUpdateLockScreen();
       });
       setCurrentSegment(index);
       setPlaybackState("speaking");
+      // Brief latch so remote-playing sync does not treat replace() as a pause.
+      setTimeout(() => {
+        advancingSegmentRef.current = false;
+      }, 500);
     },
-    [rate, runOnPlayer, sourceFor]
+    [activateOrUpdateLockScreen, clearLockScreen, rate, runOnPlayer, sourceFor]
   );
 
   const playSegmentRef = useRef(playSegment);
   playSegmentRef.current = playSegment;
 
+  const resumeCloudPlayback = useCallback(() => {
+    if (providerRef.current !== "cloud") return;
+    if (playbackStateRef.current !== "speaking") return;
+    if (advancingSegmentRef.current) return;
+    if (intentionalPauseRef.current) return;
+    if (playingRef.current) {
+      activateOrUpdateLockScreen();
+      return;
+    }
+
+    const audioManifest = manifestRef.current;
+    const segment = currentSegmentRef.current;
+    if (!audioManifest || segment === null) return;
+
+    const duration = durationRef.current;
+    const currentTime = currentTimeRef.current;
+    const nearEnd = duration > 0 && currentTime >= Math.max(0, duration - 0.35);
+
+    if (nearEnd || playerStatus.didJustFinish) {
+      const nextSegment = segment + 1;
+      if (nextSegment >= audioManifest.segments.length) {
+        clearLockScreen();
+        setPlaybackState("idle");
+        setCurrentSegment(null);
+        onChapterCompleteRef.current?.();
+        return;
+      }
+      playSegmentRef.current(audioManifest, nextSegment);
+      return;
+    }
+
+    void ensureBackgroundAudioMode().then(() => {
+      runOnPlayer((instance) => {
+        instance.setPlaybackRate(rate, "high");
+        instance.play();
+      });
+      activateOrUpdateLockScreen();
+    });
+  }, [
+    activateOrUpdateLockScreen,
+    clearLockScreen,
+    playerStatus.didJustFinish,
+    rate,
+    runOnPlayer,
+  ]);
+
   const startCloudPlayback = useCallback(
     async (fromParagraphIndex = 0) => {
       if (!bookId || !chapterId) return;
       const generation = ++requestGenerationRef.current;
+      intentionalPauseRef.current = false;
       setPlaybackState("preparing");
       setError("");
+      await ensureBackgroundAudioMode();
 
       try {
         // Prefer ref so a stale callback cannot reuse the previous chapter's manifest.
@@ -167,13 +337,14 @@ export function useIosNarration({
         playSegment(audioManifest, startIndex);
       } catch {
         if (generation !== requestGenerationRef.current) return;
+        clearLockScreen();
         setProvider("native");
         setPlaybackState("idle");
         setError("Cloud voice unavailable. Using the offline device voice.");
         await nativeSpeech.togglePlayback({ fromParagraphIndex });
       }
     },
-    [api, bookId, chapterId, nativeSpeech, playSegment]
+    [api, bookId, chapterId, clearLockScreen, nativeSpeech, playSegment]
   );
 
   const togglePlayback = useCallback(
@@ -184,18 +355,29 @@ export function useIosNarration({
       }
       if (playbackState === "preparing") return;
       if (playbackState === "speaking") {
+        intentionalPauseRef.current = true;
         runOnPlayer((instance) => instance.pause());
         setPlaybackState("paused");
         return;
       }
       if (playbackState === "paused") {
+        intentionalPauseRef.current = false;
+        await ensureBackgroundAudioMode();
         runOnPlayer((instance) => instance.play());
+        activateOrUpdateLockScreen();
         setPlaybackState("speaking");
         return;
       }
       await startCloudPlayback(Math.max(0, options?.fromParagraphIndex ?? 0));
     },
-    [nativeSpeech, playbackState, provider, runOnPlayer, startCloudPlayback]
+    [
+      activateOrUpdateLockScreen,
+      nativeSpeech,
+      playbackState,
+      provider,
+      runOnPlayer,
+      startCloudPlayback,
+    ]
   );
 
   /** Always begin playback (never pause/resume). Used for chapter auto-advance. */
@@ -214,12 +396,14 @@ export function useIosNarration({
 
   const stop = useCallback(async () => {
     requestGenerationRef.current += 1;
+    intentionalPauseRef.current = false;
+    clearLockScreen();
     runOnPlayer((instance) => instance.pause());
     await runOnPlayer((instance) => instance.seekTo(0))?.catch(() => undefined);
     setPlaybackState("idle");
     setCurrentSegment(null);
     await nativeSpeech.stop();
-  }, [nativeSpeech.stop, runOnPlayer]);
+  }, [clearLockScreen, nativeSpeech.stop, runOnPlayer]);
 
   const pause = useCallback(async () => {
     if (provider === "native") {
@@ -227,6 +411,7 @@ export function useIosNarration({
       return;
     }
     if (playbackState !== "speaking") return;
+    intentionalPauseRef.current = true;
     runOnPlayer((instance) => instance.pause());
     setPlaybackState("paused");
   }, [nativeSpeech, playbackState, provider, runOnPlayer]);
@@ -240,6 +425,54 @@ export function useIosNarration({
     setRate(nextRate);
     runOnPlayer((instance) => instance.setPlaybackRate(nextRate, "high"));
   }, [nativeSpeech, provider, rate, runOnPlayer]);
+
+  // iOS may pause AVPlayer when locking without a stable Now Playing session.
+  // Re-assert lock-screen + resume on background/active; delayed retries cover
+  // the common case where the OS pauses after the lock animation.
+  useEffect(() => {
+    let retryA: ReturnType<typeof setTimeout> | undefined;
+    let retryB: ReturnType<typeof setTimeout> | undefined;
+
+    const onChange = (next: AppStateStatus) => {
+      if (providerRef.current !== "cloud") return;
+      if (playbackStateRef.current !== "speaking") return;
+
+      if (next === "active" || next === "background" || next === "inactive") {
+        resumeCloudPlayback();
+        if (next !== "active") {
+          clearTimeout(retryA);
+          clearTimeout(retryB);
+          retryA = setTimeout(() => resumeCloudPlayback(), 400);
+          retryB = setTimeout(() => resumeCloudPlayback(), 1200);
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener("change", onChange);
+    return () => {
+      clearTimeout(retryA);
+      clearTimeout(retryB);
+      sub.remove();
+    };
+  }, [resumeCloudPlayback]);
+
+  // Mirror lock-screen remote Play/Pause into in-app state.
+  useEffect(() => {
+    if (providerRef.current !== "cloud") return;
+    if (!lockScreenActiveRef.current) return;
+    const state = playbackStateRef.current;
+    if (state !== "speaking" && state !== "paused") return;
+    if (playerStatus.didJustFinish || advancingSegmentRef.current) return;
+
+    if (playerStatus.playing && state === "paused" && !intentionalPauseRef.current) {
+      setPlaybackState("speaking");
+      return;
+    }
+
+    if (!playerStatus.playing && state === "speaking" && intentionalPauseRef.current) {
+      setPlaybackState("paused");
+    }
+  }, [playerStatus.didJustFinish, playerStatus.playing]);
 
   // Advance from refs so background JS throttling / stale closures do not skip
   // segments. `didJustFinish` stays true until the next status tick, so latch.
@@ -265,18 +498,21 @@ export function useIosNarration({
     armFinishDetectionRef.current = false;
     const nextSegment = segment + 1;
     if (nextSegment >= audioManifest.segments.length) {
+      clearLockScreen();
       setPlaybackState("idle");
       setCurrentSegment(null);
       onChapterCompleteRef.current?.();
       return;
     }
     playSegmentRef.current(audioManifest, nextSegment);
-  }, [playerStatus.didJustFinish, playerStatus.playing]);
+  }, [clearLockScreen, playerStatus.didJustFinish, playerStatus.playing]);
 
   // Discards the cached manifest so the next play refetches it. Needed after the
   // server voice changes, because segment URLs are keyed by voice.
   const reset = useCallback(() => {
     requestGenerationRef.current += 1;
+    intentionalPauseRef.current = false;
+    clearLockScreen();
     runOnPlayer((instance) => instance.pause());
     manifestRef.current = null;
     setManifest(null);
@@ -284,7 +520,7 @@ export function useIosNarration({
     setPlaybackState("idle");
     setCurrentSegment(null);
     setError("");
-  }, [runOnPlayer]);
+  }, [clearLockScreen, runOnPlayer]);
 
   useEffect(() => {
     // Only when the chapter identity changes — not when `reset` callback identity churns,
@@ -327,6 +563,7 @@ export function useIosNarration({
       }
 
       authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
+      manifestRef.current = audioManifest;
       setManifest(audioManifest);
 
       const index = Math.min(resumeIndex, audioManifest.segments.length - 1);
@@ -345,6 +582,8 @@ export function useIosNarration({
       });
       setCurrentSegment(index);
       setPlaybackState("paused");
+      intentionalPauseRef.current = true;
+      activateOrUpdateLockScreen();
     } catch {
       if (generation !== requestGenerationRef.current) return;
       setManifest(null);
@@ -353,6 +592,7 @@ export function useIosNarration({
       setError("Could not switch to the new voice.");
     }
   }, [
+    activateOrUpdateLockScreen,
     api,
     bookId,
     chapterId,

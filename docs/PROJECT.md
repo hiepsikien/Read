@@ -293,7 +293,8 @@ API tiêu biểu:
 
 ### Trải nghiệm đọc
 - ~~TTS đọc thành tiếng~~ ✅ cloud TTS (Google) + admin đổi giọng động, SSML cho hội thoại kịch bản, tự cuộn theo audio (xem §4b)
-- Còn lại: focus mode, lock-screen / Now Playing controls (mức đầy đủ)
+- Còn lại: focus mode, transition chapter tinh gọn hơn
+  - ~~lock-screen / Now Playing controls (mức đầy đủ)~~ ✅ mức B iOS (`expo-audio` Now Playing + resume khi mở lại máy)
 
 ### Rich format
 - Đã giữ **bold / italic** từ DOCX trên mobile + web reader
@@ -379,7 +380,7 @@ API tiêu biểu:
 
 **Hoàn thiện audio — kế hoạch:**
 
-> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker, **tự sang chapter kế** (unlocked → replace + auto-play; locked → màn mua; hết sách → finished overlay), **handoff chapter khi nghe tiếp** (giữ màn hình cũ lúc soft-load, banner “Chapter N · title” + fade ngắn, latch continue chống race `stop`/autoplay), **background audio mức nhẹ trên iOS** (`shouldPlayInBackground: true` + `UIBackgroundModes: ["audio"]`; stop khi rời reader / Back, không stop khi khóa màn; **chưa** có lock-screen / Control Center controls). Cần **rebuild native** sau khi đổi Info.plist.
+> Đã xong (đừng làm lại): cloud TTS + fallback giọng máy, play/pause/resume/stop, đổi tốc độ 0.8/1/1.2, **tự phát tiếp segment kế trong cùng chapter**, **auto-scroll bám theo đoạn đang đọc** (`followNarrationRef` — chỉ bám tới khi người đọc tự cuộn tay), highlight đoạn đang đọc, admin voice picker, **tự sang chapter kế** (unlocked → replace + auto-play; locked → màn mua; hết sách → finished overlay), **handoff chapter khi nghe tiếp** (giữ màn hình cũ lúc soft-load, banner “Chapter N · title” + fade ngắn, latch continue chống race `stop`/autoplay), **background audio iOS** (`shouldPlayInBackground` + `UIBackgroundModes: ["audio"]`), **lock-screen / Control Center Now Playing (mức B)** qua `expo-audio` (`setActiveForLockScreen`, metadata chương/sách/bìa, remote Play/Pause, **AppState resume** nếu iOS tạm dừng khi khóa màn). Cần **rebuild native** sau khi đổi Info.plist; test Now Playing trên **iPhone thật**.
 
 Còn lại:
 
@@ -387,9 +388,9 @@ Còn lại:
    - Đang khóa cứng `supported: Platform.OS === "ios"`; audio mode chỉ set cho iOS; hook đặt tên `use-ios-*`.
    - `expo-audio` (cloud) và `expo-speech` (fallback) vốn chạy được Android → việc chính: bỏ gate iOS, set audio mode cho Android, đổi tên hook cho trung tính, kiểm định giọng máy Android ở nhánh fallback; foreground service nếu muốn nghe nền. **Cần máy Android thật để test.**
 
-2. **Background / lock-screen controls (mức đầy đủ)** — chưa làm
-   - Hiện đã chốt và ship **mức nhẹ** (nghe khi khóa màn, không remote controls).
-   - **Mức đầy đủ:** Now Playing / lock-screen (bìa, tên chương). `expo-audio` không cấp remote controls → cần media-session library (vd `react-native-track-player`) + dev build, có thể viết lại pipeline phát.
+2. ~~**Background / lock-screen controls (mức đầy đủ)**~~ ✅ mức B iOS — xem [`docs/lock-screen-now-playing.md`](lock-screen-now-playing.md)
+   - Ship với `expo-audio` (`setActiveForLockScreen` / `updateLockScreenMetadata` / `clearLockScreenControls`), **không** dùng track-player.
+   - Ngoài scope còn lại: Android Now Playing / FGS; seek cả chương từ Control Center.
 
 3. **Chi tiết nhỏ (tùy chọn)**
    - Cho reader thường (không phải admin) tự chọn giọng (giờ voice picker chỉ admin).
