@@ -19,7 +19,10 @@
       "buildNumber": "5",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio"],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {
@@ -28,6 +31,7 @@
         "backgroundColor": "#d5e2dd"
       },
       "package": "com.nguyendinhanh.read",
+      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ]

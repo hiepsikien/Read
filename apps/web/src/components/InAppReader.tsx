@@ -90,9 +90,12 @@ export function InAppReader({
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
   const [finishedRecs, setFinishedRecs] = useState<{
+    next_episode: BookListItem | null;
+    next_episode_owned: boolean | null;
     same_author: BookListItem[];
     related: BookListItem[];
-  }>({ same_author: [], related: [] });
+  }>({ next_episode: null, next_episode_owned: null, same_author: [], related: [] });
+  const [unlockingNext, setUnlockingNext] = useState(false);
   const restoredKeyRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestScrollRef = useRef({ fraction: 0, paragraphIndex: 0 });
@@ -336,9 +339,28 @@ export function InAppReader({
     }
     const recs = await createBrowserApi()
       .getBookRecommendations(bookId)
-      .catch(() => ({ same_author: [] as BookListItem[], related: [] as BookListItem[] }));
+      .catch(() => ({
+        next_episode: null as BookListItem | null,
+        next_episode_owned: null as boolean | null,
+        same_author: [] as BookListItem[],
+        related: [] as BookListItem[],
+      }));
     setFinishedRecs(recs);
     setFinishedOpen(true);
+  }
+
+  async function unlockNextEpisode() {
+    const next = finishedRecs.next_episode;
+    if (!next) return;
+    setUnlockingNext(true);
+    try {
+      await createBrowserApi().purchaseBook(next.id);
+      router.push(`/books/${next.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not unlock the next episode.");
+    } finally {
+      setUnlockingNext(false);
+    }
   }
 
   async function readAgain() {
@@ -600,12 +622,39 @@ export function InAppReader({
               Nice work. Pick another title, or start this one again.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
-              <Link
-                href={`/books/${bookId}`}
-                className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white"
-              >
-                Back to book
-              </Link>
+              {finishedRecs.next_episode ? (
+                finishedRecs.next_episode_owned === false &&
+                finishedRecs.next_episode.price_cents > 0 ? (
+                  <button
+                    type="button"
+                    disabled={unlockingNext}
+                    onClick={() => void unlockNextEpisode()}
+                    className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+                  >
+                    {unlockingNext
+                      ? "Unlocking…"
+                      : `Unlock next · S${finishedRecs.next_episode.season_number}E${finishedRecs.next_episode.episode_number} · ${formatPrice(finishedRecs.next_episode.price_cents)}`}
+                  </button>
+                ) : (
+                  <Link
+                    href={`/books/${finishedRecs.next_episode.id}`}
+                    className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white"
+                  >
+                    Next episode
+                    {finishedRecs.next_episode.season_number != null &&
+                    finishedRecs.next_episode.episode_number != null
+                      ? ` · S${finishedRecs.next_episode.season_number}E${finishedRecs.next_episode.episode_number}`
+                      : ""}
+                  </Link>
+                )
+              ) : (
+                <Link
+                  href={`/books/${bookId}`}
+                  className="rounded-lg bg-[var(--sage)] px-4 py-2.5 text-sm font-medium text-white"
+                >
+                  Back to book
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => void readAgain()}
@@ -614,6 +663,15 @@ export function InAppReader({
               >
                 Read again
               </button>
+              {finishedRecs.next_episode ? (
+                <Link
+                  href={`/books/${bookId}`}
+                  className="rounded-lg border px-4 py-2.5 text-sm font-medium"
+                  style={{ borderColor: "color-mix(in srgb, currentColor 18%, transparent)" }}
+                >
+                  Back to book
+                </Link>
+              ) : null}
             </div>
             {finishedRecs.same_author.length > 0 ? (
               <div className="mt-8">

@@ -8,7 +8,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { ApiError, type BookDetail, type Category } from "@read/api-client";
+import { ApiError, type BookDetail, type Category, type SeriesListItem } from "@read/api-client";
 import { BookCover } from "../../../components/BookCover";
 import { FormScroll } from "../../../components/FormScroll";
 import { useAuth } from "../../../lib/auth";
@@ -27,7 +27,11 @@ export default function AdminEditCatalogScreen() {
   const [pricing, setPricing] = useState<"free" | "paid">("free");
   const [price, setPrice] = useState("4.99");
   const [categoryId, setCategoryId] = useState("");
-  const [busy, setBusy] = useState<"" | "save" | "cover">("");
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
+  const [seriesId, setSeriesId] = useState("");
+  const [seasonNumber, setSeasonNumber] = useState("1");
+  const [episodeNumber, setEpisodeNumber] = useState("1");
+  const [busy, setBusy] = useState<"" | "save" | "cover" | "series">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -35,23 +39,28 @@ export default function AdminEditCatalogScreen() {
     if (!id) return;
     setError("");
     try {
-      const [data, categoryPayload] = await Promise.all([
+      const [data, categoryPayload, allSeries] = await Promise.all([
         api.adminBook(id),
         api.listCategories(),
+        api.listSeries({ all: true }),
       ]);
       const next = data.book;
-      if (next.status !== "published" || next.visibility !== "listed") {
-        setError("Only listed published books can be edited here.");
-        setBook(next);
-        return;
-      }
       setBook(next);
       setCategories(categoryPayload.categories);
+      setSeriesList(
+        allSeries.series.filter((item) => item.publisher_id === next.publisher_id)
+      );
       setTitle(next.title);
       setDescription(next.description || "");
       setPricing(next.price_cents > 0 ? "paid" : "free");
       setPrice(((next.price_cents || 499) / 100).toFixed(2));
       setCategoryId(next.category?.id || categoryPayload.categories[0]?.id || "");
+      setSeriesId(next.series?.id || "");
+      setSeasonNumber(String(next.season_number || 1));
+      setEpisodeNumber(String(next.episode_number || 1));
+      if (next.status !== "published" || next.visibility !== "listed") {
+        setError("Catalog fields locked — only series placement can be changed.");
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load book.");
     }
@@ -105,6 +114,30 @@ export default function AdminEditCatalogScreen() {
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Save failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveSeriesPlacement() {
+    setBusy("series");
+    setMessage("");
+    setError("");
+    try {
+      if (!seriesId) {
+        await api.adminUpdateBook(id!, { clear_series: true });
+        setMessage("Removed from series.");
+      } else {
+        await api.adminUpdateBook(id!, {
+          series_id: seriesId,
+          season_number: Number(seasonNumber),
+          episode_number: Number(episodeNumber),
+        });
+        setMessage("Series placement saved.");
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save series placement.");
     } finally {
       setBusy("");
     }
@@ -174,13 +207,77 @@ export default function AdminEditCatalogScreen() {
 
       {!canEdit ? (
         <Text style={styles.lockNote}>
-          Catalog editing is only available for listed published books.
+          Catalog editing is only available for listed published books. Series
+          placement below still works.
         </Text>
       ) : (
         <Text style={styles.hint}>
           Admin-only. Changes apply immediately in the public Library.
         </Text>
       )}
+
+      <Text style={styles.section}>Series placement</Text>
+      <Text style={styles.hint}>
+        Episodes belong to the book's publisher. Season and episode numbers identify
+        the episode in the series.
+      </Text>
+      <View style={styles.categoryWrap}>
+        <Pressable
+          style={[styles.categoryChip, !seriesId && styles.categoryChipActive]}
+          disabled={busy !== ""}
+          onPress={() => setSeriesId("")}
+        >
+          <Text style={[styles.categoryText, !seriesId && styles.categoryTextActive]}>
+            Not in a series
+          </Text>
+        </Pressable>
+        {seriesList.map((item) => {
+          const active = seriesId === item.id;
+          return (
+            <Pressable
+              key={item.id}
+              style={[styles.categoryChip, active && styles.categoryChipActive]}
+              disabled={busy !== ""}
+              onPress={() => setSeriesId(item.id)}
+            >
+              <Text style={[styles.categoryText, active && styles.categoryTextActive]}>
+                {item.title}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {seriesId ? (
+        <View style={styles.pricingRow}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={seasonNumber}
+            onChangeText={setSeasonNumber}
+            editable={busy === ""}
+            keyboardType="number-pad"
+            placeholder="Season"
+            placeholderTextColor={colors.inkSoft}
+          />
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={episodeNumber}
+            onChangeText={setEpisodeNumber}
+            editable={busy === ""}
+            keyboardType="number-pad"
+            placeholder="Episode"
+            placeholderTextColor={colors.inkSoft}
+          />
+        </View>
+      ) : null}
+      <Pressable
+        style={[styles.secondaryBtn, busy === "series" && styles.disabled]}
+        onPress={() => void saveSeriesPlacement()}
+        disabled={busy === "series"}
+      >
+        <Text style={styles.secondaryBtnText}>
+          {busy === "series" ? "Saving…" : "Save series placement"}
+        </Text>
+      </Pressable>
 
       <Text style={styles.section}>Details</Text>
       <TextInput

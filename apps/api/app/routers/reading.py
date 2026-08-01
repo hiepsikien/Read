@@ -1,4 +1,4 @@
-"""Authenticated reading shelf (in-progress books)."""
+"""Authenticated reading shelf (in-progress books + series continue)."""
 
 from typing import Annotated
 
@@ -9,11 +9,13 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from ..auth import get_current_user
 from ..db import get_db
 from ..models import Book, Chapter, ReadingProgress, User
+from ..series_catalog import episode_code, series_continue_targets, series_ref
 from .books import (
     _book_list_item,
     _can_manage_book,
     _has_purchase,
     _is_publicly_visible,
+    _owned,
     _resolve_progress_chapter,
 )
 
@@ -31,6 +33,7 @@ def list_reading(
         .options(
             joinedload(ReadingProgress.book).joinedload(Book.publisher),
             joinedload(ReadingProgress.book).joinedload(Book.category),
+            joinedload(ReadingProgress.book).joinedload(Book.series),
             joinedload(ReadingProgress.book).selectinload(Book.chapters),
         )
         .filter(
@@ -95,4 +98,30 @@ def list_reading(
             }
         )
 
-    return {"items": items}
+    series_continue = []
+    for _anchor, nxt in series_continue_targets(
+        db, user_id=user.id, incomplete_book_ids=seen_book_ids
+    ):
+        chapter_count = (
+            db.scalar(
+                select(func.count()).select_from(Chapter).where(Chapter.book_id == nxt.id)
+            )
+            or 0
+        )
+        purchased = _has_purchase(db, user.id, nxt.id)
+        book_item = _book_list_item(
+            nxt,
+            chapter_count=int(chapter_count),
+            publisher_name=nxt.publisher.name if nxt.publisher else None,
+            publisher_handle=nxt.publisher.handle if nxt.publisher else None,
+        )
+        series_continue.append(
+            {
+                "series": series_ref(nxt.series, for_public=True),
+                "episode_code": episode_code(nxt.season_number, nxt.episode_number),
+                "book": book_item,
+                "owned": _owned(nxt, user, purchased),
+            }
+        )
+
+    return {"items": items, "series_continue": series_continue}

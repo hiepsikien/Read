@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { formatEpisodeCode } from "@read/api-client";
 import { formatPrice } from "@/lib/format";
 
 export function BookCard({
@@ -9,6 +10,9 @@ export function BookCard({
   publisher_name,
   publisher_handle,
   chapter_count,
+  series,
+  season_number,
+  episode_number,
 }: {
   id: string;
   title: string;
@@ -17,14 +21,26 @@ export function BookCard({
   publisher_name: string;
   publisher_handle?: string | null;
   chapter_count: number;
+  series?: { id: string; title: string } | null;
+  season_number?: number | null;
+  episode_number?: number | null;
 }) {
   const isFree = price_cents <= 0;
+  const code = formatEpisodeCode(season_number, episode_number);
 
   return (
     <article className="group border-b border-[var(--line)] py-6 transition first:pt-0 last:border-b-0 hover:opacity-95">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
-          {publisher_handle ? (
+          {series ? (
+            <Link
+              href={`/series/${series.id}`}
+              className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] underline-offset-4 hover:underline"
+            >
+              {series.title}
+              {code ? ` · ${code}` : ""}
+            </Link>
+          ) : publisher_handle ? (
             <Link
               href={`/@${publisher_handle}`}
               className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] underline-offset-4 hover:underline"

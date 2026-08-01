@@ -56,13 +56,18 @@ export default async function BookDetailPage({ params }: Props) {
 
   const recommendations = await api
     .getBookRecommendations(id)
-    .catch(() => ({ same_author: [] as BookListItem[], related: [] as BookListItem[] }));
+    .catch(() => ({
+      next_episode: null as BookListItem | null,
+      same_author: [] as BookListItem[],
+      related: [] as BookListItem[],
+    }));
 
   const { book, chapters, access } = payload;
   const owned = access.owned;
   const isOwner = access.isPublisherOwner;
   const firstChapter = chapters[0];
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.word_count, 0);
+  const nextEpisode = book.next_episode || recommendations.next_episode;
 
   return (
     <div className="fade-up mx-auto max-w-3xl">
@@ -73,7 +78,17 @@ export default async function BookDetailPage({ params }: Props) {
         ← Library
       </Link>
 
-      {book.publisher_handle ? (
+      {book.series ? (
+        <Link
+          href={`/series/${book.series.id}`}
+          className="mt-8 block text-xs uppercase tracking-[0.18em] text-[var(--sage)] underline-offset-4 hover:underline"
+        >
+          {book.series.title}
+          {book.season_number != null && book.episode_number != null
+            ? ` · S${book.season_number}E${book.episode_number}`
+            : ""}
+        </Link>
+      ) : book.publisher_handle ? (
         <Link
           href={`/@${book.publisher_handle}`}
           className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)] underline-offset-4 hover:underline"
@@ -85,6 +100,14 @@ export default async function BookDetailPage({ params }: Props) {
           {book.publisher_name}
         </p>
       )}
+      {book.series && book.publisher_handle ? (
+        <Link
+          href={`/@${book.publisher_handle}`}
+          className="mt-2 block text-xs text-[var(--ink-soft)] underline-offset-4 hover:underline"
+        >
+          {book.publisher_name}
+        </Link>
+      ) : null}
       <h1 className="brand-mark mt-3 text-4xl font-semibold leading-tight text-[var(--ink)] sm:text-5xl">
         {book.title}
       </h1>
@@ -120,6 +143,17 @@ export default async function BookDetailPage({ params }: Props) {
             Manage book
           </Link>
         )}
+        {nextEpisode ? (
+          <Link
+            href={`/books/${nextEpisode.id}`}
+            className="rounded-lg border border-[var(--line)] bg-white/60 px-5 py-2.5 text-[var(--ink)]"
+          >
+            Next episode
+            {nextEpisode.season_number != null && nextEpisode.episode_number != null
+              ? ` · S${nextEpisode.season_number}E${nextEpisode.episode_number}`
+              : ""}
+          </Link>
+        ) : null}
       </div>
 
       {!owned && book.price_cents > 0 && (

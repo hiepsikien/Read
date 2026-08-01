@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .db import Base, SessionLocal, engine
-from .routers import admin, auth, books, glossary, profiles, reading, tts
+from .routers import admin, auth, books, glossary, profiles, reading, series, tts
 from .seed import seed_if_empty
 
 settings = get_settings()
@@ -54,6 +54,7 @@ def health():
 
 app.include_router(auth.router)
 app.include_router(books.router)
+app.include_router(series.router)
 app.include_router(reading.router)
 app.include_router(glossary.router)
 app.include_router(admin.router)

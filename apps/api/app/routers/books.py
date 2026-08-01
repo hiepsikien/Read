@@ -34,6 +34,7 @@ from ..models import (
     GlossaryEntry,
     Purchase,
     ReadingProgress,
+    Series,
     User,
 )
 from ..moderation import record_moderation_event
@@ -55,6 +56,7 @@ from ..covers import (
 from ..media import media_absolute_path
 from ..parse_docs import extract_text_from_file
 from ..recommendations import RECOMMEND_LIMIT, rank_related, sort_same_author
+from ..series_catalog import apply_series_placement, attach_series_fields, find_next_episode
 from ..tts_settings import get_active_tts
 from .. import tts
 
@@ -123,6 +125,10 @@ class PatchBookBody(BaseModel):
     pricing: str | None = None
     price: float | None = None
     category_id: str | None = None
+    series_id: str | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+    clear_series: bool = False
 
 
 class SplitBookBody(BaseModel):
@@ -178,6 +184,7 @@ def _book_list_item(
     chapter_count: int,
     publisher_name: str | None = None,
     publisher_handle: str | None = None,
+    for_public: bool = False,
 ) -> dict:
     item = {
         "id": book.id,
@@ -208,7 +215,7 @@ def _book_list_item(
         item["publisher_id"] = book.publisher_id
     if book.source_filename is not None:
         item["source_filename"] = book.source_filename
-    return item
+    return attach_series_fields(item, book, for_public=for_public)
 
 
 def _owned(book: Book, user: User | None, purchased: bool) -> bool:
@@ -217,6 +224,40 @@ def _owned(book: Book, user: User | None, purchased: bool) -> bool:
     if book.publisher_id == user.id or book.price_cents == 0 or user.role == "admin":
         return True
     return purchased
+
+
+def _apply_series_placement(
+    db: Session,
+    book: Book,
+    *,
+    series_id: str | None,
+    season_number: int | None,
+    episode_number: int | None,
+    clear_series: bool,
+) -> None:
+    apply_series_placement(
+        db,
+        book,
+        series_id=series_id,
+        season_number=season_number,
+        episode_number=episode_number,
+        clear_series=clear_series,
+    )
+
+
+def _next_episode_payload(db: Session, book: Book) -> dict | None:
+    nxt = find_next_episode(db, book)
+    if not nxt:
+        return None
+    chapter_count = (
+        db.scalar(select(func.count()).select_from(Chapter).where(Chapter.book_id == nxt.id)) or 0
+    )
+    return _book_list_item(
+        nxt,
+        chapter_count=int(chapter_count),
+        publisher_name=nxt.publisher.name if nxt.publisher else None,
+        publisher_handle=nxt.publisher.handle if nxt.publisher else None,
+    )
 
 
 def _has_purchase(db: Session, user_id: str, book_id: str) -> bool:
@@ -368,7 +409,7 @@ def list_books(
             raise HTTPException(status_code=403, detail="Publisher login required.")
         books = (
             db.query(Book)
-            .options(joinedload(Book.category))
+            .options(joinedload(Book.category), joinedload(Book.series))
             .filter(Book.publisher_id == user.id)
             .order_by(Book.updated_at.desc())
             .all()
@@ -384,7 +425,7 @@ def list_books(
 
     query = (
         db.query(Book)
-        .options(joinedload(Book.category), joinedload(Book.publisher))
+        .options(joinedload(Book.category), joinedload(Book.publisher), joinedload(Book.series))
         .filter(Book.status == "published", Book.visibility == "listed")
         .order_by(Book.featured.desc(), Book.featured_at.desc(), Book.created_at.desc())
     )
@@ -404,6 +445,7 @@ def list_books(
                 chapter_count=chapter_count,
                 publisher_name=book.publisher.name if book.publisher else "",
                 publisher_handle=book.publisher.handle if book.publisher else None,
+                for_public=True,
             )
         )
     return {"books": books}
@@ -517,6 +559,7 @@ def get_book(
             joinedload(Book.publisher),
             joinedload(Book.chapters),
             joinedload(Book.category),
+            joinedload(Book.series),
         )
         .filter(Book.id == book_id)
         .one_or_none()
@@ -530,8 +573,8 @@ def get_book(
 
     purchased = bool(user and _has_purchase(db, user.id, book.id))
     chapters = sorted(book.chapters, key=lambda c: c.position)
-    return {
-        "book": {
+    book_payload = attach_series_fields(
+        {
             "id": book.id,
             "title": book.title,
             "description": book.description,
@@ -552,6 +595,12 @@ def get_book(
             "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
             "cover_url": cover_url_for(book.id, book.cover_path),
         },
+        book,
+        for_public=not is_manager,
+    )
+    book_payload["next_episode"] = _next_episode_payload(db, book)
+    return {
+        "book": book_payload,
         "chapters": [_chapter_list_item(c) for c in chapters],
         "access": {
             "owned": _owned(book, user, purchased),
@@ -600,7 +649,7 @@ def get_book_recommendations(
 ):
     book = (
         db.query(Book)
-        .options(joinedload(Book.publisher), joinedload(Book.category))
+        .options(joinedload(Book.publisher), joinedload(Book.category), joinedload(Book.series))
         .filter(Book.id == book_id)
         .one_or_none()
     )
@@ -613,7 +662,7 @@ def get_book_recommendations(
 
     public_query = (
         db.query(Book)
-        .options(joinedload(Book.category), joinedload(Book.publisher))
+        .options(joinedload(Book.category), joinedload(Book.publisher), joinedload(Book.series))
         .filter(
             Book.status == "published",
             Book.visibility == "listed",
@@ -635,7 +684,20 @@ def get_book_recommendations(
         limit=RECOMMEND_LIMIT,
     )
 
+    next_episode = _next_episode_payload(db, book)
+    next_owned = None
+    if next_episode is not None:
+        nxt_book = find_next_episode(db, book)
+        if nxt_book is not None:
+            next_owned = _owned(
+                nxt_book,
+                user,
+                bool(user and _has_purchase(db, user.id, nxt_book.id)),
+            )
+
     return {
+        "next_episode": next_episode,
+        "next_episode_owned": next_owned,
         "same_author": _serialize_book_rows(db, same_author_books),
         "related": _serialize_book_rows(db, related_books),
     }
@@ -793,33 +855,63 @@ def patch_book(
     book = db.get(Book, book_id)
     if not book or book.publisher_id != user.id:
         raise HTTPException(status_code=404, detail="Book not found.")
-    _assert_editable(book)
 
-    title = body.title.strip() if body.title is not None else book.title
-    description = body.description.strip() if body.description is not None else book.description
-    price_cents = book.price_cents
+    content_update = any(
+        value is not None
+        for value in (body.title, body.description, body.pricing, body.price, body.category_id)
+    )
+    series_update = body.clear_series or any(
+        value is not None
+        for value in (body.series_id, body.season_number, body.episode_number)
+    )
+    if not content_update and not series_update:
+        raise HTTPException(status_code=400, detail="No changes provided.")
 
-    if body.pricing == "free":
-        price_cents = 0
-    elif body.pricing == "paid" or body.price is not None:
-        dollars = body.price if body.price is not None else price_cents / 100
-        price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
+    if content_update:
+        _assert_editable(book)
+        title = body.title.strip() if body.title is not None else book.title
+        description = body.description.strip() if body.description is not None else book.description
+        price_cents = book.price_cents
 
-    if body.category_id is not None:
-        category = _get_category(db, body.category_id.strip() or None)
-        if not category:
-            raise HTTPException(status_code=400, detail="Category is required.")
-        book.category_id = category.id
+        if body.pricing == "free":
+            price_cents = 0
+        elif body.pricing == "paid" or body.price is not None:
+            dollars = body.price if body.price is not None else price_cents / 100
+            price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
 
-    previous_status = book.status
-    book.title = title
-    book.description = description
-    book.price_cents = price_cents
-    if previous_status == "rejected":
-        book.status = "draft"
-        book.review_note = book.review_note  # keep last note for author context
+        if body.category_id is not None:
+            category = _get_category(db, body.category_id.strip() or None)
+            if not category:
+                raise HTTPException(status_code=400, detail="Category is required.")
+            book.category_id = category.id
+
+        previous_status = book.status
+        book.title = title
+        book.description = description
+        book.price_cents = price_cents
+        if previous_status == "rejected":
+            book.status = "draft"
+            book.review_note = book.review_note  # keep last note for author context
+
+    if series_update:
+        _apply_series_placement(
+            db,
+            book,
+            series_id=body.series_id,
+            season_number=body.season_number,
+            episode_number=body.episode_number,
+            clear_series=body.clear_series,
+        )
+
     book.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="That season/episode slot is already taken in this series.",
+        ) from None
     return {"ok": True, "status": book.status}
 
 

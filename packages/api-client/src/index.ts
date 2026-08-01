@@ -133,6 +133,25 @@ export interface Category {
   label: string;
 }
 
+export interface SeriesRef {
+  id: string;
+  title: string;
+}
+
+export interface SeriesListItem {
+  id: string;
+  title: string;
+  description: string;
+  publisher_id: string;
+  publisher_name?: string | null;
+  publisher_handle?: string | null;
+  episode_count: number;
+  visibility?: "listed" | "hidden";
+  cover_url?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface BookListItem {
   id: string;
   title: string;
@@ -157,6 +176,14 @@ export interface BookListItem {
   reviewed_at?: string | null;
   cover_url?: string | null;
   cast_status?: "draft" | "ready";
+  series?: SeriesRef | null;
+  season_number?: number | null;
+  episode_number?: number | null;
+}
+
+export interface SeriesSeason {
+  season_number: number;
+  episodes: BookListItem[];
 }
 
 export interface ChapterListItem {
@@ -184,6 +211,21 @@ export interface ReadingShelfItem {
     chapter_position: number;
     chapter_count: number;
   };
+}
+
+export interface SeriesContinueItem {
+  series: SeriesRef | null;
+  episode_code: string | null;
+  book: BookListItem;
+  owned: boolean;
+}
+
+export function formatEpisodeCode(
+  seasonNumber?: number | null,
+  episodeNumber?: number | null
+): string | null {
+  if (seasonNumber == null || episodeNumber == null) return null;
+  return `S${seasonNumber}E${episodeNumber}`;
 }
 
 export interface ChapterAudioSegment {
@@ -351,6 +393,10 @@ export interface BookDetail {
   reviewed_at?: string | null;
   cover_url?: string | null;
   cast_status?: "draft" | "ready";
+  series?: SeriesRef | null;
+  season_number?: number | null;
+  episode_number?: number | null;
+  next_episode?: BookListItem | null;
 }
 
 export interface PublicProfile {
@@ -555,14 +601,32 @@ export function createApiClient(options: ApiClientOptions) {
     const response = await doFetch(`${baseUrl}${path}`, {
       ...init,
       headers,
+    }).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : "network error";
+      throw new ApiError(
+        `Cannot reach API at ${baseUrl} (${detail}). Check Wi‑Fi and EXPO_PUBLIC_API_URL.`,
+        0,
+        null
+      );
     });
 
     const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
+    let data: unknown = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new ApiError(
+          `Request failed (${response.status}): non-JSON response from ${baseUrl}${path}`,
+          response.status,
+          text
+        );
+      }
+    }
 
     if (!response.ok) {
       const message =
-        data && typeof data === "object" && "error" in data
+        data && typeof data === "object" && data !== null && "error" in data
           ? String((data as { error: string }).error)
           : `Request failed (${response.status})`;
       throw new ApiError(message, response.status, data);
@@ -633,12 +697,59 @@ export function createApiClient(options: ApiClientOptions) {
     },
     getBookRecommendations(id: string) {
       return request<{
+        next_episode: BookListItem | null;
+        next_episode_owned: boolean | null;
         same_author: BookListItem[];
         related: BookListItem[];
       }>(`/api/books/${id}/recommendations`);
     },
+    listSeries(params?: { mine?: boolean; all?: boolean }) {
+      const q = new URLSearchParams();
+      if (params?.mine) q.set("mine", "1");
+      if (params?.all) q.set("all", "1");
+      const qs = q.toString();
+      return request<{ series: SeriesListItem[] }>(`/api/series${qs ? `?${qs}` : ""}`);
+    },
+    getSeries(id: string) {
+      return request<{
+        series: SeriesListItem;
+        seasons: SeriesSeason[];
+      }>(`/api/series/${id}`);
+    },
+    createSeries(body: { title: string; description?: string }) {
+      return request<{ series: SeriesListItem }>("/api/series", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    updateSeries(
+      id: string,
+      body: {
+        title?: string;
+        description?: string;
+        visibility?: "listed" | "hidden";
+      }
+    ) {
+      return request<{ ok: boolean; series: SeriesListItem }>(`/api/series/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    deleteSeries(id: string) {
+      return request<{ ok: boolean; cleared_episodes: number }>(`/api/series/${id}`, {
+        method: "DELETE",
+      });
+    },
+    uploadSeriesCover(id: string, form: FormData) {
+      return request<{ ok: boolean; cover_url: string }>(`/api/series/${id}/cover`, {
+        method: "POST",
+        body: form,
+      });
+    },
     listReading() {
-      return request<{ items: ReadingShelfItem[] }>("/api/reading");
+      return request<{ items: ReadingShelfItem[]; series_continue: SeriesContinueItem[] }>(
+        "/api/reading"
+      );
     },
     createBook(form: FormData) {
       return request<{ id: string; cover_url?: string | null }>("/api/books", {
@@ -679,6 +790,10 @@ export function createApiClient(options: ApiClientOptions) {
         pricing?: "free" | "paid";
         price?: number;
         category_id?: string;
+        series_id?: string;
+        season_number?: number;
+        episode_number?: number;
+        clear_series?: boolean;
       }
     ) {
       return request<{ ok: boolean; status?: BookStatus }>(`/api/books/${id}`, {
@@ -857,6 +972,7 @@ export function createApiClient(options: ApiClientOptions) {
         pending_count: number;
         library_count: number;
         report_count: number;
+        series_count: number;
         library_counts: {
           listed: number;
           featured: number;
@@ -902,6 +1018,10 @@ export function createApiClient(options: ApiClientOptions) {
         pricing?: "free" | "paid";
         price?: number;
         category_id?: string;
+        series_id?: string;
+        season_number?: number;
+        episode_number?: number;
+        clear_series?: boolean;
       }
     ) {
       return request<{
@@ -917,6 +1037,9 @@ export function createApiClient(options: ApiClientOptions) {
           category?: Category | null;
           cover_url?: string | null;
           updated_at: string;
+          series?: SeriesRef | null;
+          season_number?: number | null;
+          episode_number?: number | null;
         };
       }>(`/api/admin/books/${id}`, {
         method: "PATCH",

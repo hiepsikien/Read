@@ -18,8 +18,9 @@ from ..covers import (
     save_cover_bytes,
 )
 from ..db import get_db
-from ..models import Book, Category, Chapter, ContentReport, GlossaryEntry, ModerationEvent, User
+from ..models import Book, Category, Chapter, ContentReport, GlossaryEntry, ModerationEvent, Series, User
 from ..moderation import allowed_admin_actions, event_payload, record_moderation_event
+from ..series_catalog import apply_series_placement, attach_series_fields
 from ..glossary import aliases_from_storage, normalize_lookup
 from ..speaking_cast import speaking_cast_plan
 from ..tts_settings import active_payload, get_active_tts, tts_settings_payload, upsert_tts_settings
@@ -102,6 +103,10 @@ class AdminCatalogBody(BaseModel):
     pricing: Literal["free", "paid"] | None = None
     price: float | None = None
     category_id: str | None = None
+    series_id: str | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
+    clear_series: bool = False
 
 
 class PatchUserRoleBody(BaseModel):
@@ -171,7 +176,7 @@ def _cast_warnings(book: Book, *, unmatched_count: int = 0, speaking_count: int 
 
 
 def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
-    return {
+    item = {
         "id": book.id,
         "title": book.title,
         "description": book.description,
@@ -196,6 +201,7 @@ def _queue_item(book: Book, chapter_count: int, report_count: int = 0) -> dict:
         "cover_url": cover_url_for(book.id, book.cover_path),
         "cast_status": getattr(book, "cast_status", None) or "draft",
     }
+    return attach_series_fields(item, book)
 
 
 @router.get("/summary")
@@ -283,10 +289,12 @@ def admin_summary(
         )
         or 0
     )
+    series_count = db.scalar(select(func.count()).select_from(Series)) or 0
     return {
         "pending_count": pending_count,
         "library_count": library_count,
         "report_count": open_reports + resolved_reports + dismissed_reports,
+        "series_count": series_count,
         "library_counts": {
             "listed": listed_count,
             "featured": featured_count,
@@ -309,7 +317,7 @@ def moderation_queue(
 ):
     books = (
         db.query(Book)
-        .options(joinedload(Book.publisher), joinedload(Book.category))
+        .options(joinedload(Book.publisher), joinedload(Book.category), joinedload(Book.series))
         .filter(Book.status == "pending_review")
         .order_by(Book.submitted_at.asc(), Book.updated_at.asc())
         .all()
@@ -336,6 +344,7 @@ def admin_books(
     query = db.query(Book).options(
         joinedload(Book.publisher),
         joinedload(Book.category),
+        joinedload(Book.series),
     )
     if status:
         if status not in {"draft", "pending_review", "published", "rejected"}:
@@ -385,10 +394,11 @@ def moderation_detail(
     book = (
         db.query(Book)
         .options(
-            joinedload(Book.publisher),
-            joinedload(Book.category),
-            joinedload(Book.chapters),
-        )
+        joinedload(Book.publisher),
+        joinedload(Book.category),
+        joinedload(Book.series),
+        joinedload(Book.chapters),
+    )
         .filter(Book.id == book_id)
         .one_or_none()
     )
@@ -437,44 +447,72 @@ def admin_update_book_catalog(
     ensure_categories(db)
     book = (
         db.query(Book)
-        .options(joinedload(Book.category))
+        .options(joinedload(Book.category), joinedload(Book.series))
         .filter(Book.id == book_id)
         .one_or_none()
     )
     if not book:
         raise HTTPException(status_code=404, detail="Book not found.")
-    _assert_listed_published(book)
+
+    content_update = any(
+        value is not None
+        for value in (body.title, body.description, body.pricing, body.price, body.category_id)
+    )
+    series_update = body.clear_series or any(
+        value is not None
+        for value in (body.series_id, body.season_number, body.episode_number)
+    )
+    if not content_update and not series_update:
+        raise HTTPException(status_code=400, detail="No changes provided.")
+
+    if content_update:
+        _assert_listed_published(book)
 
     previous = {
         "title": book.title,
         "description": book.description,
         "price_cents": book.price_cents,
         "category_id": book.category_id,
+        "series_id": book.series_id,
+        "season_number": book.season_number,
+        "episode_number": book.episode_number,
     }
 
-    title = body.title.strip() if body.title is not None else book.title
-    description = (
-        body.description.strip() if body.description is not None else book.description
-    )
-    if not title:
-        raise HTTPException(status_code=400, detail="Title is required.")
+    if content_update:
+        title = body.title.strip() if body.title is not None else book.title
+        description = (
+            body.description.strip() if body.description is not None else book.description
+        )
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required.")
 
-    price_cents = book.price_cents
-    if body.pricing == "free":
-        price_cents = 0
-    elif body.pricing == "paid" or body.price is not None:
-        dollars = body.price if body.price is not None else price_cents / 100
-        price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
+        price_cents = book.price_cents
+        if body.pricing == "free":
+            price_cents = 0
+        elif body.pricing == "paid" or body.price is not None:
+            dollars = body.price if body.price is not None else price_cents / 100
+            price_cents = max(1, round((dollars if dollars == dollars else 1) * 100))
 
-    if body.category_id is not None:
-        category = _get_category(db, body.category_id.strip() or None)
-        if not category:
-            raise HTTPException(status_code=400, detail="Category is required.")
-        book.category_id = category.id
+        if body.category_id is not None:
+            category = _get_category(db, body.category_id.strip() or None)
+            if not category:
+                raise HTTPException(status_code=400, detail="Category is required.")
+            book.category_id = category.id
 
-    book.title = title
-    book.description = description
-    book.price_cents = price_cents
+        book.title = title
+        book.description = description
+        book.price_cents = price_cents
+
+    if series_update:
+        apply_series_placement(
+            db,
+            book,
+            series_id=body.series_id,
+            season_number=body.season_number,
+            episode_number=body.episode_number,
+            clear_series=body.clear_series,
+        )
+
     book.updated_at = datetime.now(timezone.utc)
 
     changes = {}
@@ -495,6 +533,23 @@ def admin_update_book_catalog(
             "from": previous["category_id"],
             "to": book.category_id,
         }
+    if (
+        previous["series_id"] != book.series_id
+        or previous["season_number"] != book.season_number
+        or previous["episode_number"] != book.episode_number
+    ):
+        changes["series_placement"] = {
+            "from": {
+                "series_id": previous["series_id"],
+                "season_number": previous["season_number"],
+                "episode_number": previous["episode_number"],
+            },
+            "to": {
+                "series_id": book.series_id,
+                "season_number": book.season_number,
+                "episode_number": book.episode_number,
+            },
+        }
 
     if changes:
         record_moderation_event(
@@ -506,20 +561,25 @@ def admin_update_book_catalog(
         )
     db.commit()
     db.refresh(book)
+    if book.series_id and book.series is None:
+        book.series = db.get(Series, book.series_id)
     return {
         "ok": True,
-        "book": {
-            "id": book.id,
-            "title": book.title,
-            "description": book.description,
-            "price_cents": book.price_cents,
-            "status": book.status,
-            "visibility": book.visibility,
-            "featured": book.featured,
-            "category": category_payload(book.category),
-            "cover_url": cover_url_for(book.id, book.cover_path),
-            "updated_at": book.updated_at.isoformat(),
-        },
+        "book": attach_series_fields(
+            {
+                "id": book.id,
+                "title": book.title,
+                "description": book.description,
+                "price_cents": book.price_cents,
+                "status": book.status,
+                "visibility": book.visibility,
+                "featured": book.featured,
+                "category": category_payload(book.category),
+                "cover_url": cover_url_for(book.id, book.cover_path),
+                "updated_at": book.updated_at.isoformat(),
+            },
+            book,
+        ),
     }
 
 

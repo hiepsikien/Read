@@ -34,6 +34,10 @@ class User(Base):
         back_populates="publisher",
         foreign_keys="Book.publisher_id",
     )
+    series: Mapped[list["Series"]] = relationship(
+        back_populates="publisher",
+        foreign_keys="Series.publisher_id",
+    )
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="user")
     reading_progress: Mapped[list["ReadingProgress"]] = relationship(back_populates="user")
 
@@ -53,6 +57,29 @@ class Category(Base):
     books: Mapped[list["Book"]] = relationship(back_populates="category")
 
 
+class Series(Base):
+    __tablename__ = "series"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    publisher_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cover_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="listed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    publisher: Mapped[User] = relationship(back_populates="series", foreign_keys=[publisher_id])
+    books: Mapped[list["Book"]] = relationship(back_populates="series")
+
+    __table_args__ = (
+        CheckConstraint(
+            "visibility IN ('listed', 'hidden')",
+            name="ck_series_visibility",
+        ),
+    )
+
+
 class Book(Base):
     __tablename__ = "books"
 
@@ -61,6 +88,11 @@ class Book(Base):
     category_id: Mapped[str | None] = mapped_column(
         ForeignKey("categories.id", ondelete="RESTRICT"), nullable=True
     )
+    series_id: Mapped[str | None] = mapped_column(
+        ForeignKey("series.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    season_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -96,6 +128,7 @@ class Book(Base):
     publisher: Mapped[User] = relationship(back_populates="books", foreign_keys=[publisher_id])
     reviewer: Mapped[User | None] = relationship(foreign_keys=[reviewed_by])
     category: Mapped[Category | None] = relationship(back_populates="books")
+    series: Mapped["Series | None"] = relationship(back_populates="books")
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="book", cascade="all, delete-orphan")
     purchases: Mapped[list["Purchase"]] = relationship(back_populates="book")
     reading_progress: Mapped[list["ReadingProgress"]] = relationship(
@@ -113,6 +146,21 @@ class Book(Base):
         CheckConstraint(
             "visibility IN ('listed', 'hidden', 'removed')",
             name="ck_books_visibility",
+        ),
+        CheckConstraint(
+            "("
+            "series_id IS NULL AND season_number IS NULL AND episode_number IS NULL"
+            ") OR ("
+            "series_id IS NOT NULL AND season_number IS NOT NULL AND episode_number IS NOT NULL"
+            " AND season_number > 0 AND episode_number > 0"
+            ")",
+            name="ck_books_series_placement",
+        ),
+        UniqueConstraint(
+            "series_id",
+            "season_number",
+            "episode_number",
+            name="uq_books_series_season_episode",
         ),
     )
 

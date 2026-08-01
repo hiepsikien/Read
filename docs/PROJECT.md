@@ -179,12 +179,14 @@ read/
 
 - **users** — `reader` | `publisher` | `admin`; `firebase_uid` (unique, nullable), `password_hash` nullable (chỉ dùng cho dev token)
 - **categories** — `slug`, `label`, `sort_order` (seed từ `apps/api/app/categories.py`)
-- **books** — title, description, `price_cents` (0 = free), `category_id`, status `draft|pending_review|published|rejected`, moderation fields (`submitted_at`, `reviewed_at`, `reviewed_by`, `review_note`), `raw_text`, file nguồn
-- **chapters** — reading segments: `position`, `title`, `content`, `word_count`, **`group_index`**
-- **purchases** — user ↔ book (mock)
+- **series** — catalog parent (`title`, `description`, `publisher_id`, `visibility` `listed|hidden`); Season không có bảng riêng
+- **books** — title, description, `price_cents` (0 = free), `category_id`, optional `series_id` + `season_number` + `episode_number` (**Episode = Book**, đơn vị bán), status `draft|pending_review|published|rejected`, moderation fields (`submitted_at`, `reviewed_at`, `reviewed_by`, `review_note`), `raw_text`, file nguồn
+- **chapters** — reading segments / **parts trong một episode**: `position`, `title`, `content`, `word_count`, **`group_index`**
+- **purchases** — user ↔ book/episode (mock)
 - **app_settings** — key/value cấu hình runtime (TTS engine/gender/persona); cho admin đổi giọng đọc không cần restart
+- **reading shelf** — `GET /api/reading` trả `items` (in-progress) + `series_continue` (episode kế sau khi hoàn thành)
 
-Schema migration: `apps/api/alembic/versions/0002_publishing_foundation.py` (idempotent — an toàn với DB đã `create_all`).
+Hierarchy catalog: **Series → Season (số) → Episode (Book) → Parts (Chapters)**. Schema: `0012_series.py`, `0013_series_visibility.py` (idempotent — an toàn với DB đã `create_all`).
 
 ---
 
@@ -255,19 +257,23 @@ Chi tiết Firebase: xem [docs/FIREBASE_SETUP.md](./FIREBASE_SETUP.md). Secrets 
 |------|--------|
 | `/` | Thư viện |
 | `/login` | Đăng nhập demo |
-| `/books/[id]` | Chi tiết sách |
+| `/books/[id]` | Chi tiết sách / episode |
+| `/series/[id]` | Series browse theo Season → Episode |
 | `/read/[bookId]/[chapterId]` | In-app reader |
 | `/settings` | Account + tab **Narration** (TTS, chỉ admin) |
-| `/publisher` | Danh sách sách của publisher |
-| `/publisher/new` | Upload sách mới |
-| `/publisher/[id]` | Quản lý / split / publish |
+| `/publisher` | Danh sách series + episode của publisher |
+| `/publisher/series/new` | Tạo series |
+| `/publisher/series/[id]` | Quản lý series (meta/cover, xóa; admin thêm hide/show) |
+| `/publisher/new` | Upload episode (DOCX) |
+| `/publisher/[id]` | Quản lý / gắn series / split / publish |
 
-Mobile bổ sung: `/admin` (queue), `/admin/[id]` (review).
+Mobile bổ sung: `/admin` (queue + **Series** tab), `/admin/[id]` (review + series link), `/admin/[id]/edit` (catalog + series placement), `/series/[id]`, `/publisher/series-new`, `/publisher/series/[id]`.
 
 API tiêu biểu:
 - Auth: `/api/auth/dev-login` (chỉ khi `AUTH_DEV_MODE`), `/api/auth/me`, `/api/auth/enable-author`
 - Books: `/api/books`, `/api/books/[id]/split`, `/api/books/[id]/submit-review`, `/api/books/categories/list`, `/api/books/[id]/purchase`, `/api/chapters/[chapterId]`
-- Admin: `/api/admin/queue`, `/api/admin/books/[id]/approve`, `/api/admin/books/[id]/reject`, `/api/admin/settings/tts` (GET/PUT)
+- Series: `/api/series` (`mine=1`, `all=1`), `/api/series/[id]` (GET/PATCH/DELETE); `visibility` `listed|hidden` (PATCH visibility = admin); DELETE unassign episodes
+- Admin: `/api/admin/queue`, `/api/admin/books/[id]` (PATCH catalog + series placement), `/api/admin/books/[id]/approve`, `/api/admin/books/[id]/reject`, `/api/admin/settings/tts` (GET/PUT)
 - TTS: `/api/tts/options`, `/api/tts/preview`, `/api/tts/compare`, `/api/books/[id]/chapters/[cid]/audio` (POST prepare + GET segment)
 
 ---

@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
-import { ApiError, type BookListItem } from "@read/api-client";
+import { ApiError, type BookListItem, type SeriesListItem } from "@read/api-client";
 import { BookCover } from "../../components/BookCover";
 import { useAuth } from "../../lib/auth";
 import {
@@ -61,6 +61,7 @@ export default function PublisherHome() {
   const router = useRouter();
   const { user, api, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<BookListItem[]>([]);
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -69,8 +70,12 @@ export default function PublisherHome() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const data = await api.listBooks({ mine: true });
+      const [data, seriesPayload] = await Promise.all([
+        api.listBooks({ mine: true }),
+        api.listSeries({ mine: true }),
+      ]);
       setBooks(data.books);
+      setSeriesList(seriesPayload.series);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not load books.");
     } finally {
@@ -165,13 +170,47 @@ export default function PublisherHome() {
         }}
       />
 
-      <View style={styles.toolbar}>
-        <Text style={styles.title}>
-          Your books · {mainTotal}
-        </Text>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <View style={styles.seriesBlock}>
+        <View style={styles.seriesHeader}>
+          <Text style={styles.title}>Series · {seriesList.length}</Text>
+          <Pressable onPress={() => router.push("/publisher/series-new")} hitSlop={8}>
+            <Text style={styles.headerUploadText}>New</Text>
+          </Pressable>
+        </View>
+        {seriesList.length === 0 ? (
+          <Text style={styles.meta}>Create a series, then attach episodes from each book.</Text>
+        ) : (
+          seriesList.map((item) => (
+            <Pressable
+              key={item.id}
+              style={styles.seriesRow}
+              onPress={() => router.push(`/publisher/series/${item.id}`)}
+            >
+              <BookCover
+                title={item.title}
+                coverUrl={api.bookCoverUrl(item.cover_url, { cacheKey: item.updated_at })}
+                width={44}
+                height={coverHeightForWidth(44)}
+                showTitle={false}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.seriesRowTitle}>{item.title}</Text>
+                <Text style={styles.meta}>
+                  {item.episode_count} episode{item.episode_count === 1 ? "" : "s"}
+                  {item.visibility === "hidden" ? " · Hidden" : ""}
+                </Text>
+              </View>
+              <Text style={styles.headerUploadText}>Manage</Text>
+            </Pressable>
+          ))
+        )}
       </View>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      <View style={styles.toolbar}>
+        <Text style={styles.title}>Your books · {mainTotal}</Text>
+      </View>
 
       <ScrollView
         horizontal
@@ -358,6 +397,24 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   title: { fontSize: 18, fontWeight: "700", color: colors.ink },
+  seriesBlock: { gap: 10, marginBottom: 4 },
+  seriesHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  seriesTitle: { fontSize: 14, fontWeight: "700", color: colors.inkSoft, letterSpacing: 0.6 },
+  seriesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    padding: 12,
+    backgroundColor: colors.card,
+  },
+  seriesRowTitle: { fontSize: 16, fontWeight: "700", color: colors.ink },
   primaryBtn: {
     alignSelf: "flex-start",
     backgroundColor: colors.sage,

@@ -46,6 +46,7 @@ export default function BookDetailScreen() {
   const [hasRealProgress, setHasRealProgress] = useState(false);
   const [sameAuthor, setSameAuthor] = useState<BookListItem[]>([]);
   const [related, setRelated] = useState<BookListItem[]>([]);
+  const [nextEpisode, setNextEpisode] = useState<BookListItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [buying, setBuying] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -60,11 +61,16 @@ export default function BookDetailScreen() {
     try {
       const [data, recommendations] = await Promise.all([
         api.getBook(id),
-        api.getBookRecommendations(id).catch(() => ({ same_author: [], related: [] })),
+        api.getBookRecommendations(id).catch(() => ({
+          next_episode: null as BookListItem | null,
+          same_author: [] as BookListItem[],
+          related: [] as BookListItem[],
+        })),
       ]);
       setBook(data.book);
       setChapters(data.chapters);
       setAccess(data.access);
+      setNextEpisode(data.book.next_episode || recommendations.next_episode);
       setSameAuthor(recommendations.same_author);
       setRelated(recommendations.related);
       const local = await readLocalProgress(id);
@@ -193,6 +199,16 @@ export default function BookDetailScreen() {
             </View>
           ) : null}
           <Text style={styles.title}>{book.title}</Text>
+          {book.series ? (
+            <Pressable onPress={() => router.push(`/series/${book.series!.id}`)} hitSlop={6}>
+              <Text style={[styles.publisher, styles.publisherLink]}>
+                {book.series.title}
+                {book.season_number != null && book.episode_number != null
+                  ? ` · S${book.season_number}E${book.episode_number}`
+                  : ""}
+              </Text>
+            </Pressable>
+          ) : null}
           {book.publisher_handle ? (
             <Pressable onPress={() => router.push(`/@${book.publisher_handle}`)} hitSlop={6}>
               <Text style={[styles.publisher, styles.publisherLink]}>{book.publisher_name}</Text>
@@ -232,6 +248,16 @@ export default function BookDetailScreen() {
             ) : (
               <Text style={styles.buyBtnText}>Buy · {formatPrice(book.price_cents)}</Text>
             )}
+          </Pressable>
+        ) : null}
+        {nextEpisode ? (
+          <Pressable style={styles.buyBtn} onPress={() => router.push(`/books/${nextEpisode.id}`)}>
+            <Text style={styles.buyBtnText}>
+              Next episode
+              {nextEpisode.season_number != null && nextEpisode.episode_number != null
+                ? ` · S${nextEpisode.season_number}E${nextEpisode.episode_number}`
+                : ""}
+            </Text>
           </Pressable>
         ) : null}
       </View>
