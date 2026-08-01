@@ -5,6 +5,9 @@ import { createApiClient, type SessionUser } from "@read/api-client";
 const TOKEN_KEY = "read_token";
 const API_PORT = 8000;
 
+/** Last known bearer for audio segment fetches (survives SecureStore lock failures). */
+let playbackTokenCache: string | null = null;
+
 function hostFromExpo(): string | null {
   const candidates = [
     Constants.expoConfig?.hostUri,
@@ -46,10 +49,46 @@ export async function getToken() {
 
 export async function setToken(token: string | null) {
   if (token) {
+    playbackTokenCache = token;
     await SecureStore.setItemAsync(TOKEN_KEY, token);
   } else {
+    playbackTokenCache = null;
     await SecureStore.deleteItemAsync(TOKEN_KEY);
   }
+}
+
+/**
+ * Auth token for cloud narration headers.
+ *
+ * Prefer Firebase's in-memory ID token (works while the device is locked), then
+ * SecureStore, then the last token we successfully used this session. Never
+ * throw — a missing token must not force the offline-voice fallback.
+ */
+export async function resolvePlaybackAuthToken(): Promise<string | null> {
+  try {
+    const { getFirebaseIdToken, firebaseConfigured } = await import("./firebase");
+    if (firebaseConfigured()) {
+      const idToken = await getFirebaseIdToken();
+      if (idToken) {
+        playbackTokenCache = idToken;
+        return idToken;
+      }
+    }
+  } catch {
+    // Firebase unavailable / locked — try SecureStore / cache.
+  }
+
+  try {
+    const stored = await getToken();
+    if (stored) {
+      playbackTokenCache = stored;
+      return stored;
+    }
+  } catch {
+    // Keychain/SecureStore often fails while the device is locked.
+  }
+
+  return playbackTokenCache;
 }
 
 export function createMobileApi(

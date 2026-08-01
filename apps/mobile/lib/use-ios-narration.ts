@@ -8,7 +8,8 @@ import {
   type AudioSource,
 } from "expo-audio";
 import type { ApiClient, ChapterAudioManifest } from "@read/api-client";
-import { getToken } from "./api";
+import { ApiError } from "@read/api-client";
+import { resolvePlaybackAuthToken } from "./api";
 import { useIosSpeech } from "./use-ios-speech";
 
 type PlaybackState = "idle" | "preparing" | "speaking" | "paused";
@@ -305,6 +306,7 @@ export function useIosNarration({
       if (!bookId || !chapterId) return;
       const generation = ++requestGenerationRef.current;
       intentionalPauseRef.current = false;
+      setProvider("cloud");
       setPlaybackState("preparing");
       setError("");
       await ensureBackgroundAudioMode();
@@ -312,16 +314,21 @@ export function useIosNarration({
       try {
         // Prefer ref so a stale callback cannot reuse the previous chapter's manifest.
         const cached = manifestRef.current;
-        const [audioManifest, token] = await Promise.all([
-          cached ?? api.prepareChapterAudio(bookId, chapterId),
-          getToken(),
-        ]);
+        // Resolve token separately — SecureStore can fail while locked and must
+        // not abort a successful prepareChapterAudio (Promise.all used to).
+        const audioManifest =
+          cached ?? (await api.prepareChapterAudio(bookId, chapterId));
         if (generation !== requestGenerationRef.current) return;
         if (audioManifest.segments.length === 0) {
           throw new Error("No narration segments were generated.");
         }
 
-        authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
+        const token = await resolvePlaybackAuthToken();
+        if (token) {
+          authorizationRef.current = { Authorization: `Bearer ${token}` };
+        }
+        // Keep prior Authorization if token resolution failed (lock-screen handoff).
+
         manifestRef.current = audioManifest;
         setManifest(audioManifest);
 
@@ -335,13 +342,29 @@ export function useIosNarration({
           }
         }
         playSegment(audioManifest, startIndex);
-      } catch {
+      } catch (err) {
         if (generation !== requestGenerationRef.current) return;
         clearLockScreen();
-        setProvider("native");
+        const status = err instanceof ApiError ? err.status : 0;
+        const cloudUnavailable = status === 503;
+        if (cloudUnavailable) {
+          setProvider("native");
+          setPlaybackState("idle");
+          setError("Cloud voice unavailable. Using the offline device voice.");
+          await nativeSpeech.togglePlayback({ fromParagraphIndex });
+          return;
+        }
+        // Transient / auth / network — stay on cloud so the next chapter/episode
+        // does not stick on offline voice.
+        setProvider("cloud");
         setPlaybackState("idle");
-        setError("Cloud voice unavailable. Using the offline device voice.");
-        await nativeSpeech.togglePlayback({ fromParagraphIndex });
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Cloud voice failed. Tap Play to retry."
+        );
       }
     },
     [api, bookId, chapterId, clearLockScreen, nativeSpeech, playSegment]
@@ -380,18 +403,14 @@ export function useIosNarration({
     ]
   );
 
-  /** Always begin playback (never pause/resume). Used for chapter auto-advance. */
+  /** Always begin cloud playback (never pause/resume). Used for chapter auto-advance. */
   const startPlayback = useCallback(
     async (fromParagraphIndex = 0) => {
-      if (provider === "native") {
-        await nativeSpeech.stop();
-        await nativeSpeech.togglePlayback({ fromParagraphIndex });
-        return;
-      }
+      // Chapter/episode handoff must not inherit a prior offline fallback.
       if (playbackState === "preparing") return;
       await startCloudPlayback(Math.max(0, fromParagraphIndex));
     },
-    [nativeSpeech, playbackState, provider, startCloudPlayback]
+    [playbackState, startCloudPlayback]
   );
 
   const stop = useCallback(async () => {
@@ -562,16 +581,17 @@ export function useIosNarration({
     setError("");
 
     try {
-      const [audioManifest, token] = await Promise.all([
-        api.prepareChapterAudio(bookId, chapterId),
-        getToken(),
-      ]);
+      const audioManifest = await api.prepareChapterAudio(bookId, chapterId);
       if (generation !== requestGenerationRef.current) return;
       if (audioManifest.segments.length === 0) {
         throw new Error("No narration segments were generated.");
       }
 
-      authorizationRef.current = token ? { Authorization: `Bearer ${token}` } : {};
+      const token = await resolvePlaybackAuthToken();
+      if (token) {
+        authorizationRef.current = { Authorization: `Bearer ${token}` };
+      }
+
       manifestRef.current = audioManifest;
       setManifest(audioManifest);
 
