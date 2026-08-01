@@ -211,6 +211,122 @@ def test_screenplay_dialogue_without_direction_casts_distinct_voices():
     assert all('pitch="+0st"' in segment.text for segment in segments)
 
 
+def test_dash_led_paragraphs_continue_previous_speaker():
+    content = (
+        "NGUYỄN BỈNH KHIÊM Không. Tư duy cũ của nhà Lê sơ là trọng nông.\n\n"
+        "– *Một là, về đất đai*, phải định lại phép quân điền.\n\n"
+        "— Hai là, quan trọng hơn, phải cởi trói cho thương nghiệp.\n\n"
+        "AFONSO DE ALBUQUERQUE (58 tuổi) đứng trên mũi soái hạm."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={"nguyen binh khiem": "vi-VN-Chirp3-HD-Orus"},
+        narrator_gender="male",
+    )
+
+    assert len(segments) == 4
+    assert [segment.kind for segment in segments] == [
+        "dialogue",
+        "dialogue",
+        "dialogue",
+        "narration",
+    ]
+    assert [segment.speaker for segment in segments[:3]] == [
+        "Nguyễn Bỉnh Khiêm",
+        "Nguyễn Bỉnh Khiêm",
+        "Nguyễn Bỉnh Khiêm",
+    ]
+    assert [segment.voice for segment in segments[:3]] == [
+        "vi-VN-Chirp3-HD-Orus",
+        "vi-VN-Chirp3-HD-Orus",
+        "vi-VN-Chirp3-HD-Orus",
+    ]
+    assert "Một là, về đất đai, phải định lại phép quân điền." in segments[1].text
+    assert "Hai là, quan trọng hơn, phải cởi trói cho thương nghiệp." in segments[2].text
+    assert all("Nguyễn Bỉnh Khiêm." not in segment.text for segment in segments[:3])
+    assert segments[3].kind == "narration"
+    assert segments[3].voice == "vi-VN-Chirp3-HD-Charon"
+
+
+def test_dash_bullets_after_narration_stay_narration():
+    content = (
+        "Vua Mạc Đăng Dung họp triều.\n\n"
+        "- Một là củng cố biên giới.\n\n"
+        "– Hai là mở cửa biển."
+    )
+
+    segments = tts.chapter_audio_segments(content, "vi-VN-Neural2-D")
+
+    assert len(segments) == 3
+    assert all(segment.kind == "narration" for segment in segments)
+    assert all(segment.speaker is None for segment in segments)
+    assert "Một là củng cố biên giới." in segments[1].text
+    assert "Hai là mở cửa biển." in segments[2].text
+
+
+def test_italic_paragraphs_continue_previous_speaker_without_dash():
+    content = (
+        "THOMAS CROMWELL *(Giọng lạnh lùng, dứt khoát)* "
+        "Bệ hạ, để hợp thức hóa việc tách rời hoàn toàn với Rome, "
+        "bộ luật này quy định rất rõ:\n\n"
+        "*Điều thứ nhất: Vua, người kế vị và hậu duệ của ngài từ nay "
+        "chính là Nguyên thủ tối cao của Giáo hội Anh. Không phải Giáo hoàng.*\n\n"
+        "*Điều thứ hai: Ngài sẽ có đầy đủ thẩm quyền bổ nhiệm Giám mục.*\n\n"
+        "*Điều thứ ba: Mọi thẩm quyền giáo hội trước đây thuộc về Rome "
+        "nay thuộc về ngài.*\n\n"
+        "AFONSO DE ALBUQUERQUE (58 tuổi) đứng trên mũi soái hạm."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={"thomas cromwell": "vi-VN-Chirp3-HD-Orus"},
+        narrator_gender="male",
+    )
+
+    assert len(segments) == 5
+    assert [segment.kind for segment in segments] == [
+        "dialogue",
+        "dialogue",
+        "dialogue",
+        "dialogue",
+        "narration",
+    ]
+    assert [segment.speaker for segment in segments[:4]] == ["Thomas Cromwell"] * 4
+    assert [segment.voice for segment in segments[:4]] == ["vi-VN-Chirp3-HD-Orus"] * 4
+    assert "Bệ hạ, để hợp thức hóa" in segments[0].text
+    assert "Điều thứ nhất:" in segments[1].text
+    assert "Điều thứ hai:" in segments[2].text
+    assert "Điều thứ ba:" in segments[3].text
+    assert all("Thomas Cromwell." not in segment.text for segment in segments[:4])
+    assert 'pitch="-1st"' in segments[0].text  # lạnh lùng cue on opening line
+    assert segments[4].kind == "narration"
+
+
+def test_horizontal_bar_and_minus_dashes_continue_speaker():
+    content = (
+        "COLUMBUS Nhân danh Chúa.\n\n"
+        "― Điểm một: giữ vững boong tàu.\n\n"
+        "− Điểm hai: không được rút lui."
+    )
+
+    segments = tts.chapter_audio_segments(
+        content,
+        "vi-VN-Chirp3-HD-Charon",
+        engine="chirp3",
+        glossary_voices={"columbus": "vi-VN-Chirp3-HD-Orus"},
+    )
+
+    assert [segment.kind for segment in segments] == ["dialogue", "dialogue", "dialogue"]
+    assert [segment.speaker for segment in segments] == ["Columbus"] * 3
+    assert "Điểm một: giữ vững boong tàu." in segments[1].text
+    assert "Điểm hai: không được rút lui." in segments[2].text
+
+
 def test_chirp3_assigns_unique_character_personas():
     content = (
         "COLUMBUS Nhân danh Chúa!\n\n"

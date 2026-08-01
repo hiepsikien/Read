@@ -14,7 +14,7 @@ from google.cloud import texttospeech
 from .config import Settings
 
 MAX_TTS_INPUT_BYTES = 4500
-TTS_CACHE_VERSION = "v5"
+TTS_CACHE_VERSION = "v6"
 
 # Narrator stays a touch under dialogue pace with a slightly lower pitch so
 # multi-voice character casting can still contrast on top of prosody.
@@ -129,6 +129,25 @@ _SCREENPLAY_DIALOGUE_RE = re.compile(
 )
 _LEADING_STAGE_DIRECTION_RE = re.compile(
     r"^\*{1,3}\((?P<direction>[^)]*)\)\*{1,3}\s+(?P<dialogue>.+)$"
+)
+# Multi-paragraph speeches keep the same ALL CAPS speaker on later lines.
+# Continuations may open with a dash (hyphen / figure / en / em / horizontal /
+# minus — including long dashes pasted from Gemini), or be a whole italic
+# paragraph with no dash:
+#   NGUYỄN BỈNH KHIÊM Không. Tư duy cũ...
+#
+#   – *Một là, về đất đai*, phải định lại...
+#
+#   THOMAS CROMWELL *(Giọng lạnh lùng)* Bệ hạ...
+#
+#   *Điều thứ nhất: Vua, người kế vị...*
+_DIALOGUE_DASH_CLASS = r"\-\u2012\u2013\u2014\u2015\u2212"
+_DIALOGUE_CONTINUATION_RE = re.compile(
+    rf"^[{_DIALOGUE_DASH_CLASS}]\s*(?P<dialogue>\S[\s\S]*)$"
+)
+_ITALIC_DIALOGUE_CONTINUATION_RE = re.compile(
+    r"^(?P<wrap>\*{1,3}|_{1,3})(?!\()(?P<body>.+)(?P=wrap)$",
+    re.DOTALL,
 )
 _NON_SPEAKER_CUES = {
     "BÃI",
@@ -502,7 +521,11 @@ def _sanitize_speech_markup(value: str) -> str:
     )
     value = re.sub(r"\[(?:\d+(?:\s*[,–-]\s*\d+)*)\]", "", value)
     value = re.sub(r"\((?:\d+(?:\s*[,–-]\s*\d+)*)\)", "", value)
-    value = re.sub(r"^\s*(?:[-*+•]|\d+[.)]|[a-zA-Z][.)])\s+", "", value)
+    value = re.sub(
+        rf"^\s*(?:[{_DIALOGUE_DASH_CLASS}*+•]|\d+[.)]|[a-zA-Z][.)])\s+",
+        "",
+        value,
+    )
     value = re.sub(r"(\*{1,3}|_{1,3})(.*?)\1", r"\2", value)
     value = re.sub(r"[`#>~]", "", value)
     value = _soften_all_caps(value)
@@ -600,6 +623,29 @@ def _parse_screenplay_paragraph(
     if not dialogue:
         return None
     return speaker, role, direction, dialogue
+
+
+def _parse_dialogue_continuation(paragraph: str) -> str | None:
+    """Return dialogue text when the paragraph continues the previous speaker."""
+    value = paragraph.strip()
+    if not value:
+        return None
+
+    dash_match = _DIALOGUE_CONTINUATION_RE.match(value)
+    if dash_match:
+        dialogue = _sanitize_speech_markup(dash_match.group("dialogue").strip())
+        return dialogue or None
+
+    # Whole-paragraph italics (common for recited clauses) with no leading dash.
+    italic_match = _ITALIC_DIALOGUE_CONTINUATION_RE.match(value)
+    if not italic_match:
+        return None
+    body = italic_match.group("body").strip()
+    # Standalone ALL CAPS / scene labels stay narration even if italicized.
+    if _is_character_cue(body) or body in _NON_SPEAKER_CUES:
+        return None
+    dialogue = _sanitize_speech_markup(value)
+    return dialogue or None
 
 
 def _dialogue_ssml_chunks(
@@ -752,6 +798,7 @@ def chapter_audio_segments(
         max_character_voices=narration_style.max_character_voices,
     )
     segments: list[AudioSegment] = []
+    active_speaker = ""
 
     def append_segment(
         *,
@@ -781,15 +828,25 @@ def chapter_audio_segments(
 
     for paragraph_index, paragraph in enumerate(paragraphs):
         parsed = _parse_screenplay_paragraph(paragraph)
+        is_continuation = False
+        if not parsed and active_speaker:
+            continuation = _parse_dialogue_continuation(paragraph)
+            if continuation:
+                parsed = (active_speaker, "", "", continuation)
+                is_continuation = True
+
         if parsed:
             speaker, role, direction, dialogue = parsed
+            if speaker:
+                active_speaker = speaker
             presence = cast.presence_for(speaker or None)
             dialogue_chunks = _dialogue_ssml_chunks(
                 dialogue,
                 direction,
                 presence=presence,
-                speaker=speaker,
-                role=role,
+                # Continuations keep the cast voice but do not re-announce the name.
+                speaker="" if is_continuation else speaker,
+                role="" if is_continuation else role,
                 style=narration_style,
             )
             if dialogue_chunks:
@@ -805,6 +862,7 @@ def chapter_audio_segments(
                     )
                 continue
 
+        active_speaker = ""
         normalized = normalize_for_speech(paragraph)
         if not normalized:
             continue
