@@ -12,9 +12,10 @@ type BrandLogoProps = {
   format?: "svg" | "png";
 };
 
+// Kept in sync with scripts/brand/build.mjs, which prints both ratios.
 const ASPECT = {
-  wordmark: 823 / 354,
-  mark: 1,
+  wordmark: 984 / 354,
+  mark: 155 / 126,
 } as const;
 
 function brandSrc(
@@ -29,8 +30,8 @@ function brandSrc(
 
 /**
  * Brand asset helper.
- * - wordmark: full "Read" + book (use alone — do not also render text "Read")
- * - mark: book-only icon for compact chrome / app icons
+ * - wordmark: full "Read" + mark (use alone — do not also render text "Read")
+ * - mark: open book radiating sound arcs, for compact chrome / app icons
  */
 export function BrandLogo({
   variant = "wordmark",

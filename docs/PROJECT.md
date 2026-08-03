@@ -325,22 +325,41 @@ API tiêu biểu:
 
 ### Logo & brand assets
 
+**Mark hiện tại:** cuốn sách mở với **sóng âm toả ra từ trang phải** — nói đúng cả hai vế của sản phẩm (đọc *và* nghe TTS). Chữ “Read” giữ nguyên bộ chữ Fraunces cũ để thương hiệu không đứt gãy.
+
+**Toàn bộ asset được sinh ra từ code**, không chỉnh tay:
+
+```bash
+npm run brand:build
+```
+
+| File | Vai trò |
+|------|---------|
+| `scripts/brand/logo.mjs` | **Nguồn sự thật** — hình học của mark (toạ độ sách, bán kính sóng âm, độ dày nét, bảng màu) |
+| `scripts/brand/build.mjs` | Dựng lockup wordmark + xuất mọi SVG/PNG cho web và mobile |
+| `scripts/brand/read-letters.path` | Outline chữ “Read” (Fraunces) tách khỏi mark cũ |
+
+Đổi logo = sửa hằng số trong `logo.mjs` rồi chạy lại `npm run brand:build`. Script in ra tỉ lệ wordmark/mark — nếu tỉ lệ đổi, cập nhật `ASPECT` trong **cả hai** `BrandLogo.tsx` (web + mobile).
+
+Đầu ra:
+
 | Asset | Path | Dùng cho |
 |-------|------|----------|
-| **Original showcase** | `apps/web/public/brand/read-wordmark-hero.png` | Hero Library + nguồn sự thật |
-| Wordmark PNG/SVG | `read-wordmark.png` / `.svg` | Header, reader chrome |
-| Mark PNG/SVG (book only) | `read-mark.png` / `.svg` | Login, favicon source, compact UI |
+| Wordmark PNG/SVG | `apps/web/public/brand/read-wordmark.png` / `.svg` | Header, reader chrome |
+| Mark PNG/SVG | `read-mark.png` / `.svg` | Login, favicon source, compact UI |
 | Mono ink / white | `read-*-ink.*`, `read-*-white.*` | Reader theme tối (không tintColor) |
+| Hero | `read-wordmark-hero.png` | Hero Library (nền gradient mist) |
+| OG / social | `og-image.png` | Open Graph + Twitter card |
 | App icon (mist bg) | `apps/web/src/app/icon.png`, `apple-icon.png` | Favicon / Apple touch |
-| OG / social | `apps/web/public/brand/og-image.png` | Open Graph + Twitter card |
 | Mobile icon/splash | `apps/mobile/assets/icon.png`, `adaptive-icon.png`, `splash.png` | Expo `app.json` |
 | Mobile UI | `mark.png`, `wordmark.png`, `*-ink.png`, `*-white.png` | Library / login / reader |
 
 **Quy ước UI**
-- **Wordmark** = chữ + sách → dùng **một mình**, không kèm text “Read”
-- **Mark** = **chỉ icon sách** (không kèm chữ “d”) → compact chrome, login, app icon
-- `BrandLogo` hỗ trợ `tone`: `color` \| `ink` \| `white`
-- Hero Library dùng `read-wordmark-hero.png` (bản gốc có nền mist)
+- **Wordmark** = chữ + mark → dùng **một mình**, không kèm text “Read”
+- **Mark** = **chỉ icon sách + sóng âm** → compact chrome, login, app icon
+- `BrandLogo` hỗ trợ `tone`: `color` \| `ink` \| `white`; luôn truyền `height`, chiều rộng tự suy ra từ `ASPECT`
+- `adaptive-icon.png` (Android) cố ý nhỏ hơn `icon.png` vì hệ điều hành cắt ~25% viền ngoài
+- `icon.png` của mobile được flatten (không alpha) — iOS từ chối icon có kênh alpha
 
 ---
 
