@@ -358,8 +358,16 @@ npm run brand:build
 - **Wordmark** = chữ + mark → dùng **một mình**, không kèm text “Read”
 - **Mark** = **chỉ icon sách + sóng âm** → compact chrome, login, app icon
 - `BrandLogo` hỗ trợ `tone`: `color` \| `ink` \| `white`; luôn truyền `height`, chiều rộng tự suy ra từ `ASPECT`
-- `adaptive-icon.png` (Android) cố ý nhỏ hơn `icon.png` vì hệ điều hành cắt ~25% viền ngoài
-- `icon.png` của mobile được flatten (không alpha) — iOS từ chối icon có kênh alpha
+- `adaptive-icon.png` (Android) vẽ mark nhỏ hơn `icon.png` vì hệ điều hành cắt ~25% viền ngoài
+
+**Nền đặc (solid) vs trong suốt** — hai nhóm asset, đừng lẫn:
+
+| Nhóm | Alpha | Lý do |
+|------|-------|-------|
+| Ảnh đứng một mình: `icon.png`, `apple-icon.png`, `adaptive-icon.png`, `splash.png`, `og-image.png`, `read-wordmark-hero.png` | **Không** — flatten lên nền mist | Đây là ảnh hoàn chỉnh, không chồng lên gì. iOS còn từ chối icon có kênh alpha |
+| Logo trong UI: `read-mark*.png/svg`, `read-wordmark*.png/svg`, `mark*.png`, `wordmark*.png` | **Có** — nền trong suốt | `BrandLogo` vẽ chúng đè lên nền theo theme (paper / ink / sepia). Nếu flatten sẽ hiện một khối chữ nhật sáng quanh logo ở theme tối |
+
+`splash.png` dùng nền `#d5e2dd` **trùng** `splash.backgroundColor` trong `app.json` để phần letterbox của `resizeMode: contain` không lộ viền. Tương tự, `adaptiveIcon.backgroundColor` được đặt `#e7eef0` khớp nền foreground.
 
 ---
 

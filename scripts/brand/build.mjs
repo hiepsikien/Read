@@ -177,39 +177,52 @@ async function main() {
     });
   }
 
+  // Everything below is a standalone picture rather than an overlay, so each
+  // one is flattened onto a solid brand background — no alpha channel at all.
   console.log("app icons");
   const iconSvg = (size) =>
     markSquareSvg("color", size, { background: PALETTE.mist, fill: 0.6 });
-  await writePng(path.join(WEB_APP, "icon.png"), iconSvg(512), { width: 512 });
-  await writePng(path.join(WEB_APP, "apple-icon.png"), iconSvg(180), {
-    width: 180,
-  });
+  const solidMist = { flatten: PALETTE.mist };
+  await writePng(path.join(WEB_APP, "icon.png"), iconSvg(512), { width: 512 }, solidMist);
   await writePng(
-    path.join(MOBILE, "icon.png"),
-    iconSvg(1024),
-    { width: 1024 },
-    { flatten: PALETTE.mist }
+    path.join(WEB_APP, "apple-icon.png"),
+    iconSvg(180),
+    { width: 180 },
+    solidMist
   );
-  // Android trims the outer ~25%, so the foreground sits inside the safe zone.
+  await writePng(path.join(MOBILE, "icon.png"), iconSvg(1024), { width: 1024 }, solidMist);
+  // Android masks the foreground down to the middle ~66%, so the mark is drawn
+  // smaller here than on iOS while the background still covers the full tile.
   await writePng(
     path.join(MOBILE, "adaptive-icon.png"),
-    markSquareSvg("color", 1024, { fill: 0.42 }),
-    { width: 1024 }
+    markSquareSvg("color", 1024, { fill: 0.42, background: PALETTE.mist }),
+    { width: 1024 },
+    solidMist
   );
 
   console.log("hero / splash / social");
   await writePng(
     path.join(WEB_BRAND, "read-wordmark-hero.png"),
     bannerSvg(2000, 760, { fill: 0.7 }),
-    { width: 2000 }
+    { width: 2000 },
+    { flatten: PALETTE.mist }
   );
   await writePng(
     path.join(WEB_BRAND, "og-image.png"),
     bannerSvg(1200, 630, { fill: 0.62 }),
-    { width: 1200 }
+    { width: 1200 },
+    { flatten: PALETTE.mist }
   );
-  const { svg: splashWord } = wordmarkSvg("color");
-  await writePng(path.join(MOBILE, "splash.png"), splashWord, { width: 1200 });
+  // Matches expo splash.backgroundColor, so "contain" letterboxing is seamless.
+  const { svg: splashWord } = wordmarkSvg("color", {
+    background: PALETTE.mistDeep,
+  });
+  await writePng(
+    path.join(MOBILE, "splash.png"),
+    splashWord,
+    { width: 1200 },
+    { flatten: PALETTE.mistDeep }
+  );
 
   const { width, height } = wordmarkGeometry();
   console.log(`\nwordmark aspect ${width}/${height} = ${(width / height).toFixed(4)}`);
