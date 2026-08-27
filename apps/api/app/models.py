@@ -114,6 +114,10 @@ class Book(Base):
     source_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hub_work_id: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    hub_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hub_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hub_license_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(

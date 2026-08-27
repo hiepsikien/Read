@@ -180,7 +180,7 @@ read/
 - **users** — `reader` | `publisher` | `admin`; `firebase_uid` (unique, nullable), `password_hash` nullable (chỉ dùng cho dev token)
 - **categories** — `slug`, `label`, `sort_order` (seed từ `apps/api/app/categories.py`)
 - **series** — catalog parent (`title`, `description`, `publisher_id`, `visibility` `listed|hidden`); Season không có bảng riêng
-- **books** — title, description, `price_cents` (0 = free), `category_id`, optional `series_id` + `season_number` + `episode_number` (**Episode = Book**, đơn vị bán), status `draft|pending_review|published|rejected`, moderation fields (`submitted_at`, `reviewed_at`, `reviewed_by`, `review_note`), `raw_text`, file nguồn
+- **books** — title, description, `price_cents`, `category_id`, optional series placement, status `draft|pending_review|published|rejected`, `raw_text`, optional **`hub_work_id` / `hub_version` / `hub_content_hash`** (Knowledge Hub ingest)
 - **chapters** — reading segments / **parts trong một episode**: `position`, `title`, `content`, `word_count`, **`group_index`**
 - **purchases** — user ↔ book/episode (mock)
 - **app_settings** — key/value cấu hình runtime (TTS engine/gender/persona); cho admin đổi giọng đọc không cần restart
