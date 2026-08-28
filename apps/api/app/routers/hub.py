@@ -17,10 +17,18 @@ from ..categories import ensure_categories
 from ..chapters import count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
+from ..glossary import aliases_to_storage
 from ..handles import normalize_handle
-from ..models import Book, Chapter, User
+from ..models import Book, Chapter, GlossaryEntry, User
 
 router = APIRouter(prefix="/api/internal/hub", tags=["hub"])
+
+
+class HubGlossaryEntry(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    aliases: list[str] = Field(default_factory=list)
+    summary: str = ""
+    group_label: str = "Chú thích"
 
 
 class HubWorkIn(BaseModel):
@@ -38,6 +46,7 @@ class HubWorkIn(BaseModel):
     status: str = "pending_review"
     hub_license_snapshot: dict[str, Any] | None = None
     raw_text: str = Field(min_length=1)
+    glossary: list[HubGlossaryEntry] | None = None
 
 
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
@@ -79,6 +88,36 @@ def _hub_publisher(db: Session) -> User:
     return user
 
 
+def _upsert_hub_glossary(db: Session, book: Book, entries: list[HubGlossaryEntry] | None) -> int:
+    if entries is None:
+        return -1
+    now = datetime.now(timezone.utc)
+    db.execute(delete(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    for item in entries:
+        aliases = [a.strip() for a in item.aliases if str(a).strip()][:12]
+        db.add(
+            GlossaryEntry(
+                id=generate(),
+                book_id=book.id,
+                episode_key="",
+                episode_title="",
+                group_label=(item.group_label or "Chú thích")[:200],
+                name=item.name.strip()[:300],
+                aliases=aliases_to_storage(aliases),
+                summary=(item.summary or "")[:8000],
+                sort_key=item.name.casefold()[:300],
+                gender="",
+                age_band="",
+                presence="",
+                tts_voice="",
+                cast_locked=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    return len(entries)
+
+
 @router.post("/works")
 def upsert_hub_work(
     body: HubWorkIn,
@@ -108,11 +147,15 @@ def upsert_hub_work(
         db.add(book)
         db.flush()
     elif book.hub_content_hash and body.hub_content_hash == book.hub_content_hash:
+        glossary_count = _upsert_hub_glossary(db, book, body.glossary)
+        if glossary_count >= 0:
+            db.commit()
         return {
             "id": book.id,
             "hub_work_id": body.hub_work_id,
             "unchanged": True,
             "chapter_count": len(book.chapters),
+            "glossary_count": 0 if glossary_count < 0 else glossary_count,
         }
 
     units = split_into_chapters(
@@ -151,6 +194,7 @@ def upsert_hub_work(
                 group_index=unit.group_index,
             )
         )
+    glossary_count = _upsert_hub_glossary(db, book, body.glossary)
     db.commit()
     return {
         "id": book.id,
@@ -158,5 +202,6 @@ def upsert_hub_work(
         "created": created,
         "unchanged": False,
         "chapter_count": len(units),
+        "glossary_count": 0 if glossary_count < 0 else glossary_count,
         "status": book.status,
     }

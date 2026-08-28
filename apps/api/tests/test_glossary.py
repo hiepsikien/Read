@@ -58,6 +58,21 @@ def test_match_alias():
     assert matches[0][0].name == "Hugo Grotius"
 
 
+def test_find_footnote_marker_attached_to_name():
+    class Entry:
+        def __init__(self):
+            self.name = "Seneca"
+            self.aliases = ["[4]"]
+            self.episode_key = ""
+
+    found = find_names_in_text(
+        [Entry()],
+        "Nature has given all peoples a right of access. Seneca[4] thinks this is Nature's greatest service.",
+    )
+    assert [e.name for e in found] == ["Seneca"]
+    assert find_names_in_text([Entry()], "See note [40] only.") == []
+
+
 def test_find_names_in_paragraph():
     entries = parse_glossary_paragraphs(SAMPLE)
     text = "Bờ biển Calicut. VASCO DA GAMA đã đi vào lịch sử cùng Mạc Đăng Dung."

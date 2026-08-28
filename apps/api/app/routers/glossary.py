@@ -304,7 +304,7 @@ async def explain_selection(
         if body.paragraph_index < 0 or body.paragraph_index >= len(paragraphs):
             raise HTTPException(status_code=400, detail="paragraph_index out of range.")
         paragraph = paragraphs[body.paragraph_index]
-        found = find_names_in_text(entries, paragraph, episode_key=episode_key, limit=8)
+        found = find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
         if not found:
             raise HTTPException(
                 status_code=404,

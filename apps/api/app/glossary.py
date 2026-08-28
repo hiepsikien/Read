@@ -268,6 +268,14 @@ def _proper_noun_occurrence(text: str, folded_text: str, needle: str) -> bool:
     return False
 
 
+def _footnote_marker_in_text(text: str, needle: str) -> bool:
+    """True when [12] appears, including Seneca[12] — not a prefix of [120]."""
+    stripped = needle.strip()
+    if not re.fullmatch(r"\[\d+\]", stripped):
+        return False
+    return bool(re.search(rf"(?<!\d){re.escape(stripped)}(?!\d)", text))
+
+
 def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit: int = 8) -> list:
     """Find glossary entries whose name/alias appears in a paragraph."""
     if not text.strip():
@@ -282,6 +290,9 @@ def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit
             aliases = aliases_from_storage(aliases)
         best = 0
         for needle in [name, *list(aliases)]:
+            if _footnote_marker_in_text(text, needle):
+                best = max(best, 95)
+                continue
             folded_needle = normalize_lookup(needle)
             if len(folded_needle) < 3:
                 continue

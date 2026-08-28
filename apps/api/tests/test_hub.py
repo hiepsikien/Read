@@ -94,6 +94,46 @@ def test_hub_sync_upserts_by_work_id(client, db_session, hub_token):
     assert second.json()["id"] == created["id"]
 
 
+def test_hub_sync_stores_glossary_notes(client, db_session, hub_token):
+    from sqlalchemy import select
+
+    from app.glossary import aliases_from_storage
+    from app.models import Book, GlossaryEntry
+
+    ensure_categories(db_session)
+    body = {
+        "hub_work_id": "grotius--freedom_of_the_seas",
+        "hub_version": 1,
+        "hub_content_hash": "fn-1",
+        "title": "The Freedom of the Seas",
+        "category_slug": "essays",
+        "raw_text": "Chapter I\n\nSeneca[4] thinks this is Nature's greatest service.\n\n" * 20,
+        "glossary": [
+            {
+                "name": "Seneca",
+                "aliases": ["[4]"],
+                "summary": "Seneca, Natural Questions.",
+                "group_label": "Chú thích",
+            }
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["glossary_count"] == 1
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "grotius--freedom_of_the_seas"))
+    assert book is not None
+    rows = list(db_session.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id)))
+    assert len(rows) == 1
+    assert rows[0].name == "Seneca"
+    assert rows[0].cast_locked is True
+    assert "[4]" in aliases_from_storage(rows[0].aliases)
+
+
 def test_hub_sync_rejects_bad_token(client, hub_token):
     r = client.post(
         "/api/internal/hub/works",
