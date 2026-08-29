@@ -24,6 +24,7 @@ import {
   ApiError,
   annotateInlineTokens,
   parseContentBlocks,
+  parseInlineMarkdown,
   uniqueNotesFromTokens,
   type ChapterListItem,
   type ReaderNote,
@@ -70,6 +71,21 @@ type ReaderPayload = {
 
 const TOC_ROW_HEIGHT = 56;
 const EMPTY_NOTES: ReaderNote[] = [];
+
+function renderInlineTitle(value: string, weight?: "600" | "700") {
+  return parseInlineMarkdown(value).map((token, index) => (
+    <Text
+      key={`${index}-${token.text}`}
+      style={[
+        weight ? { fontWeight: weight } : null,
+        token.bold && styles.inlineBold,
+        token.italic && styles.inlineItalic,
+      ]}
+    >
+      {token.text}
+    </Text>
+  ));
+}
 
 export default function ReaderScreen() {
   const { bookId, chapterId } = useLocalSearchParams<{ bookId: string; chapterId: string }>();
@@ -889,7 +905,7 @@ export default function ReaderScreen() {
                   {data.book.title}
                 </Text>
                 <Text style={[styles.readerTitle, { color: palette.fg }]}>
-                  {data.chapter.title}
+                  {renderInlineTitle(data.chapter.title, "700")}
                 </Text>
                 <Text style={[styles.readerMeta, { color: palette.muted }]}>
                   {estimateMinutes(data.chapter.word_count)} min · Chapter{" "}
@@ -1010,7 +1026,9 @@ export default function ReaderScreen() {
       >
         <View ref={contentRef} collapsable={false}>
           <Text style={[styles.readerEyebrow, { color: palette.muted }]}>{data.book.title}</Text>
-          <Text style={[styles.readerTitle, { color: palette.fg }]}>{data.chapter.title}</Text>
+          <Text style={[styles.readerTitle, { color: palette.fg }]}>
+            {renderInlineTitle(data.chapter.title, "700")}
+          </Text>
           <Text style={[styles.readerMeta, { color: palette.muted }]}>
             {estimateMinutes(data.chapter.word_count)} min · Chapter {data.chapter.position} of{" "}
             {data.chapters.length}
@@ -1216,7 +1234,7 @@ export default function ReaderScreen() {
                   }}
                 >
                   <Text style={[{ color: palette.fg }, chapter.locked && styles.tocLocked]}>
-                    {chapter.title}
+                    {renderInlineTitle(chapter.title)}
                   </Text>
                   {active ? (
                     <Text style={[styles.tocLockedLabel, { color: palette.muted }]}>Now reading</Text>
@@ -1367,7 +1385,7 @@ const styles = StyleSheet.create({
   speechControls: { flexDirection: "row", alignItems: "center", gap: 6 },
   readerBody: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 60 },
   readerEyebrow: { fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase" },
-  readerTitle: { fontSize: 26, fontWeight: "700", marginTop: 8 },
+  readerTitle: { fontSize: 26, marginTop: 8 },
   readerMeta: { fontSize: 13, marginTop: 6 },
   paragraphs: { gap: 18, marginTop: 24 },
   paragraph: { borderRadius: 8, marginHorizontal: -6, paddingHorizontal: 6, paddingVertical: 3 },

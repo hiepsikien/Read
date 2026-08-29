@@ -546,7 +546,17 @@ function findClosingMarker(value: string, marker: string, start: number) {
 }
 
 function unescapeInlineMarkdown(value: string) {
-  return value.replace(/\\([\\*])/g, "$1");
+  return value.replace(/\\([\\*_])/g, "$1");
+}
+
+function isWordChar(ch: string | undefined): boolean {
+  return Boolean(ch && /[0-9A-Za-zÀ-ỹ]/.test(ch));
+}
+
+function underscoreRunLength(value: string, index: number): number {
+  let n = 0;
+  while (index + n < value.length && value[index + n] === "_") n += 1;
+  return n;
 }
 
 function unescapeCaption(value: string) {
@@ -566,12 +576,69 @@ export function isFilenameLikeCaption(caption: string): boolean {
   return false;
 }
 
+function takeInlineMarker(
+  value: string,
+  index: number
+): { marker: string; end: number } | { literal: string; end: number } | null {
+  if (value.startsWith("***", index)) return { marker: "***", end: index + 3 };
+  if (value.startsWith("**", index)) return { marker: "**", end: index + 2 };
+  if (value[index] === "*") return { marker: "*", end: index + 1 };
+  if (value[index] !== "_") return null;
+
+  const run = underscoreRunLength(value, index);
+  if (run >= 3 && !isWordChar(value[index + run])) {
+    return { literal: value.slice(index, index + run), end: index + run };
+  }
+  if (isWordChar(value[index - 1])) return null;
+  if (value.startsWith("___", index)) return { marker: "___", end: index + 3 };
+  if (value.startsWith("__", index)) return { marker: "__", end: index + 2 };
+  return { marker: "_", end: index + 1 };
+}
+
+function closedInlineSpan(value: string, marker: string, openEnd: number): number {
+  const closing = findClosingMarker(value, marker, openEnd);
+  if (closing < 0) return -1;
+  const inner = value.slice(openEnd, closing);
+  if (
+    marker[0] === "_" &&
+    (!inner || !/[A-Za-zÀ-ỹ]/.test(inner) || isWordChar(value[closing + marker.length]))
+  ) {
+    return -1;
+  }
+  return closing;
+}
+
+/** True when `_…` / `*…` opened in this paragraph but the closer is missing. */
+export function hasUnclosedInlineMarker(value: string): boolean {
+  for (let index = 0; index < value.length; ) {
+    if (value[index] === "\\" && index + 1 < value.length) {
+      index += 2;
+      continue;
+    }
+    const taken = takeInlineMarker(value, index);
+    if (!taken) {
+      index += 1;
+      continue;
+    }
+    if ("literal" in taken) {
+      index = taken.end;
+      continue;
+    }
+    const closing = closedInlineSpan(value, taken.marker, taken.end);
+    if (closing < 0) return true;
+    index = closing + taken.marker.length;
+  }
+  return false;
+}
+
 /**
  * Split chapter content into text paragraphs and figure blocks.
  * Figures are emitted by the DOCX importer as `![caption](/api/books/.../media/....jpg)`.
+ * Gutenberg often wraps one `_italic title_` across visual lines; Hub/Read
+ * then stores each line as its own paragraph, so those halves are rejoined.
  */
 export function parseContentBlocks(content: string): ContentBlock[] {
-  return content
+  const blocks = content
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.replace(/\s*\n\s*/g, " ").trim())
     .filter(Boolean)
@@ -587,64 +654,120 @@ export function parseContentBlocks(content: string): ContentBlock[] {
       }
       return { type: "text" as const, value: paragraph };
     });
+
+  const merged: ContentBlock[] = [];
+  for (const block of blocks) {
+    const prev = merged[merged.length - 1];
+    if (prev?.type === "text" && block.type === "text" && hasUnclosedInlineMarker(prev.value)) {
+      prev.value = `${prev.value} ${block.value}`;
+      continue;
+    }
+    merged.push(block);
+  }
+  return merged;
 }
 
 /**
- * Parse the deliberately small Markdown subset emitted by the DOCX importer:
- * `**bold**`, `*italic*`, and `***bold italic***`.
+ * Parse the small Markdown subset used by the DOCX importer and Gutenberg
+ * plain text: `**bold**` / `__bold__`, `*italic*` / `_italic_`, and the
+ * triple-marker bold-italic forms. Decorative underscore rules stay literal.
  */
 export function parseInlineMarkdown(value: string): InlineMarkdownToken[] {
-  const tokens: InlineMarkdownToken[] = [];
-  let plain = "";
+  return groupStyledChars(parseStyledChars(value));
+}
 
-  function push(text: string, bold: boolean, italic: boolean) {
-    if (!text) return;
-    const last = tokens[tokens.length - 1];
-    if (last && last.bold === bold && last.italic === italic) {
-      last.text += text;
-      return;
-    }
-    tokens.push({ text, bold, italic });
+/**
+ * One rendered character plus the offset it came from in the raw paragraph.
+ * Keeping the offset lets note spans be layered on top of parsed markdown
+ * instead of slicing the raw text first, which would split `_…_` pairs apart.
+ */
+interface StyledChar {
+  ch: string;
+  bold: boolean;
+  italic: boolean;
+  source: number;
+}
+
+function parseStyledChars(value: string): StyledChar[] {
+  const chars: StyledChar[] = [];
+
+  function emit(ch: string, bold: boolean, italic: boolean, source: number) {
+    chars.push({ ch, bold, italic, source });
   }
 
-  function flushPlain() {
-    if (!plain) return;
-    push(unescapeInlineMarkdown(plain), false, false);
-    plain = "";
+  function emitRange(from: number, to: number, bold: boolean, italic: boolean) {
+    for (let i = from; i < to; i += 1) emit(value[i], bold, italic, i);
   }
 
   for (let index = 0; index < value.length; ) {
     if (value[index] === "\\" && index + 1 < value.length) {
-      plain += value[index + 1];
+      emit(value[index + 1], false, false, index + 1);
       index += 2;
       continue;
     }
 
-    let marker: string | null = null;
-    if (value.startsWith("***", index)) marker = "***";
-    else if (value.startsWith("**", index)) marker = "**";
-    else if (value[index] === "*") marker = "*";
-
-    if (!marker) {
-      plain += value[index];
+    const taken = takeInlineMarker(value, index);
+    if (!taken) {
+      emit(value[index], false, false, index);
       index += 1;
       continue;
     }
-
-    const closing = findClosingMarker(value, marker, index + marker.length);
-    if (closing < 0) {
-      plain += marker;
-      index += marker.length;
+    if ("literal" in taken) {
+      emitRange(index, taken.end, false, false);
+      index = taken.end;
       continue;
     }
 
-    flushPlain();
-    const text = unescapeInlineMarkdown(value.slice(index + marker.length, closing));
-    push(text, marker.length >= 2, marker.length === 1 || marker.length === 3);
+    const closing = closedInlineSpan(value, taken.marker, taken.end);
+    if (closing < 0) {
+      emitRange(index, taken.end, false, false);
+      index = taken.end;
+      continue;
+    }
+
+    const marker = taken.marker;
+    const bold = marker.length >= 2;
+    const italic = marker.length === 1 || marker.length === 3;
+    for (let i = taken.end; i < closing; ) {
+      if (value[i] === "\\" && i + 1 < closing && /[\\*_]/.test(value[i + 1])) {
+        emit(value[i + 1], bold, italic, i + 1);
+        i += 2;
+        continue;
+      }
+      emit(value[i], bold, italic, i);
+      i += 1;
+    }
     index = closing + marker.length;
   }
 
-  flushPlain();
+  return chars;
+}
+
+function groupStyledChars(
+  chars: StyledChar[],
+  noteIdAt?: (source: number) => string | undefined
+): InlineMarkdownToken[] {
+  const tokens: InlineMarkdownToken[] = [];
+  for (const char of chars) {
+    const noteId = noteIdAt?.(char.source);
+    const last = tokens[tokens.length - 1];
+    if (
+      last &&
+      last.bold === char.bold &&
+      last.italic === char.italic &&
+      last.noteId === noteId
+    ) {
+      last.text += char.ch;
+      continue;
+    }
+    const token: InlineMarkdownToken = {
+      text: char.ch,
+      bold: char.bold,
+      italic: char.italic,
+    };
+    if (noteId) token.noteId = noteId;
+    tokens.push(token);
+  }
   return tokens;
 }
 
@@ -780,21 +903,13 @@ export function annotateInlineTokens(
 ): InlineMarkdownToken[] {
   const spans = findNoteSpans(value, notes, options);
   if (!spans.length) return parseInlineMarkdown(value);
-  const tokens: InlineMarkdownToken[] = [];
-  let cursor = 0;
-  for (const span of spans) {
-    if (span.start > cursor) {
-      tokens.push(...parseInlineMarkdown(value.slice(cursor, span.start)));
+  return groupStyledChars(parseStyledChars(value), (source) => {
+    for (const span of spans) {
+      if (source < span.start) break;
+      if (source < span.end) return span.note.id;
     }
-    for (const token of parseInlineMarkdown(value.slice(span.start, span.end))) {
-      tokens.push({ ...token, noteId: span.note.id });
-    }
-    cursor = span.end;
-  }
-  if (cursor < value.length) {
-    tokens.push(...parseInlineMarkdown(value.slice(cursor)));
-  }
-  return tokens;
+    return undefined;
+  });
 }
 
 export function noteDisplayTitle(note: ReaderNote): string {

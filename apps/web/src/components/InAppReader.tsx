@@ -524,7 +524,7 @@ export function InAppReader({
           {data.book.title}
         </p>
         <h1 className="brand-mark mt-3 text-3xl font-semibold leading-tight sm:text-4xl">
-          {data.chapter.title}
+          <InlineMarkdown value={data.chapter.title} />
         </h1>
         <p className="mt-3 text-sm" style={{ color: palette.muted }}>
           {estimateMinutes(data.chapter.word_count)} min · Chapter {data.chapter.position} of{" "}
@@ -732,7 +732,7 @@ export function InAppReader({
                 <li key={chapter.id}>
                   {chapter.locked ? (
                     <div className="rounded-lg px-3 py-2 opacity-55">
-                      <p>{chapter.title}</p>
+                      <p><InlineMarkdown value={chapter.title} /></p>
                       <p className="text-xs">Locked</p>
                     </div>
                   ) : (
@@ -747,7 +747,7 @@ export function InAppReader({
                             : undefined,
                       }}
                     >
-                      {chapter.title}
+                      <InlineMarkdown value={chapter.title} />
                     </Link>
                   )}
                 </li>
