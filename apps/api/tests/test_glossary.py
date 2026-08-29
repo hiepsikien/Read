@@ -58,6 +58,60 @@ def test_match_alias():
     assert matches[0][0].name == "Hugo Grotius"
 
 
+def test_reader_note_matches_only_its_marker():
+    class Entry:
+        def __init__(self, name, aliases, group_label="Chú thích", episode_title=""):
+            self.name = name
+            self.aliases = aliases
+            self.group_label = group_label
+            self.episode_key = ""
+            self.episode_title = episode_title
+
+    four = Entry("Seneca [4]", ["[4]"], episode_title="Seneca")
+    forty_eight = Entry("Seneca [48]", ["[48]"], episode_title="Seneca")
+    law = Entry("Luật các dân tộc", [], "Thuật ngữ", "Luật các dân tộc")
+    found = find_names_in_text(
+        [four, forty_eight, law],
+        "Seneca[4] nghĩ đây là ơn lớn nhất của Tự nhiên.",
+    )
+    assert [e.name for e in found] == ["Seneca [4]"]
+    later = find_names_in_text(
+        [four, forty_eight, law],
+        "theo luật các dân tộc thì biển là của chung.",
+    )
+    assert [e.name for e in later] == ["Luật các dân tộc"]
+
+
+def test_reader_notes_in_paragraph_follow_text_order():
+    class Entry:
+        def __init__(self, name, aliases):
+            self.name = name
+            self.aliases = aliases
+            self.group_label = "Chú thích"
+            self.episode_key = ""
+            self.episode_title = name.split(" [")[0]
+
+    notes = [
+        Entry("Augustine [12]", ["[12]"]),
+        Entry("Baldus [14]", ["[14]"]),
+        Entry("Moses [11]", ["[11]"]),
+        Entry("Tacitus [15]", ["[15]"]),
+        Entry("vua xứ Mysia [13]", ["[13]"]),
+    ]
+    text = (
+        "Moses[11] wrote first. Augustine[12] follows. The king of Mysia[13] "
+        "then Baldus[14] and Tacitus[15]."
+    )
+    found = find_names_in_text(notes, text, limit=24)
+    assert [e.name for e in found] == [
+        "Moses [11]",
+        "Augustine [12]",
+        "vua xứ Mysia [13]",
+        "Baldus [14]",
+        "Tacitus [15]",
+    ]
+
+
 def test_find_footnote_marker_attached_to_name():
     class Entry:
         def __init__(self):

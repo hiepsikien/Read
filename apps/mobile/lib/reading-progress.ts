@@ -1,6 +1,6 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import type { ReadingProgress } from "@read/api-client";
+import { appStorage } from "./storage";
 
 export type LocalReadingProgress = {
   chapterId: string;
@@ -57,7 +57,7 @@ export async function readLocalProgress(
 ): Promise<LocalReadingProgress | null> {
   const key = localProgressKey(bookId);
   try {
-    const raw = await AsyncStorage.getItem(key);
+    const raw = await appStorage.getItem(key);
     if (raw) return parseProgressRaw(raw);
   } catch {
     // Fall through to legacy SecureStore.
@@ -70,7 +70,7 @@ export async function readLocalProgress(
     const parsed = parseProgressRaw(legacy);
     if (parsed) {
       try {
-        await AsyncStorage.setItem(key, JSON.stringify(parsed));
+        await appStorage.setItem(key, JSON.stringify(parsed));
         await SecureStore.deleteItemAsync(key);
       } catch {
         // Keep serving the migrated value even if cleanup fails.
@@ -95,7 +95,7 @@ export async function writeLocalProgress(
   };
   // AsyncStorage — not SecureStore — so lock-screen / background auto-scroll
   // can persist without Keychain "User interaction is not allowed".
-  await AsyncStorage.setItem(localProgressKey(bookId), JSON.stringify(payload));
+  await appStorage.setItem(localProgressKey(bookId), JSON.stringify(payload));
 }
 
 /** Prefer the newer of server vs local progress. */

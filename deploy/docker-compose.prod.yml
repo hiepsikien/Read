@@ -4,7 +4,7 @@ name: read
 # Shares Angi Postgres (separate DB/user) and angi_net for Caddy routing.
 #
 # Usage (on VM, from /home/anh_nguyendinh_cs/Read/deploy):
-#   cp .env.prod.example .env.prod   # fill secrets
+#   ./scripts/deploy.sh   # rsyncs local deploy/.env.prod, then:
 #   docker compose -p read -f docker-compose.prod.yml --env-file .env.prod up -d --build
 # IMPORTANT: always use project name "read" (see top-level name:) so this does
 # not collide with Angi's compose project "deploy".
@@ -38,6 +38,7 @@ services:
       AI_EXPLAIN_ENABLED: ${AI_EXPLAIN_ENABLED:-false}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      HUB_SYNC_TOKEN: ${HUB_SYNC_TOKEN:-}
     volumes:
       - read_uploads:/data/uploads
       - ./firebase-service-account.json:/run/secrets/firebase.json:ro

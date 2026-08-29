@@ -152,6 +152,13 @@ export interface SeriesListItem {
   updated_at: string;
 }
 
+export interface BookSourceWork {
+  hub_work_id: string;
+  title: string;
+  year: number | null;
+  language: string;
+}
+
 export interface BookListItem {
   id: string;
   title: string;
@@ -166,6 +173,11 @@ export interface BookListItem {
   publisher_name?: string;
   publisher_handle?: string | null;
   publisher_id?: string;
+  author_name?: string;
+  author_hub_id?: string;
+  translator_name?: string;
+  translator_role?: string;
+  source?: BookSourceWork | null;
   source_filename?: string | null;
   chapter_count: number;
   created_at: string;
@@ -226,6 +238,48 @@ export function formatEpisodeCode(
 ): string | null {
   if (seasonNumber == null || episodeNumber == null) return null;
   return `S${seasonNumber}E${episodeNumber}`;
+}
+
+export function displayAuthorName(book: {
+  author_name?: string | null;
+  publisher_name?: string | null;
+}): string {
+  return (book.author_name || book.publisher_name || "").trim();
+}
+
+export function publisherIsDistinct(book: {
+  author_name?: string | null;
+  publisher_name?: string | null;
+}): boolean {
+  const author = displayAuthorName(book);
+  const publisher = (book.publisher_name || "").trim();
+  return Boolean(publisher && author && publisher !== author);
+}
+
+export function translatorCreditLine(book: {
+  translator_name?: string | null;
+  translator_role?: string | null;
+}): string | null {
+  const name = (book.translator_name || "").trim();
+  if (!name) return null;
+  if (book.translator_role === "hub_editorial" || name === "Knowledge Hub") {
+    return `Bản dịch ${name}`;
+  }
+  return name;
+}
+
+export function sourceCreditLine(book: { source?: BookSourceWork | null }): string | null {
+  const title = book.source?.title?.trim();
+  if (!title) return null;
+  const year = book.source?.year;
+  return year ? `Dịch từ ${title} (${year})` : `Dịch từ ${title}`;
+}
+
+export function isHubPublisherProfile(profile: {
+  handle?: string | null;
+  name?: string | null;
+}): boolean {
+  return profile.handle === "knowledgehub" || profile.name === "Knowledge Hub";
 }
 
 export interface ChapterAudioSegment {
@@ -348,6 +402,7 @@ export interface ExplainCandidate {
   episode_key: string;
   group_label: string;
   score?: number;
+  summary?: string;
 }
 
 export interface ExplainCard {
@@ -383,6 +438,11 @@ export interface BookDetail {
   publisher_name: string;
   publisher_handle?: string | null;
   publisher_id: string;
+  author_name?: string;
+  author_hub_id?: string;
+  translator_name?: string;
+  translator_role?: string;
+  source?: BookSourceWork | null;
   source_filename: string | null;
   created_at: string;
   updated_at: string;
@@ -446,6 +506,22 @@ export interface InlineMarkdownToken {
   text: string;
   bold: boolean;
   italic: boolean;
+  noteId?: string;
+}
+
+export interface ReaderNote {
+  id: string;
+  name: string;
+  aliases: string[];
+  episode_key: string;
+  episode_title: string;
+  group_label: string;
+}
+
+export interface NoteSpan {
+  start: number;
+  end: number;
+  note: ReaderNote;
 }
 
 export type ContentBlock =
@@ -570,6 +646,171 @@ export function parseInlineMarkdown(value: string): InlineMarkdownToken[] {
 
   flushPlain();
   return tokens;
+}
+
+const FOOTNOTE_MARKER = /^\[\d+\]$/;
+
+export function footnoteMarkerOf(note: ReaderNote): string | null {
+  for (const part of [note.name, ...note.aliases]) {
+    const trimmed = part.trim();
+    if (FOOTNOTE_MARKER.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+function foldVi(value: string) {
+  return value.toLocaleLowerCase("vi");
+}
+
+function uniquePhrases(parts: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    const key = foldVi(trimmed);
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/** In-text hook for a footnote, longest first (full phrase down to last word). */
+export function footnoteHooks(note: ReaderNote): string[] {
+  const bases = uniquePhrases(
+    [note.episode_title, note.name].map((part) => part.replace(/\s*\[\d+\]\s*$/, "").trim())
+  );
+  const hooks: string[] = [];
+  for (const base of bases) {
+    const words = base.split(/\s+/).filter(Boolean);
+    for (let index = 0; index < words.length; index += 1) {
+      hooks.push(words.slice(index).join(" "));
+    }
+  }
+  return uniquePhrases(hooks).sort((a, b) => b.length - a.length);
+}
+
+function hookStartBeforeMarker(before: string, note: ReaderNote): number | null {
+  const folded = foldVi(before);
+  for (const hook of footnoteHooks(note)) {
+    const foldedHook = foldVi(hook);
+    if (folded.endsWith(foldedHook)) {
+      return before.length - hook.length;
+    }
+    const punct = folded.match(/[\s.,;:!?…'"”]+$/);
+    if (!punct) continue;
+    const core = folded.slice(0, folded.length - punct[0].length);
+    if (core.endsWith(foldedHook)) {
+      return before.length - hook.length - punct[0].length;
+    }
+  }
+  return null;
+}
+
+export function findNoteSpans(
+  text: string,
+  notes: ReaderNote[],
+  options?: { phraseOnce?: Set<string> }
+): NoteSpan[] {
+  const occupied: Array<[number, number]> = [];
+  const spans: NoteSpan[] = [];
+  const phraseOnce = options?.phraseOnce;
+
+  function overlaps(start: number, end: number) {
+    return occupied.some(([left, right]) => start < right && end > left);
+  }
+
+  function take(start: number, end: number, note: ReaderNote) {
+    if (start < 0 || end <= start || end > text.length || overlaps(start, end)) return false;
+    occupied.push([start, end]);
+    spans.push({ start, end, note });
+    return true;
+  }
+
+  for (const note of notes) {
+    const marker = footnoteMarkerOf(note);
+    if (!marker) continue;
+    let from = 0;
+    while (from < text.length) {
+      const at = text.indexOf(marker, from);
+      if (at < 0) break;
+      const hooked = hookStartBeforeMarker(text.slice(0, at), note);
+      take(hooked ?? at, at + marker.length, note);
+      from = at + marker.length;
+    }
+  }
+
+  for (const note of notes) {
+    if (footnoteMarkerOf(note)) continue;
+    if (phraseOnce?.has(note.id)) continue;
+    const phrases = uniquePhrases([note.episode_title, ...note.aliases, note.name])
+      .filter((part) => part.length >= 3)
+      .sort((a, b) => b.length - a.length);
+    const folded = foldVi(text);
+    for (const phrase of phrases) {
+      const at = folded.indexOf(foldVi(phrase));
+      if (at >= 0 && take(at, at + phrase.length, note)) {
+        phraseOnce?.add(note.id);
+        break;
+      }
+    }
+  }
+
+  return spans.sort((a, b) => a.start - b.start);
+}
+
+export function annotateInlineTokens(
+  value: string,
+  notes: ReaderNote[],
+  options?: { phraseOnce?: Set<string> }
+): InlineMarkdownToken[] {
+  const spans = findNoteSpans(value, notes, options);
+  if (!spans.length) return parseInlineMarkdown(value);
+  const tokens: InlineMarkdownToken[] = [];
+  let cursor = 0;
+  for (const span of spans) {
+    if (span.start > cursor) {
+      tokens.push(...parseInlineMarkdown(value.slice(cursor, span.start)));
+    }
+    for (const token of parseInlineMarkdown(value.slice(span.start, span.end))) {
+      tokens.push({ ...token, noteId: span.note.id });
+    }
+    cursor = span.end;
+  }
+  if (cursor < value.length) {
+    tokens.push(...parseInlineMarkdown(value.slice(cursor)));
+  }
+  return tokens;
+}
+
+export function noteDisplayTitle(note: ReaderNote): string {
+  const name = (note.name || "").trim();
+  const group = (note.group_label || "").trim().toLowerCase();
+  const section = group.startsWith("bối cảnh") || name.toLowerCase().startsWith("bối cảnh");
+  if (!section) return name;
+  for (const candidate of [note.episode_title, ...note.aliases]) {
+    const text = (candidate || "").trim();
+    if (text && !/^\[\d+\]$/.test(text) && foldVi(text) !== foldVi(name)) {
+      return text.slice(0, 200);
+    }
+  }
+  return name;
+}
+
+export function uniqueNotesFromTokens(
+  tokens: InlineMarkdownToken[],
+  notes: ReaderNote[]
+): ReaderNote[] {
+  const byId = new Map(notes.map((note) => [note.id, note]));
+  const seen = new Set<string>();
+  const result: ReaderNote[] = [];
+  for (const token of tokens) {
+    if (!token.noteId || seen.has(token.noteId)) continue;
+    seen.add(token.noteId);
+    const note = byId.get(token.noteId);
+    if (note) result.push(note);
+  }
+  return result;
 }
 
 export class ApiError extends Error {
@@ -902,6 +1143,7 @@ export function createApiClient(options: ApiClientOptions) {
         };
         chapters: ChapterListItem[];
         progress?: ReadingProgress | null;
+        notes?: ReaderNote[];
       }>(`/api/books/${bookId}/chapters/${chapterId}`);
     },
     saveReadingProgress(

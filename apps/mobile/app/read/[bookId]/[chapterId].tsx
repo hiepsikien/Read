@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Dimensions,
   FlatList,
   Modal,
   Pressable,
@@ -14,7 +13,7 @@ import {
   type NativeSyntheticEvent,
   type View as ViewType,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Stack,
   useFocusEffect,
@@ -23,9 +22,11 @@ import {
 } from "expo-router";
 import {
   ApiError,
+  annotateInlineTokens,
   parseContentBlocks,
-  parseInlineMarkdown,
+  uniqueNotesFromTokens,
   type ChapterListItem,
+  type ReaderNote,
   type ReadingProgress,
 } from "@read/api-client";
 import { AuthenticatedImage } from "../../../components/AuthenticatedImage";
@@ -64,14 +65,18 @@ type ReaderPayload = {
   book: { id: string; title: string; price_cents: number; publisher_name: string };
   chapter: { id: string; position: number; title: string; content: string; word_count: number };
   chapters: ChapterListItem[];
+  notes?: ReaderNote[];
 };
 
 const TOC_ROW_HEIGHT = 56;
+const EMPTY_NOTES: ReaderNote[] = [];
 
 export default function ReaderScreen() {
   const { bookId, chapterId } = useLocalSearchParams<{ bookId: string; chapterId: string }>();
   const router = useRouter();
   const { user, api } = useAuth();
+  const insets = useSafeAreaInsets();
+  const [pageBox, setPageBox] = useState({ width: 0, height: 0 });
 
   const [data, setData] = useState<ReaderPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -83,6 +88,8 @@ export default function ReaderScreen() {
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainMode, setExplainMode] = useState<"ask" | "result">("ask");
   const [explainParagraph, setExplainParagraph] = useState<number | null>(null);
+  const [explainEntryId, setExplainEntryId] = useState<string | null>(null);
+  const [pressedParagraph, setPressedParagraph] = useState<number | null>(null);
   const { fontSize, theme, readingMode, changeFontSize, cycleTheme, cycleReadingMode } =
     useReaderPreferences();
 
@@ -114,6 +121,7 @@ export default function ReaderScreen() {
   const restoredKeyRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestProgressRef = useRef({ paragraphIndex: 0, scrollFraction: 0 });
+  const edgeTapGuardRef = useRef<{ consume: () => void } | null>(null);
   const resumeProgressRef = useRef<ReadingProgress | null>(null);
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
@@ -338,6 +346,17 @@ export default function ReaderScreen() {
     () => parseContentBlocks(data?.chapter.content ?? ""),
     [data?.chapter.content]
   );
+  const notes = data?.notes ?? EMPTY_NOTES;
+  const blockTokens = useMemo(() => {
+    const phraseOnce = new Set<string>();
+    return blocks.map((block) =>
+      block.type === "text" ? annotateInlineTokens(block.value, notes, { phraseOnce }) : null
+    );
+  }, [blocks, notes]);
+  const explainParagraphNotes = useMemo(() => {
+    if (explainEntryId || explainParagraph == null) return [];
+    return uniqueNotesFromTokens(blockTokens[explainParagraph] ?? [], notes);
+  }, [blockTokens, explainEntryId, explainParagraph, notes]);
 
   const handleChapterComplete = useCallback(() => {
     if (!bookId) return;
@@ -627,7 +646,7 @@ export default function ReaderScreen() {
   if (blockingLoad) {
     return (
       <View style={[styles.centered, { backgroundColor: palette.bg }]}>
-        <Stack.Screen options={{ headerShown: false }} />
+        <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
         <ActivityIndicator color={colors.sage} />
       </View>
     );
@@ -636,7 +655,7 @@ export default function ReaderScreen() {
   if (locked) {
     return (
       <SafeAreaView style={[styles.lockedWrap, { backgroundColor: palette.bg }]}>
-        <Stack.Screen options={{ headerShown: false }} />
+        <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
         <BrandLogo variant="mark" height={52} tone={brandTone} style={{ marginBottom: 8 }} />
         <Text style={[styles.lockedTitle, { color: palette.fg }]}>This chapter is locked</Text>
         <Text style={[styles.lockedBody, { color: palette.muted }]}>
@@ -655,7 +674,7 @@ export default function ReaderScreen() {
   if (error || !data) {
     return (
       <SafeAreaView style={[styles.centered, { backgroundColor: palette.bg }]}>
-        <Stack.Screen options={{ headerShown: false }} />
+        <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
         <Text style={{ color: palette.fg }}>{error || "Chapter unavailable."}</Text>
         <Pressable style={styles.linkBtn} onPress={() => router.replace("/")}>
           <Text style={[styles.linkText, { color: colors.sage }]}>Back to library</Text>
@@ -666,41 +685,31 @@ export default function ReaderScreen() {
 
   return (
     <SafeAreaView style={[styles.reader, { backgroundColor: palette.bg }]} edges={["top"]}>
-      <Stack.Screen options={{ headerShown: false }} />
+      <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
 
       <View style={[styles.bar, { borderBottomColor: withAlpha(palette.fg, 0.12) }]}>
-        <Pressable onPress={leaveReader} accessibilityLabel="Back to book">
+        <Pressable onPress={leaveReader} accessibilityLabel="Back to book" style={{ flexShrink: 0 }}>
           <BrandLogo variant="mark" height={26} tone={brandTone} />
         </Pressable>
         <View style={styles.barControls}>
           <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(-FONT_SIZE_STEP)}>
-            <Text style={{ color: palette.fg }}>A−</Text>
+            <Text style={[styles.chipText, { color: palette.fg }]}>A−</Text>
           </Pressable>
           <Pressable style={chip(palette.fg)} onPress={() => changeFontSize(FONT_SIZE_STEP)}>
-            <Text style={{ color: palette.fg }}>A+</Text>
+            <Text style={[styles.chipText, { color: palette.fg }]}>A+</Text>
           </Pressable>
           <Pressable style={chip(palette.fg)} onPress={cycleTheme}>
-            <Text style={{ color: palette.fg }}>{palette.label}</Text>
+            <Text style={[styles.chipText, { color: palette.fg }]}>{palette.label}</Text>
           </Pressable>
           <Pressable style={chip(palette.fg)} onPress={toggleReadingMode}>
-            <Text style={{ color: palette.fg, fontWeight: "600" }}>
+            <Text style={[styles.chipText, styles.chipTextStrong, { color: palette.fg }]}>
               {readingMode === "pages" ? "Pages" : "Scroll"}
             </Text>
           </Pressable>
           <Pressable style={chip(palette.fg)} onPress={() => setTocOpen(true)}>
-            <Text style={{ color: palette.fg, fontWeight: "600" }}>Contents</Text>
-          </Pressable>
-          <Pressable
-            style={chip(palette.fg)}
-            accessibilityRole="button"
-            accessibilityLabel="Ask about a name in this chapter"
-            onPress={() => {
-              setExplainMode("ask");
-              setExplainParagraph(null);
-              setExplainOpen(true);
-            }}
-          >
-            <Text style={{ color: palette.fg, fontWeight: "600" }}>Ask</Text>
+            <Text style={[styles.chipText, styles.chipTextStrong, { color: palette.fg }]}>
+              Contents
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -813,12 +822,66 @@ export default function ReaderScreen() {
 
       <Animated.View style={{ flex: 1, opacity: contentOpacity }}>
       {readingMode === "pages" ? (
-        <View style={{ flex: 1 }}>
+        <View
+          style={{ flex: 1 }}
+          onLayout={(event) => {
+            const { width, height } = event.nativeEvent.layout;
+            setPageBox((prev) =>
+              prev.width === width && prev.height === height ? prev : { width, height }
+            );
+          }}
+        >
+          {pageBox.height > 0 ? (
           <ReaderPagesView
             key={`pages-${chapterId}-${modeAnchorParagraph}-${fontSize}-${theme}`}
             blockCount={blocks.length}
-            pageWidth={Dimensions.get("window").width}
-            pageHeight={Math.max(320, Dimensions.get("window").height - 200)}
+            pageWidth={pageBox.width}
+            pageHeight={pageBox.height}
+            bottomReserve={36 + Math.max(insets.bottom, 8)}
+            renderFooter={(pageIndex, pageCount, isLast) => (
+              <View style={styles.pagesFooter}>
+                <View style={styles.pagesFooterSide}>
+                  {isLast && neighbors.prev && !neighbors.prev.locked ? (
+                    <Pressable
+                      hitSlop={NAV_HIT_SLOP}
+                      onPress={() => router.replace(`/read/${bookId}/${neighbors.prev!.id}`)}
+                    >
+                      <Text style={[styles.navText, { color: palette.fg }]}>← Previous</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                <Text
+                  pointerEvents="none"
+                  style={[styles.pagesPageLabel, { color: palette.muted }]}
+                >
+                  {pageIndex + 1} / {pageCount}
+                </Text>
+                <View style={[styles.pagesFooterSide, styles.pagesFooterSideRight]}>
+                  {isLast ? (
+                    neighbors.next ? (
+                      neighbors.next.locked ? (
+                        <Pressable hitSlop={NAV_HIT_SLOP} onPress={buy}>
+                          <Text style={[styles.navText, { color: palette.fg, fontWeight: "600" }]}>
+                            Unlock next →
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <Pressable
+                          hitSlop={NAV_HIT_SLOP}
+                          onPress={() => router.replace(`/read/${bookId}/${neighbors.next!.id}`)}
+                        >
+                          <Text style={[styles.navText, { color: palette.fg }]}>Next →</Text>
+                        </Pressable>
+                      )
+                    ) : (
+                      <Pressable hitSlop={NAV_HIT_SLOP} onPress={() => void markFinished()}>
+                        <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
+                      </Pressable>
+                    )
+                  ) : null}
+                </View>
+              </View>
+            )}
             mutedColor={palette.muted}
             firstPageHeader={
               <View style={{ gap: 6, marginBottom: 8 }}>
@@ -843,6 +906,7 @@ export default function ReaderScreen() {
               speech.playbackState === "speaking" || speech.playbackState === "paused"
             }
             initialParagraphIndex={modeAnchorParagraph}
+            edgeTapGuardRef={edgeTapGuardRef}
             onPageChange={(pageIndex, page, pageCount) => {
               const paragraphIndex = page.startIndex;
               const scrollFraction =
@@ -856,6 +920,8 @@ export default function ReaderScreen() {
             renderBlock={(index) => {
               const block = blocks[index];
               if (!block) return null;
+              const selected =
+                explainOpen && explainEntryId == null && explainParagraph === index;
               return (
                 <View
                   key={index}
@@ -865,8 +931,10 @@ export default function ReaderScreen() {
                   collapsable={false}
                   style={[
                     styles.paragraph,
-                    speech.currentParagraph === index && {
-                      backgroundColor: withAlpha(palette.fg, 0.08),
+                    (speech.currentParagraph === index ||
+                      selected ||
+                      pressedParagraph === index) && {
+                      backgroundColor: withAlpha(palette.fg, 0.1),
                     },
                   ]}
                 >
@@ -892,40 +960,36 @@ export default function ReaderScreen() {
                       ) : null}
                     </View>
                   ) : (
-                    <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
-                      <InlineMarkdown value={block.value} />
-                    </Text>
+                    <AnnotatedParagraph
+                      value={block.value}
+                      tokens={blockTokens[index] ?? []}
+                      notes={notes}
+                      palette={palette}
+                      fontSize={fontSize}
+                      onPressNote={(noteId) => {
+                        edgeTapGuardRef.current?.consume();
+                        setPressedParagraph(null);
+                        setExplainMode("result");
+                        setExplainEntryId(noteId);
+                        setExplainParagraph(index);
+                        setExplainOpen(true);
+                      }}
+                      onPressParagraph={() => {
+                        edgeTapGuardRef.current?.consume();
+                        setExplainMode("result");
+                        setExplainEntryId(null);
+                        setExplainParagraph(index);
+                        setExplainOpen(true);
+                      }}
+                      onPressParagraphIn={() => setPressedParagraph(index)}
+                      onPressParagraphOut={() => setPressedParagraph(null)}
+                    />
                   )}
                 </View>
               );
             }}
           />
-          <View style={[styles.nav, styles.pagesNav, { borderTopColor: withAlpha(palette.fg, 0.12) }]}>
-            {neighbors.prev && !neighbors.prev.locked ? (
-              <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.prev!.id}`)}>
-                <Text style={[styles.navText, { color: palette.fg }]}>← Previous</Text>
-              </Pressable>
-            ) : (
-              <View />
-            )}
-            {neighbors.next ? (
-              neighbors.next.locked ? (
-                <Pressable onPress={buy}>
-                  <Text style={[styles.navText, { color: palette.fg, fontWeight: "600" }]}>
-                    Unlock next →
-                  </Text>
-                </Pressable>
-              ) : (
-                <Pressable onPress={() => router.replace(`/read/${bookId}/${neighbors.next!.id}`)}>
-                  <Text style={[styles.navText, { color: palette.fg }]}>Next →</Text>
-                </Pressable>
-              )
-            ) : (
-              <Pressable onPress={() => void markFinished()}>
-                <Text style={[styles.navText, { color: palette.fg }]}>Done</Text>
-              </Pressable>
-            )}
-          </View>
+          ) : null}
         </View>
       ) : (
       <ScrollView
@@ -953,20 +1017,25 @@ export default function ReaderScreen() {
           </Text>
 
           <View style={styles.paragraphs}>
-            {blocks.map((block, index) => (
-              <View
-                key={index}
-                ref={(node) => {
-                  paragraphRefs.current[index] = node;
-                }}
-                collapsable={false}
-                style={[
-                  styles.paragraph,
-                  speech.currentParagraph === index && {
-                    backgroundColor: withAlpha(palette.fg, 0.08),
-                  },
-                ]}
-              >
+            {blocks.map((block, index) => {
+              const selected =
+                explainOpen && explainEntryId == null && explainParagraph === index;
+              return (
+                <View
+                  key={index}
+                  ref={(node) => {
+                    paragraphRefs.current[index] = node;
+                  }}
+                  collapsable={false}
+                  style={[
+                    styles.paragraph,
+                    (speech.currentParagraph === index ||
+                      selected ||
+                      pressedParagraph === index) && {
+                      backgroundColor: withAlpha(palette.fg, 0.1),
+                    },
+                  ]}
+                >
                 {block.type === "figure" ? (
                   <View style={styles.figure}>
                     {api.mediaUrl(block.src) ? (
@@ -989,21 +1058,34 @@ export default function ReaderScreen() {
                     ) : null}
                   </View>
                 ) : (
-                  <Pressable
-                    onLongPress={() => {
+                  <AnnotatedParagraph
+                    value={block.value}
+                    tokens={blockTokens[index] ?? []}
+                    notes={notes}
+                    palette={palette}
+                    fontSize={fontSize}
+                    onPressNote={(noteId) => {
+                      edgeTapGuardRef.current?.consume();
+                      setPressedParagraph(null);
                       setExplainMode("result");
+                      setExplainEntryId(noteId);
                       setExplainParagraph(index);
                       setExplainOpen(true);
                     }}
-                    delayLongPress={350}
-                  >
-                    <Text style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}>
-                      <InlineMarkdown value={block.value} />
-                    </Text>
-                  </Pressable>
+                    onPressParagraph={() => {
+                      edgeTapGuardRef.current?.consume();
+                      setExplainMode("result");
+                      setExplainEntryId(null);
+                      setExplainParagraph(index);
+                      setExplainOpen(true);
+                    }}
+                    onPressParagraphIn={() => setPressedParagraph(index)}
+                    onPressParagraphOut={() => setPressedParagraph(null)}
+                  />
                 )}
               </View>
-            ))}
+            );
+            })}
           </View>
           {speech.error ? (
             <Text accessibilityRole="alert" style={[styles.speechError, { color: palette.muted }]}>
@@ -1066,7 +1148,13 @@ export default function ReaderScreen() {
         chapterId={chapterId!}
         palette={palette}
         paragraphIndex={explainParagraph}
-        onClose={() => setExplainOpen(false)}
+        paragraphNotes={explainParagraphNotes}
+        entryId={explainEntryId}
+        onClose={() => {
+          setExplainOpen(false);
+          setExplainEntryId(null);
+          setPressedParagraph(null);
+        }}
       />
 
       <VoicePickerModal
@@ -1146,21 +1234,81 @@ export default function ReaderScreen() {
   );
 }
 
-function InlineMarkdown({ value }: { value: string }) {
+function noteStyle(groupLabel: string, palette: { fg: string }) {
+  const kind = groupLabel.trim().toLowerCase();
+  if (kind === "thuật ngữ") {
+    return {
+      textDecorationLine: "underline" as const,
+      textDecorationColor: withAlpha(palette.fg, 0.45),
+    };
+  }
+  if (kind === "bối cảnh") {
+    return {
+      textDecorationLine: "underline" as const,
+      textDecorationStyle: "dashed" as const,
+      textDecorationColor: withAlpha(palette.fg, 0.35),
+    };
+  }
+  return {
+    textDecorationLine: "underline" as const,
+    textDecorationStyle: "dotted" as const,
+    textDecorationColor: withAlpha(palette.fg, 0.55),
+    backgroundColor: withAlpha(palette.fg, 0.06),
+  };
+}
+
+function AnnotatedParagraph({
+  value,
+  tokens: tokensProp,
+  notes,
+  palette,
+  fontSize,
+  onPressNote,
+  onPressParagraph,
+  onPressParagraphIn,
+  onPressParagraphOut,
+}: {
+  value: string;
+  tokens?: ReturnType<typeof annotateInlineTokens>;
+  notes: ReaderNote[];
+  palette: { fg: string };
+  fontSize: number;
+  onPressNote: (noteId: string) => void;
+  onPressParagraph: () => void;
+  onPressParagraphIn?: () => void;
+  onPressParagraphOut?: () => void;
+}) {
+  const tokens = tokensProp ?? annotateInlineTokens(value, notes);
+  const byId = new Map(notes.map((note) => [note.id, note]));
   return (
-    <>
-      {parseInlineMarkdown(value).map((token, index) => (
-        <Text
-          key={`${index}-${token.text}`}
-          style={[
-            token.bold && styles.inlineBold,
-            token.italic && styles.inlineItalic,
-          ]}
-        >
-          {token.text}
-        </Text>
-      ))}
-    </>
+    <Text
+      accessibilityRole="text"
+      style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}
+    >
+      {tokens.map((token, index) => {
+        const note = token.noteId ? byId.get(token.noteId) : undefined;
+        return (
+          <Text
+            key={`${index}-${token.text}`}
+            suppressHighlighting={!token.noteId}
+            onPress={
+              token.noteId
+                ? () => onPressNote(token.noteId!)
+                : onPressParagraph
+            }
+            onPressIn={token.noteId ? undefined : onPressParagraphIn}
+            onPressOut={token.noteId ? undefined : onPressParagraphOut}
+            style={[
+              token.bold && styles.inlineBold,
+              token.italic && styles.inlineItalic,
+              note ? noteStyle(note.group_label, palette) : null,
+            ]}
+          >
+            {token.text}
+          </Text>
+        );
+      })}
+    </Text>
   );
 }
 
@@ -1172,12 +1320,15 @@ function withAlpha(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+const NAV_HIT_SLOP = { top: 12, bottom: 12, left: 10, right: 10 } as const;
+
 function chip(fg: string) {
   return {
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 6,
     borderRadius: 8,
     backgroundColor: withAlpha(fg, 0.08),
+    flexShrink: 0,
   } as const;
 }
 
@@ -1188,12 +1339,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 14,
+    gap: 8,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   barBrand: { fontSize: 18, fontWeight: "700" },
-  barControls: { flexDirection: "row", alignItems: "center", gap: 6 },
+  barControls: {
+    flexDirection: "row",
+    flexShrink: 1,
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 6,
+  },
+  chipText: { flexShrink: 0, fontSize: 14 },
+  chipTextStrong: { fontWeight: "600" },
   speechBar: {
     minHeight: 46,
     paddingHorizontal: 14,
@@ -1255,10 +1415,34 @@ const styles = StyleSheet.create({
     paddingTop: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  pagesNav: {
-    marginTop: 0,
-    marginHorizontal: 20,
-    marginBottom: 8,
+  pagesFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    minHeight: 36,
+  },
+  pagesFooterSide: {
+    flex: 1,
+    minHeight: 36,
+    justifyContent: "center",
+  },
+  pagesFooterSideRight: {
+    alignItems: "flex-end",
+  },
+  pagesPageLabel: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    fontSize: 12,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  navHit: {
+    minHeight: 36,
+    minWidth: 80,
+    justifyContent: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 4,
   },
   navText: { fontSize: 15 },
   lockedWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 10 },

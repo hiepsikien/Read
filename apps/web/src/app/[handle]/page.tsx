@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { isHubPublisherProfile } from "@read/api-client";
 import { BookCard } from "@/components/BookCard";
 import { createServerApi } from "@/lib/api-server";
 
@@ -26,8 +27,9 @@ export default async function PublicProfilePage({ params }: Props) {
   }
 
   const { profile, books } = payload;
-  const roleLabel =
-    profile.role === "publisher"
+  const roleLabel = isHubPublisherProfile(profile)
+    ? "Publisher"
+    : profile.role === "publisher"
       ? "Author"
       : profile.role === "admin"
         ? "Admin"
@@ -67,6 +69,7 @@ export default async function PublicProfilePage({ params }: Props) {
               price_cents={book.price_cents}
               publisher_name={book.publisher_name || profile.name}
               publisher_handle={book.publisher_handle || profile.handle}
+              author_name={book.author_name}
               chapter_count={book.chapter_count}
             />
           ))

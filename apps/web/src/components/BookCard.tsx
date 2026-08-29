@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { formatEpisodeCode } from "@read/api-client";
+import { displayAuthorName, formatEpisodeCode, publisherIsDistinct } from "@read/api-client";
 import { formatPrice } from "@/lib/format";
 
 export function BookCard({
@@ -9,6 +9,7 @@ export function BookCard({
   price_cents,
   publisher_name,
   publisher_handle,
+  author_name,
   chapter_count,
   series,
   season_number,
@@ -20,6 +21,7 @@ export function BookCard({
   price_cents: number;
   publisher_name: string;
   publisher_handle?: string | null;
+  author_name?: string | null;
   chapter_count: number;
   series?: { id: string; title: string } | null;
   season_number?: number | null;
@@ -27,6 +29,8 @@ export function BookCard({
 }) {
   const isFree = price_cents <= 0;
   const code = formatEpisodeCode(season_number, episode_number);
+  const author = displayAuthorName({ author_name, publisher_name }) || publisher_name;
+  const linkPublisher = Boolean(publisher_handle && !publisherIsDistinct({ author_name, publisher_name }));
 
   return (
     <article className="group border-b border-[var(--line)] py-6 transition first:pt-0 last:border-b-0 hover:opacity-95">
@@ -40,15 +44,15 @@ export function BookCard({
               {series.title}
               {code ? ` · ${code}` : ""}
             </Link>
-          ) : publisher_handle ? (
+          ) : linkPublisher ? (
             <Link
               href={`/@${publisher_handle}`}
               className="text-xs uppercase tracking-[0.14em] text-[var(--sage)] underline-offset-4 hover:underline"
             >
-              {publisher_name}
+              {author}
             </Link>
           ) : (
-            <p className="text-xs uppercase tracking-[0.14em] text-[var(--sage)]">{publisher_name}</p>
+            <p className="text-xs uppercase tracking-[0.14em] text-[var(--sage)]">{author}</p>
           )}
           <Link href={`/books/${id}`} className="block">
             <h2 className="brand-mark mt-1 text-2xl font-semibold leading-tight text-[var(--ink)] sm:text-3xl">

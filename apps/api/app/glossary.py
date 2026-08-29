@@ -276,6 +276,29 @@ def _footnote_marker_in_text(text: str, needle: str) -> bool:
     return bool(re.search(rf"(?<!\d){re.escape(stripped)}(?!\d)", text))
 
 
+NOTE_GROUPS = frozenset({"chú thích", "thuật ngữ", "bối cảnh"})
+_MARKER_NUM_RE = re.compile(r"\[(\d+)\]")
+
+
+def is_reader_note(entry: object) -> bool:
+    """Hub/editorial notes vs character glossary (NHÂN VẬT)."""
+    name = getattr(entry, "name", "") or ""
+    aliases = getattr(entry, "aliases", [])
+    if isinstance(aliases, str):
+        aliases = aliases_from_storage(aliases)
+    if any(re.fullmatch(r"\[\d+\]", str(part).strip()) for part in [name, *list(aliases)]):
+        return True
+    label = str(getattr(entry, "group_label", "") or "").strip().casefold()
+    return label in NOTE_GROUPS
+
+
+def _phrase_occurrence(folded_text: str, needle: str) -> bool:
+    if len(needle) < 3:
+        return False
+    pattern = re.compile(rf"(?<!\w){re.escape(needle)}(?!\w)")
+    return bool(pattern.search(folded_text))
+
+
 def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit: int = 8) -> list:
     """Find glossary entries whose name/alias appears in a paragraph."""
     if not text.strip():
@@ -288,21 +311,81 @@ def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit
         aliases = getattr(entry, "aliases")
         if isinstance(aliases, str):
             aliases = aliases_from_storage(aliases)
+        needles = [name, *list(aliases)]
+        anchor = str(getattr(entry, "episode_title", "") or "").strip()
+        if anchor and anchor not in needles:
+            needles.append(anchor)
         best = 0
-        for needle in [name, *list(aliases)]:
-            if _footnote_marker_in_text(text, needle):
-                best = max(best, 95)
-                continue
-            folded_needle = normalize_lookup(needle)
-            if len(folded_needle) < 3:
-                continue
-            if _proper_noun_occurrence(text, folded_text, folded_needle):
-                best = max(best, 80 + min(len(folded_needle), 20))
+        if is_reader_note(entry):
+            markers = [n for n in needles if re.fullmatch(r"\[\d+\]", str(n).strip())]
+            if markers:
+                if any(_footnote_marker_in_text(text, n) for n in markers):
+                    best = 95
+            else:
+                for needle in needles:
+                    folded_needle = normalize_lookup(str(needle))
+                    if _phrase_occurrence(folded_text, folded_needle):
+                        best = max(best, 80 + min(len(folded_needle), 20))
+        else:
+            for needle in [name, *list(aliases)]:
+                if _footnote_marker_in_text(text, needle):
+                    best = max(best, 95)
+                    continue
+                folded_needle = normalize_lookup(needle)
+                if len(folded_needle) < 3:
+                    continue
+                if _proper_noun_occurrence(text, folded_text, folded_needle):
+                    best = max(best, 80 + min(len(folded_needle), 20))
         if best <= 0:
             continue
         entry_episode = getattr(entry, "episode_key", "") or ""
         if episode_key and entry_episode and entry_episode.upper() == episode_key.upper():
             best += 15
         hits.append((entry, best))
-    hits.sort(key=lambda item: (-item[1], normalize_lookup(getattr(item[0], "name", ""))))
+    hits.sort(
+        key=lambda item: (
+            _first_hit_offset(item[0], text, folded_text),
+            _footnote_number(item[0]) if _footnote_number(item[0]) is not None else 10**9,
+            normalize_lookup(getattr(item[0], "name", "")),
+        )
+    )
     return [entry for entry, _ in hits[:limit]]
+
+
+def _entry_needles(entry: object) -> list[str]:
+    name = str(getattr(entry, "name", "") or "")
+    aliases = getattr(entry, "aliases", [])
+    if isinstance(aliases, str):
+        aliases = aliases_from_storage(aliases)
+    needles = [name, *list(aliases)]
+    anchor = str(getattr(entry, "episode_title", "") or "").strip()
+    if anchor and anchor not in needles:
+        needles.append(anchor)
+    return [str(part) for part in needles if str(part).strip()]
+
+
+def _footnote_number(entry: object) -> int | None:
+    for part in _entry_needles(entry):
+        stripped = part.strip()
+        if re.fullmatch(r"\[\d+\]", stripped):
+            return int(stripped[1:-1])
+    match = _MARKER_NUM_RE.search(str(getattr(entry, "name", "") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _first_hit_offset(entry: object, text: str, folded_text: str) -> int:
+    found: list[int] = []
+    for needle in _entry_needles(entry):
+        stripped = needle.strip()
+        if re.fullmatch(r"\[\d+\]", stripped):
+            match = re.search(rf"(?<!\d){re.escape(stripped)}(?!\d)", text)
+            if match:
+                found.append(match.start())
+            continue
+        folded_needle = normalize_lookup(stripped)
+        if len(folded_needle) < 3:
+            continue
+        at = folded_text.find(folded_needle)
+        if at >= 0:
+            found.append(at)
+    return min(found) if found else 10**9

@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { formatEpisodeCode, type BookListItem } from "@read/api-client";
+import { displayAuthorName, formatEpisodeCode, publisherIsDistinct, type BookListItem } from "@read/api-client";
 import { useAuth } from "../lib/auth";
 import { colors, coverHeightForWidth, formatPrice, radii, space } from "../lib/theme";
 import { BookCover } from "./BookCover";
@@ -17,6 +17,8 @@ export function BookTile({ book, width, onPress, onPressPublisher, onPressSeries
   const coverHeight = coverHeightForWidth(width);
   const coverUrl = api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at });
   const code = formatEpisodeCode(book.season_number, book.episode_number);
+  const author = displayAuthorName(book) || "Publisher";
+  const linkPublisher = Boolean(onPressPublisher && !publisherIsDistinct(book));
 
   return (
     <View style={[styles.tile, { width }]}>
@@ -46,15 +48,15 @@ export function BookTile({ book, width, onPress, onPressPublisher, onPressSeries
             {book.series.title}
           </Text>
         </Pressable>
-      ) : onPressPublisher ? (
+      ) : linkPublisher ? (
         <Pressable onPress={onPressPublisher} hitSlop={6}>
           <Text style={[styles.meta, styles.metaLink]} numberOfLines={1}>
-            {book.publisher_name || "Publisher"}
+            {author}
           </Text>
         </Pressable>
       ) : (
         <Text style={styles.meta} numberOfLines={1}>
-          {book.series?.title || book.publisher_name || "Publisher"}
+          {book.series?.title || author}
         </Text>
       )}
       <Pressable onPress={onPress}>

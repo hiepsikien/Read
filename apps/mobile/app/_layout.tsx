@@ -135,7 +135,10 @@ function RootNavigator() {
         <Stack.Screen name="claim-handle" options={{ title: "Choose handle" }} />
         <Stack.Screen name="books/[id]" options={{ title: "Book" }} />
         <Stack.Screen name="[handle]" options={{ title: "Profile" }} />
-        <Stack.Screen name="read/[bookId]/[chapterId]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="read/[bookId]/[chapterId]"
+          options={{ headerShown: false, gestureEnabled: false }}
+        />
         <Stack.Screen name="publisher/index" options={{ title: "Publisher" }} />
         <Stack.Screen name="publisher/new" options={{ title: "Upload book" }} />
         <Stack.Screen name="publisher/[id]" options={{ title: "Manage book" }} />

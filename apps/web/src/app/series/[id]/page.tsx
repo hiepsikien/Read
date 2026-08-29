@@ -87,6 +87,7 @@ export default async function SeriesDetailPage({ params }: Props) {
                 price_cents={item.price_cents}
                 publisher_name={item.publisher_name || series.publisher_name || "Publisher"}
                 publisher_handle={item.publisher_handle}
+                author_name={item.author_name}
                 chapter_count={item.chapter_count}
                 series={item.series}
                 season_number={item.season_number}

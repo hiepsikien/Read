@@ -212,6 +212,7 @@ export default async function HomePage() {
               price_cents={book.price_cents}
               publisher_name={book.publisher_name || "Publisher"}
               publisher_handle={book.publisher_handle}
+              author_name={book.author_name}
               chapter_count={book.chapter_count}
               series={book.series}
               season_number={book.season_number}

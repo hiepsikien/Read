@@ -19,6 +19,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..glossary import aliases_to_storage
 from ..handles import normalize_handle
+from ..credits import apply_credits
 from ..models import Book, Chapter, GlossaryEntry, User
 
 router = APIRouter(prefix="/api/internal/hub", tags=["hub"])
@@ -29,6 +30,36 @@ class HubGlossaryEntry(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     summary: str = ""
     group_label: str = "Chú thích"
+    kind: str = ""
+    marker: str = ""
+    anchor: str = ""
+    chapter: str = ""
+
+
+class HubNote(BaseModel):
+    id: str = ""
+    kind: str = "footnote"
+    label: str = Field(min_length=1, max_length=300)
+    marker: str = ""
+    anchor: str = ""
+    chapter: str = ""
+    body: str = ""
+    group_label: str = "Chú thích"
+
+
+class HubSourceWork(BaseModel):
+    hub_work_id: str = ""
+    title: str = ""
+    year: int | None = None
+    language: str = ""
+
+
+class HubCredits(BaseModel):
+    author_name: str = ""
+    author_hub_id: str = ""
+    translator_name: str = ""
+    translator_role: str = ""
+    source: HubSourceWork | None = None
 
 
 class HubWorkIn(BaseModel):
@@ -47,6 +78,8 @@ class HubWorkIn(BaseModel):
     hub_license_snapshot: dict[str, Any] | None = None
     raw_text: str = Field(min_length=1)
     glossary: list[HubGlossaryEntry] | None = None
+    notes: list[HubNote] | None = None
+    credits: HubCredits | None = None
 
 
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
@@ -88,19 +121,50 @@ def _hub_publisher(db: Session) -> User:
     return user
 
 
-def _upsert_hub_glossary(db: Session, book: Book, entries: list[HubGlossaryEntry] | None) -> int:
-    if entries is None:
+def _notes_as_glossary(notes: list[HubNote]) -> list[HubGlossaryEntry]:
+    rows: list[HubGlossaryEntry] = []
+    for item in notes:
+        aliases = [item.marker.strip()] if item.marker.strip() and item.marker.strip() != item.label else []
+        if item.kind != "footnote" and item.anchor.strip() and item.anchor.strip() != item.label:
+            aliases.append(item.anchor.strip())
+        rows.append(
+            HubGlossaryEntry(
+                name=item.label.strip()[:300],
+                aliases=aliases[:12],
+                summary=(item.body or "")[:8000],
+                group_label=(item.group_label or "Chú thích")[:200],
+                kind=item.kind,
+                marker=item.marker.strip(),
+                anchor=item.anchor.strip(),
+                chapter=item.chapter.strip(),
+            )
+        )
+    return rows
+
+
+def _upsert_hub_glossary(
+    db: Session,
+    book: Book,
+    entries: list[HubGlossaryEntry] | None,
+    notes: list[HubNote] | None = None,
+) -> int:
+    if notes is not None:
+        entries = _notes_as_glossary(notes)
+    elif entries is None:
         return -1
     now = datetime.now(timezone.utc)
     db.execute(delete(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
     for item in entries:
         aliases = [a.strip() for a in item.aliases if str(a).strip()][:12]
+        marker = (item.marker or "").strip()
+        if marker and marker not in aliases and marker != item.name.strip():
+            aliases.insert(0, marker)
         db.add(
             GlossaryEntry(
                 id=generate(),
                 book_id=book.id,
-                episode_key="",
-                episode_title="",
+                episode_key=(item.chapter or "")[:32],
+                episode_title=(item.anchor or "")[:300],
                 group_label=(item.group_label or "Chú thích")[:200],
                 name=item.name.strip()[:300],
                 aliases=aliases_to_storage(aliases),
@@ -119,7 +183,7 @@ def _upsert_hub_glossary(db: Session, book: Book, entries: list[HubGlossaryEntry
 
 
 @router.post("/works")
-def upsert_hub_work(
+def create_hub_work(
     body: HubWorkIn,
     db: Annotated[Session, Depends(get_db)],
     _: Annotated[None, Depends(_require_hub_token)],
@@ -132,56 +196,32 @@ def upsert_hub_work(
         category = next((c for c in categories if c.slug == "other"), categories[0])
     publisher = _hub_publisher(db)
     now = datetime.now(timezone.utc)
-    book = db.scalar(select(Book).where(Book.hub_work_id == body.hub_work_id))
-    created = book is None
-    if book is None:
-        book = Book(
-            id=generate(),
-            publisher_id=publisher.id,
-            category_id=category.id,
-            title=body.title,
-            description=body.description or body.title,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(book)
-        db.flush()
-    elif book.hub_content_hash and body.hub_content_hash == book.hub_content_hash:
-        glossary_count = _upsert_hub_glossary(db, book, body.glossary)
-        if glossary_count >= 0:
-            db.commit()
-        return {
-            "id": book.id,
-            "hub_work_id": body.hub_work_id,
-            "unchanged": True,
-            "chapter_count": len(book.chapters),
-            "glossary_count": 0 if glossary_count < 0 else glossary_count,
-        }
-
     units = split_into_chapters(
         body.raw_text, preserve_paragraphs=True, length=body.split_length
     )
     if not units:
         raise HTTPException(status_code=400, detail="Could not split manuscript into chapters.")
 
-    book.publisher_id = publisher.id
-    book.category_id = category.id
-    book.title = body.title
-    book.description = body.description or body.title
-    book.price_cents = max(0, body.price_cents)
-    book.status = body.status
-    book.source_filename = f"{body.hub_work_id}.txt"
-    book.source_path = None
-    book.raw_text = body.raw_text
-    book.hub_work_id = body.hub_work_id
-    book.hub_version = body.hub_version
-    book.hub_content_hash = body.hub_content_hash
-    book.hub_license_snapshot = json.dumps(body.hub_license_snapshot or {}, ensure_ascii=False)
-    book.updated_at = now
-    if body.status == "pending_review":
-        book.submitted_at = now
-
-    db.execute(delete(Chapter).where(Chapter.book_id == book.id))
+    book = Book(
+        id=generate(),
+        publisher_id=publisher.id,
+        category_id=category.id,
+        title=body.title,
+        description=body.description or body.title,
+        price_cents=max(0, body.price_cents),
+        status=body.status,
+        source_filename=f"{body.hub_work_id}.txt",
+        raw_text=body.raw_text,
+        hub_work_id=body.hub_work_id,
+        hub_version=body.hub_version,
+        hub_content_hash=body.hub_content_hash,
+        hub_license_snapshot=json.dumps(body.hub_license_snapshot or {}, ensure_ascii=False),
+        submitted_at=now if body.status == "pending_review" else None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(book)
+    db.flush()
     for index, unit in enumerate(units):
         db.add(
             Chapter(
@@ -194,12 +234,14 @@ def upsert_hub_work(
                 group_index=unit.group_index,
             )
         )
-    glossary_count = _upsert_hub_glossary(db, book, body.glossary)
+    glossary_count = _upsert_hub_glossary(db, book, body.glossary, body.notes)
+    if body.credits is not None:
+        apply_credits(book, body.credits.model_dump())
     db.commit()
     return {
         "id": book.id,
         "hub_work_id": body.hub_work_id,
-        "created": created,
+        "created": True,
         "unchanged": False,
         "chapter_count": len(units),
         "glossary_count": 0 if glossary_count < 0 else glossary_count,

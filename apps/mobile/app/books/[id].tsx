@@ -13,6 +13,10 @@ import {
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   ApiError,
+  displayAuthorName,
+  publisherIsDistinct,
+  sourceCreditLine,
+  translatorCreditLine,
   type BookDetail,
   type BookListItem,
   type ChapterListItem,
@@ -170,6 +174,11 @@ export default function BookDetailScreen() {
       : null;
   const totalWords = chapters.reduce((sum, c) => sum + c.word_count, 0);
   const coverUrl = api.bookCoverUrl(book.cover_url, { cacheKey: book.updated_at });
+  const author = displayAuthorName(book) || book.publisher_name;
+  const translatorLine = translatorCreditLine(book);
+  const sourceLine = sourceCreditLine(book);
+  const showPublisher = publisherIsDistinct(book);
+  const byline = translatorLine ? `${author} · ${translatorLine}` : author;
   const readLabel = !firstChapter
     ? "No chapters yet"
     : hasRealProgress
@@ -209,13 +218,23 @@ export default function BookDetailScreen() {
               </Text>
             </Pressable>
           ) : null}
-          {book.publisher_handle ? (
+          {!showPublisher && book.publisher_handle ? (
             <Pressable onPress={() => router.push(`/@${book.publisher_handle}`)} hitSlop={6}>
-              <Text style={[styles.publisher, styles.publisherLink]}>{book.publisher_name}</Text>
+              <Text style={[styles.publisher, styles.publisherLink]}>{byline}</Text>
             </Pressable>
           ) : (
-            <Text style={styles.publisher}>{book.publisher_name}</Text>
+            <Text style={styles.publisher}>{byline}</Text>
           )}
+          {showPublisher && book.publisher_handle ? (
+            <Pressable onPress={() => router.push(`/@${book.publisher_handle}`)} hitSlop={6}>
+              <Text style={[styles.publisher, styles.publisherLink]}>
+                Xuất bản bởi {book.publisher_name}
+              </Text>
+            </Pressable>
+          ) : showPublisher ? (
+            <Text style={styles.publisher}>Xuất bản bởi {book.publisher_name}</Text>
+          ) : null}
+          {sourceLine ? <Text style={styles.publisher}>{sourceLine}</Text> : null}
           <View style={styles.metaRow}>
             <Text style={styles.meta}>{formatPrice(book.price_cents)}</Text>
             <Text style={styles.metaDot}>·</Text>

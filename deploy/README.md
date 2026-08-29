@@ -76,7 +76,26 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod exec caddy caddy 
 
 ## Deploy / update API
 
-From Mac (rsync source + compose):
+Runtime env: local `deploy/.env.prod` (gitignored). `./scripts/deploy.sh` rsyncs it to the VM; compose uses `--env-file .env.prod`. Docker build does not read secrets.
+
+First time on the Mac:
+
+```bash
+cp deploy/.env.prod.example deploy/.env.prod   # fill READ_DB_PASSWORD, HUB_SYNC_TOKEN, …
+```
+
+From the Mac (repo root). SSH host `angi-vm` (or `SSH_HOST` / `deploy/.env.sync`).
+
+```bash
+./scripts/deploy.sh           # confirm, rsync API + .env.prod, rebuild, alembic, health
+./scripts/deploy.sh --yes     # no prompts
+./scripts/deploy.sh --dry-run
+# npm run deploy -- --yes
+```
+
+Does **not** copy Firebase JSON or uploads. Does **not** replace Postgres.
+
+Manual equivalent (what the script runs):
 
 ```bash
 rsync -avz --delete \
@@ -86,14 +105,11 @@ rsync -avz --delete \
 
 rsync -avz deploy/docker-compose.prod.yml deploy/.env.prod.example deploy/README.md \
   angi-vm:~/Read/deploy/
-```
+rsync -avz deploy/.env.prod angi-vm:~/Read/deploy/
+ssh angi-vm 'chmod 600 ~/Read/deploy/.env.prod'
 
-On VM:
-
-```bash
-cd ~/Read/deploy
-cp .env.prod.example .env.prod   # first time only — fill READ_DB_PASSWORD etc.
-docker compose -p read -f docker-compose.prod.yml --env-file .env.prod up -d --build
+ssh angi-vm 'cd ~/Read/deploy && docker compose -p read -f docker-compose.prod.yml --env-file .env.prod up -d --build'
+ssh angi-vm 'cd ~/Read/deploy && docker compose -p read -f docker-compose.prod.yml --env-file .env.prod exec -T read-api alembic upgrade head'
 curl -fsS https://read-api.antunai.com/health
 ```
 

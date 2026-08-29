@@ -223,3 +223,19 @@ def test_list_books_includes_publisher_handle(client, seeded):
     assert response.status_code == 200
     books = response.json()["books"]
     assert any(book.get("publisher_handle") == "coastwriter" for book in books)
+
+
+def test_indie_books_keep_empty_credits(client, seeded):
+    response = client.get("/api/books")
+    book = next(item for item in response.json()["books"] if item["title"] == "Listed Book")
+    assert book["publisher_name"] == "Author"
+    assert book["author_name"] == "Author"
+    assert book["author_hub_id"] == ""
+    assert book["translator_name"] == ""
+    assert book["translator_role"] == ""
+    assert book["source"] is None
+    detail = client.get(f"/api/books/{book['id']}")
+    assert detail.status_code == 200
+    payload = detail.json()["book"]
+    assert payload["author_name"] == "Author"
+    assert payload["source"] is None

@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import type { BookListItem } from "@read/api-client";
+import {
+  displayAuthorName,
+  publisherIsDistinct,
+  sourceCreditLine,
+  translatorCreditLine,
+  type BookListItem,
+} from "@read/api-client";
 import { BookCard } from "@/components/BookCard";
 import { BookChapterList } from "@/components/BookChapterList";
 import { ContinueReadingButton } from "@/components/ContinueReadingButton";
@@ -36,6 +42,7 @@ function RecommendationSection({
           price_cents={item.price_cents}
           publisher_name={item.publisher_name || "Publisher"}
           publisher_handle={item.publisher_handle}
+          author_name={item.author_name}
           chapter_count={item.chapter_count}
         />
       ))}
@@ -68,6 +75,10 @@ export default async function BookDetailPage({ params }: Props) {
   const firstChapter = chapters[0];
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.word_count, 0);
   const nextEpisode = book.next_episode || recommendations.next_episode;
+  const author = displayAuthorName(book) || book.publisher_name;
+  const translatorLine = translatorCreditLine(book);
+  const sourceLine = sourceCreditLine(book);
+  const showPublisher = publisherIsDistinct(book);
 
   return (
     <div className="fade-up mx-auto max-w-3xl">
@@ -88,26 +99,39 @@ export default async function BookDetailPage({ params }: Props) {
             ? ` · S${book.season_number}E${book.episode_number}`
             : ""}
         </Link>
-      ) : book.publisher_handle ? (
+      ) : !showPublisher && book.publisher_handle ? (
         <Link
           href={`/@${book.publisher_handle}`}
           className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)] underline-offset-4 hover:underline"
         >
-          {book.publisher_name}
+          {author}
         </Link>
       ) : (
         <p className="mt-8 text-xs uppercase tracking-[0.18em] text-[var(--sage)]">
-          {book.publisher_name}
+          {author}
+          {translatorLine ? ` · ${translatorLine}` : ""}
         </p>
       )}
-      {book.series && book.publisher_handle ? (
+      {!book.series && !showPublisher && translatorLine ? (
+        <p className="mt-2 text-xs text-[var(--ink-soft)]">{translatorLine}</p>
+      ) : null}
+      {book.series ? (
+        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--sage)]">
+          {author}
+          {translatorLine ? ` · ${translatorLine}` : ""}
+        </p>
+      ) : null}
+      {showPublisher && book.publisher_handle ? (
         <Link
           href={`/@${book.publisher_handle}`}
           className="mt-2 block text-xs text-[var(--ink-soft)] underline-offset-4 hover:underline"
         >
-          {book.publisher_name}
+          Xuất bản bởi {book.publisher_name}
         </Link>
+      ) : showPublisher ? (
+        <p className="mt-2 text-xs text-[var(--ink-soft)]">Xuất bản bởi {book.publisher_name}</p>
       ) : null}
+      {sourceLine ? <p className="mt-2 text-xs text-[var(--ink-soft)]">{sourceLine}</p> : null}
       <h1 className="brand-mark mt-3 text-4xl font-semibold leading-tight text-[var(--ink)] sm:text-5xl">
         {book.title}
       </h1>

@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..access import can_access_chapter
 from ..auth import get_current_user_optional, require_publisher
 from ..config import get_settings
 from ..db import get_db
@@ -23,9 +22,12 @@ from ..explain import (
     candidate_payload,
     compose_card,
     dumps_card,
+    entry_cache_key,
     loads_card,
     maybe_generate_ai_context,
+    paragraph_card_title,
     paragraph_window,
+    single_paragraph,
 )
 from ..glossary import (
     aliases_from_storage,
@@ -33,9 +35,10 @@ from ..glossary import (
     find_glossary_matches,
     find_names_in_text,
     infer_episode_key,
+    is_reader_note,
     parse_glossary_docx,
 )
-from ..models import Book, Chapter, ExplainCache, GlossaryEntry, Purchase, User
+from ..models import Book, Chapter, ExplainCache, GlossaryEntry, User
 from ..tts_settings import get_active_tts
 from ..voice_cast import ensure_entries_cast
 
@@ -69,13 +72,6 @@ def _can_manage_book(book: Book, user: User | None) -> bool:
     return book.publisher_id == user.id
 
 
-def _has_purchase(db: Session, user_id: str, book_id: str) -> bool:
-    row = db.scalar(
-        select(Purchase.id).where(Purchase.user_id == user_id, Purchase.book_id == book_id)
-    )
-    return bool(row)
-
-
 def _get_visible_book(
     db: Session,
     book_id: str,
@@ -95,25 +91,15 @@ def _require_chapter_access(
     *,
     book: Book,
     chapter_id: str,
-    user: User | None,
 ) -> Chapter:
+    """Notes/explain follow the chapter the reader already opened.
+
+    Do not apply the paid-chapter purchase gate here. Reading still locks
+    later groups; footnotes in an open chapter are part of that text.
+    """
     chapter = db.get(Chapter, chapter_id)
     if not chapter or chapter.book_id != book.id:
         raise HTTPException(status_code=404, detail="Chapter not found.")
-    purchased = bool(user and _has_purchase(db, user.id, book.id))
-    if not can_access_chapter(
-        book=book,
-        chapter=chapter,
-        user_id=user.id if user else None,
-        purchased=purchased,
-    ):
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "error": "Purchase required.",
-                "book": {"id": book.id, "price_cents": book.price_cents},
-            },
-        )
     return chapter
 
 
@@ -126,9 +112,9 @@ def _entry_list_item(entry: GlossaryEntry, *, compact: bool) -> dict:
         "episode_key": entry.episode_key,
         "group_label": entry.group_label,
     }
+    item["episode_title"] = entry.episode_title
     if not compact:
         item["summary"] = entry.summary
-        item["episode_title"] = entry.episode_title
         item["gender"] = entry.gender or None
         item["age_band"] = entry.age_band or None
         item["tts_voice"] = entry.tts_voice or None
@@ -262,7 +248,7 @@ async def explain_selection(
     user: Annotated[User | None, Depends(get_current_user_optional)],
 ):
     book = _get_visible_book(db, book_id, user)
-    chapter = _require_chapter_access(db, book=book, chapter_id=chapter_id, user=user)
+    chapter = _require_chapter_access(db, book=book, chapter_id=chapter_id)
 
     query = (body.query or "").strip()
     if len(query) > 120:
@@ -274,6 +260,8 @@ async def explain_selection(
     )
 
     selected: GlossaryEntry | None = None
+    paragraph_explain = False
+    note_candidates: list[dict] = []
 
     if body.entry_id:
         selected = next((row for row in entries if row.id == body.entry_id), None)
@@ -304,23 +292,12 @@ async def explain_selection(
         if body.paragraph_index < 0 or body.paragraph_index >= len(paragraphs):
             raise HTTPException(status_code=400, detail="paragraph_index out of range.")
         paragraph = paragraphs[body.paragraph_index]
-        found = find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
-        if not found:
-            raise HTTPException(
-                status_code=404,
-                detail="No glossary names found in this paragraph.",
-            )
-        if len(found) > 1:
-            return {
-                "status": "candidates",
-                "query": "",
-                "candidates": [candidate_payload(entry) for entry in found],
-                "card": None,
-                "cache_hit": False,
-                "ai_used": False,
-            }
-        selected = found[0]
-        query = selected.name
+        paragraph_explain = True
+        query = paragraph_card_title(paragraph)
+        note_candidates = [
+            candidate_payload(entry, include_summary=True)
+            for entry in find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
+        ]
     else:
         raise HTTPException(
             status_code=400,
@@ -332,40 +309,71 @@ async def explain_selection(
     if not query:
         raise HTTPException(status_code=400, detail="Query is required.")
 
-    need_context = body.need_context
-    if selected is not None and selected.summary and not body.need_context:
-        need_context = False
-
-    key = cache_key(
-        book_id=book.id,
-        chapter_id=chapter.id,
-        query=query,
-        glossary_entry_id=selected.id if selected else None,
-        paragraph_index=body.paragraph_index,
-        need_context=need_context,
+    editorial = bool(selected is not None and is_reader_note(selected))
+    book_note = selected.summary if selected else ""
+    # Footnotes and whole-paragraph taps wait for "Giải thích thêm".
+    want_ai = bool(body.need_context) if (editorial or paragraph_explain) else bool(
+        body.need_context or not book_note
     )
+
+    if selected is not None:
+        key = entry_cache_key(book_id=book.id, glossary_entry_id=selected.id)
+    else:
+        key = cache_key(
+            book_id=book.id,
+            chapter_id=chapter.id,
+            query=query,
+            glossary_entry_id=None,
+            paragraph_index=body.paragraph_index,
+            need_context=False,
+        )
     cached = db.scalar(select(ExplainCache).where(ExplainCache.cache_key == key))
+    passage = (
+        single_paragraph(chapter.content, body.paragraph_index)
+        if paragraph_explain
+        else paragraph_window(chapter.content, body.paragraph_index)
+    )
     if cached:
         card = loads_card(cached.response_json)
+        generated = False
+        if want_ai and not str(card.get("ai_context") or "").strip():
+            settings = get_settings()
+            ai_context = await maybe_generate_ai_context(
+                settings=settings,
+                query=query,
+                book_note=book_note or str(card.get("book_note") or ""),
+                passage=passage,
+                need_context=True,
+                editorial=editorial,
+                passage_explain=paragraph_explain,
+            )
+            if ai_context:
+                card["ai_context"] = ai_context
+                sources = list(card.get("sources") or [])
+                if "ai" not in sources:
+                    sources.append("ai")
+                card["sources"] = sources
+                cached.response_json = dumps_card(card)
+                db.commit()
+                generated = True
         return {
             "status": "ok",
             "query": query,
-            "candidates": [],
+            "candidates": note_candidates,
             "card": card,
-            "cache_hit": True,
-            "ai_used": "ai" in (card.get("sources") or []),
+            "cache_hit": not generated,
+            "ai_used": bool(str(card.get("ai_context") or "").strip()),
         }
 
     settings = get_settings()
-    passage = paragraph_window(chapter.content, body.paragraph_index)
-    book_note = selected.summary if selected else ""
-    want_ai = need_context or not book_note
     ai_context = await maybe_generate_ai_context(
         settings=settings,
         query=query,
         book_note=book_note,
         passage=passage,
         need_context=want_ai,
+        editorial=editorial,
+        passage_explain=paragraph_explain,
     )
 
     if book_note or ai_context:
@@ -374,6 +382,14 @@ async def explain_selection(
             entry=selected,
             ai_context=ai_context,
             sources=(["book"] if book_note else []) + (["ai"] if ai_context else []),
+        )
+    elif paragraph_explain:
+        card = compose_card(
+            query=query,
+            entry=None,
+            ai_context="",
+            sources=[],
+            followups=[],
         )
     else:
         card = compose_card(
@@ -404,7 +420,7 @@ async def explain_selection(
     return {
         "status": "ok",
         "query": query,
-        "candidates": [],
+        "candidates": note_candidates,
         "card": card,
         "cache_hit": False,
         "ai_used": bool(ai_context),

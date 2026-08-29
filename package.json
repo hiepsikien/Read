@@ -17,6 +17,8 @@
     "api:dev": "cd apps/api && .venv/bin/uvicorn app.main:app --reload --port 8000",
     "api:test": "cd apps/api && .venv/bin/pytest -q",
     "db:up": "docker compose up -d db",
+    "deploy": "scripts/deploy.sh",
+    "deploy:api": "scripts/deploy.sh",
     "sync:status": "scripts/sync-db.sh status && scripts/sync-uploads.sh status",
     "sync:to-cloud": "scripts/sync-to-cloud.sh",
     "sync:from-cloud": "scripts/sync-from-cloud.sh"

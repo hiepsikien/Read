@@ -1,4 +1,3 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
@@ -12,6 +11,7 @@ import {
   type Auth,
   type User as FirebaseUser,
 } from "firebase/auth";
+import { nativeAsyncStorage } from "./storage";
 
 type FirebaseWebConfig = {
   apiKey: string;
@@ -55,9 +55,12 @@ export function getFirebaseAuth(): Auth | null {
     if (!auth) {
       app = getApps()[0] ?? initializeApp(config);
       try {
-        auth = initializeAuth(app, {
-          persistence: getReactNativePersistence(AsyncStorage),
-        });
+        const storage = nativeAsyncStorage();
+        auth = storage
+          ? initializeAuth(app, {
+              persistence: getReactNativePersistence(storage),
+            })
+          : getAuth(app);
       } catch {
         // Already initialized (Fast Refresh / hot reload)
         auth = getAuth(app);

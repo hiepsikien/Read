@@ -45,6 +45,7 @@ from ..segment_titles import (
     normalize_suggest_language,
     normalize_title_components,
 )
+from ..glossary import aliases_from_storage, is_reader_note
 from ..covers import (
     ALLOWED_CONTENT_TYPES,
     ALLOWED_EXT,
@@ -55,7 +56,8 @@ from ..covers import (
 )
 from ..media import media_absolute_path
 from ..parse_docs import extract_text_from_file
-from ..recommendations import RECOMMEND_LIMIT, rank_related, sort_same_author
+from ..credits import credits_payload
+from ..recommendations import RECOMMEND_LIMIT, rank_related, same_author_criterion, sort_same_author
 from ..series_catalog import apply_series_placement, attach_series_fields, find_next_episode
 from ..tts_settings import get_active_tts
 from .. import tts
@@ -239,6 +241,10 @@ def _book_list_item(
         item["publisher_id"] = book.publisher_id
     if book.source_filename is not None:
         item["source_filename"] = book.source_filename
+    pub = publisher_name
+    if pub is None:
+        pub = book.publisher.name if book.publisher else ""
+    item.update(credits_payload(book, publisher_name=pub or ""))
     return attach_series_fields(item, book, for_public=for_public)
 
 
@@ -622,6 +628,7 @@ def get_book(
         book,
         for_public=not is_manager,
     )
+    book_payload.update(credits_payload(book, publisher_name=book.publisher.name if book.publisher else ""))
     book_payload["next_episode"] = _next_episode_payload(db, book)
     return {
         "book": book_payload,
@@ -694,12 +701,13 @@ def get_book_recommendations(
         )
     )
 
-    same_author_books = sort_same_author(
-        public_query.filter(Book.publisher_id == book.publisher_id).all()
-    )[:RECOMMEND_LIMIT]
+    same_author_match = same_author_criterion(book)
+    same_author_books = sort_same_author(public_query.filter(same_author_match).all())[
+        :RECOMMEND_LIMIT
+    ]
     same_author_ids = {item.id for item in same_author_books}
 
-    related_candidates = public_query.filter(Book.publisher_id != book.publisher_id).all()
+    related_candidates = public_query.filter(~same_author_match).all()
     # Prefer same-category peers; still allow fill from other categories via scoring.
     related_books = rank_related(
         source=book,
@@ -1467,6 +1475,18 @@ def get_chapter(
             purchased=purchased,
             is_manager=is_manager,
         ),
+        "notes": [
+            {
+                "id": row.id,
+                "name": row.name,
+                "aliases": aliases_from_storage(row.aliases),
+                "episode_key": row.episode_key,
+                "episode_title": row.episode_title,
+                "group_label": row.group_label,
+            }
+            for row in db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+            if is_reader_note(row)
+        ],
     }
 
 

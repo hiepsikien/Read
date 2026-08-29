@@ -83,7 +83,7 @@ export default function LibraryScreen() {
     return books.filter((book) => {
       if (categorySlug && book.category?.slug !== categorySlug) return false;
       if (!needle) return true;
-      const haystack = `${book.title} ${book.publisher_name || ""} ${book.publisher_handle || ""} ${book.category?.label || ""}`.toLowerCase();
+      const haystack = `${book.title} ${book.author_name || ""} ${book.publisher_name || ""} ${book.publisher_handle || ""} ${book.category?.label || ""}`.toLowerCase();
       return haystack.includes(needle);
     });
   }, [books, categorySlug, query]);

@@ -259,6 +259,46 @@ def test_recommendations_endpoint(client, db_session, seeded):
     assert related_other.id in related_ids
 
 
+def test_recommendations_same_author_by_hub_id(client, db_session, seeded):
+    now = seeded["now"]
+    grotius_vi = _book(
+        publisher_id=seeded["publisher"].id,
+        title="Freedom of the Seas VI",
+        description="mare liberum translation",
+        category_id=seeded["fiction"].id,
+        created_at=now,
+    )
+    grotius_vi.author_name = "Hugo Grotius"
+    grotius_vi.author_hub_id = "grotius"
+    grotius_en = _book(
+        publisher_id=seeded["publisher"].id,
+        title="Freedom of the Seas",
+        description="mare liberum original",
+        category_id=seeded["fiction"].id,
+        created_at=now - timedelta(days=1),
+    )
+    grotius_en.author_name = "Hugo Grotius"
+    grotius_en.author_hub_id = "grotius"
+    locke = _book(
+        publisher_id=seeded["publisher"].id,
+        title="Second Treatise",
+        description="civil government essays",
+        category_id=seeded["fiction"].id,
+        created_at=now - timedelta(days=2),
+    )
+    locke.author_name = "John Locke"
+    locke.author_hub_id = "locke"
+    db_session.add_all([grotius_vi, grotius_en, locke])
+    db_session.commit()
+
+    payload = client.get(f"/api/books/{grotius_vi.id}/recommendations").json()
+    same_ids = [book["id"] for book in payload["same_author"]]
+    related_ids = [book["id"] for book in payload["related"]]
+    assert same_ids == [grotius_en.id]
+    assert locke.id not in same_ids
+    assert locke.id in related_ids
+
+
 def test_recommendations_404_for_hidden_non_manager(client, db_session, seeded):
     book = _book(
         publisher_id=seeded["publisher"].id,

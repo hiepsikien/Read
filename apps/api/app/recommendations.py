@@ -88,6 +88,17 @@ def related_score(
     return score
 
 
+def same_author_criterion(book: Book):
+    """Match other books by Hub author id, then stored name, then publisher (indie)."""
+    hub_id = str(book.author_hub_id or "").strip()
+    if hub_id:
+        return Book.author_hub_id == hub_id
+    name = str(book.author_name or "").strip()
+    if name:
+        return Book.author_name == name
+    return Book.publisher_id == book.publisher_id
+
+
 def sort_same_author(books: list[Book]) -> list[Book]:
     return sorted(
         books,

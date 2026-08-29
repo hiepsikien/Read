@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import Settings
 from .gemini import gemini_available, generate_gemini_text
-from .glossary import aliases_from_storage
+from .glossary import aliases_from_storage, normalize_lookup
 
 logger = logging.getLogger(__name__)
 
@@ -20,24 +20,60 @@ MAX_AI_CONTEXT_CHARS = 420
 MAX_QUERY_CHARS = 120
 
 
+def _plain_paragraphs(content: str) -> list[str]:
+    return [
+        re.sub(r"\s+", " ", part.replace("\n", " ")).strip()
+        for part in re.split(r"\n\s*\n", content)
+        if part.strip()
+    ]
+
+
+def _strip_figure_markdown(text: str) -> str:
+    return re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+
+
+def paragraph_card_title(paragraph: str, *, limit: int = 72) -> str:
+    text = _strip_figure_markdown(re.sub(r"\s+", " ", paragraph).strip())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].strip()
+    return f"{cut or text[:limit]}…"
+
+
+def single_paragraph(content: str, paragraph_index: int | None) -> str:
+    if paragraph_index is None:
+        return ""
+    paragraphs = _plain_paragraphs(content)
+    if paragraph_index < 0 or paragraph_index >= len(paragraphs):
+        return ""
+    chunk = _strip_figure_markdown(paragraphs[paragraph_index]).strip()
+    chunk = re.sub(r"\s+", " ", chunk)
+    if len(chunk) > MAX_SUMMARY_CHARS:
+        return chunk[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"
+    return chunk
+
+
 def paragraph_window(content: str, paragraph_index: int | None) -> str:
     if paragraph_index is None:
         return ""
-    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", content) if part.strip()]
+    paragraphs = _plain_paragraphs(content)
     if paragraph_index < 0 or paragraph_index >= len(paragraphs):
         return ""
     start = max(0, paragraph_index - 1)
     end = min(len(paragraphs), paragraph_index + 2)
-    chunk = " ".join(
-        re.sub(r"\s+", " ", paragraph.replace("\n", " ")).strip()
-        for paragraph in paragraphs[start:end]
-    )
+    chunk = " ".join(paragraphs[start:end])
     # Prefer caption text over raw figure markdown for the model.
-    chunk = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", chunk)
+    chunk = _strip_figure_markdown(chunk)
     chunk = re.sub(r"\s+", " ", chunk).strip()
     if len(chunk) > MAX_PARAGRAPH_CHARS:
         return chunk[: MAX_PARAGRAPH_CHARS - 1].rstrip() + "…"
     return chunk
+
+
+def entry_cache_key(*, book_id: str, glossary_entry_id: str) -> str:
+    """Stable card cache for one book note — reused across chapters."""
+    payload = f"{book_id}|entry|{glossary_entry_id}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def cache_key(
@@ -79,15 +115,42 @@ def entry_payload(entry: Any) -> dict:
     }
 
 
-def candidate_payload(entry: Any, score: int | None = None) -> dict:
+def note_card_title(entry: Any) -> str:
+    """Prefer the in-text hook when Hub reuses a section heading as the note name."""
+    name = str(getattr(entry, "name", "") or "").strip()
+    group = str(getattr(entry, "group_label", "") or "").strip().casefold()
+    anchor = str(getattr(entry, "episode_title", "") or "").strip()
+    aliases = getattr(entry, "aliases", [])
+    if isinstance(aliases, str):
+        aliases = aliases_from_storage(aliases)
+    aliases = [str(part).strip() for part in aliases if str(part).strip()]
+    section = group.startswith("bối cảnh") or name.casefold().startswith("bối cảnh")
+    if not section:
+        return name
+    for candidate in [anchor, *aliases]:
+        if (
+            candidate
+            and not re.fullmatch(r"\[\d+\]", candidate)
+            and normalize_lookup(candidate) != normalize_lookup(name)
+        ):
+            return candidate[:200]
+    return name
+
+
+def candidate_payload(entry: Any, score: int | None = None, *, include_summary: bool = False) -> dict:
     item = {
         "id": entry.id,
-        "name": entry.name,
+        "name": note_card_title(entry) or entry.name,
         "episode_key": getattr(entry, "episode_key", "") or "",
         "group_label": getattr(entry, "group_label", "") or "",
     }
     if score is not None:
         item["score"] = score
+    if include_summary:
+        summary = str(getattr(entry, "summary", "") or "")
+        if len(summary) > MAX_SUMMARY_CHARS:
+            summary = summary[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"
+        item["summary"] = summary
     return item
 
 
@@ -102,7 +165,7 @@ def compose_card(
     book_note = ""
     title = query.strip()
     if entry is not None:
-        title = entry.name
+        title = note_card_title(entry) or entry.name
         book_note = entry.summary or ""
         if len(book_note) > MAX_SUMMARY_CHARS:
             book_note = book_note[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"
@@ -115,7 +178,9 @@ def compose_card(
 
     if not followups:
         followups = []
-        if entry is not None:
+        group = str(getattr(entry, "group_label", "") or "").strip().casefold() if entry is not None else ""
+        is_editorial_note = group in {"chú thích", "thuật ngữ", "bối cảnh"}
+        if entry is not None and not is_editorial_note:
             followups.append(f"Why does {entry.name} matter in this passage?")
             if entry.episode_key:
                 followups.append(f"Who else is related to {entry.name} in {entry.episode_key}?")
@@ -137,25 +202,46 @@ async def maybe_generate_ai_context(
     book_note: str,
     passage: str,
     need_context: bool,
+    editorial: bool = False,
+    passage_explain: bool = False,
 ) -> str:
-    if not need_context and book_note:
+    if not need_context:
         return ""
     if not gemini_available(settings):
         return ""
 
-    system = (
-        "You help readers understand historical names in a novel. "
-        "Reply in the same language as the book note / passage. "
-        "Write 1-3 short sentences. "
-        "If a book note is provided, do not repeat it; only add why this person matters "
-        "in the given passage. No spoilers beyond the passage. No bullet lists."
-    )
+    if passage_explain:
+        system = (
+            "You help readers understand a passage of a book. "
+            "Reply in the same language as the passage. "
+            "Write 2-4 short sentences that explain the meaning of this paragraph — "
+            "the argument or idea, not a word-for-word paraphrase. "
+            "No spoilers beyond the passage. No bullet lists."
+        )
+    elif editorial:
+        system = (
+            "You help readers understand a scholarly footnote. "
+            "Reply in the same language as the book note / passage. "
+            "Write 1-3 short sentences that add context the note itself does not repeat. "
+            "No bullet lists."
+        )
+    else:
+        system = (
+            "You help readers understand historical names in a novel. "
+            "Reply in the same language as the book note / passage. "
+            "Write 1-3 short sentences. "
+            "If a book note is provided, do not repeat it; only add why this person matters "
+            "in the given passage. No spoilers beyond the passage. No bullet lists."
+        )
     user_parts = [f"Query: {query[:MAX_QUERY_CHARS]}"]
     if book_note:
         user_parts.append(f"Book note:\n{book_note[:MAX_SUMMARY_CHARS]}")
     if passage:
-        user_parts.append(f"Passage:\n{passage[:MAX_PARAGRAPH_CHARS]}")
-    user_parts.append("Write the brief context now.")
+        cap = MAX_SUMMARY_CHARS if passage_explain else MAX_PARAGRAPH_CHARS
+        user_parts.append(f"Passage:\n{passage[:cap]}")
+    user_parts.append(
+        "Write the brief explanation now." if passage_explain else "Write the brief context now."
+    )
 
     try:
         text = await generate_gemini_text(
@@ -163,7 +249,7 @@ async def maybe_generate_ai_context(
             system=system,
             user="\n\n".join(user_parts),
             temperature=0.2,
-            max_output_tokens=300,
+            max_output_tokens=400 if passage_explain else 300,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Gemini explain call failed")

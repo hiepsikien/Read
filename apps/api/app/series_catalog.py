@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from .covers import cover_url_for
+from .credits import credits_payload
 from .models import Book, ReadingProgress, Series
 
 
@@ -252,6 +253,10 @@ def group_episodes_by_season(books: list[Book], *, chapter_counts: dict[str, int
                             "publisher_name": book.publisher.name if book.publisher else None,
                             "publisher_handle": (
                                 book.publisher.handle if book.publisher else None
+                            ),
+                            **credits_payload(
+                                book,
+                                publisher_name=book.publisher.name if book.publisher else "",
                             ),
                         },
                         book,

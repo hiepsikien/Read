@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { ApiError, type BookListItem, type PublicProfile } from "@read/api-client";
+import { ApiError, isHubPublisherProfile, type BookListItem, type PublicProfile } from "@read/api-client";
 import { BookTile } from "../components/BookTile";
 import { useAuth } from "../lib/auth";
 import { colors, space } from "../lib/theme";
@@ -80,8 +80,9 @@ export default function PublicProfileScreen() {
     );
   }
 
-  const roleLabel =
-    profile.role === "publisher"
+  const roleLabel = isHubPublisherProfile(profile)
+    ? "Publisher"
+    : profile.role === "publisher"
       ? "Author"
       : profile.role === "admin"
         ? "Admin"

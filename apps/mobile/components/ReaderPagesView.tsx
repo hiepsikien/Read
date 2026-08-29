@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -23,6 +31,11 @@ type Props = {
   followEnabled?: boolean;
   initialParagraphIndex?: number;
   onPageChange: (pageIndex: number, page: ReaderPage, pageCount: number) => void;
+  /** Call consume() from a note/paragraph press so edge-tap does not turn the page. */
+  edgeTapGuardRef?: MutableRefObject<{ consume: () => void } | null>;
+  /** Space reserved under page content for the footer row. */
+  bottomReserve?: number;
+  renderFooter?: (pageIndex: number, pageCount: number, isLast: boolean) => ReactNode;
 };
 
 export function ReaderPagesView({
@@ -36,6 +49,9 @@ export function ReaderPagesView({
   initialParagraphIndex = 0,
   onPageChange,
   followEnabled = false,
+  edgeTapGuardRef,
+  bottomReserve = 36,
+  renderFooter,
 }: Props) {
   const [heights, setHeights] = useState<(number | null)[]>(() =>
     Array.from({ length: blockCount }, () => null)
@@ -50,13 +66,35 @@ export function ReaderPagesView({
   onPageChangeRef.current = onPageChange;
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wrapPageXRef = useRef(0);
+  const ignoreEdgeTapRef = useRef(false);
+  const pendingEdgeTapRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const consumeEdgeTap = useCallback(() => {
+    ignoreEdgeTapRef.current = true;
+    if (pendingEdgeTapRef.current) {
+      clearTimeout(pendingEdgeTapRef.current);
+      pendingEdgeTapRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!edgeTapGuardRef) return;
+    edgeTapGuardRef.current = { consume: consumeEdgeTap };
+    return () => {
+      if (edgeTapGuardRef.current?.consume === consumeEdgeTap) {
+        edgeTapGuardRef.current = null;
+      }
+    };
+  }, [consumeEdgeTap, edgeTapGuardRef]);
 
   useEffect(() => {
     setHeights(Array.from({ length: blockCount }, () => null));
     didInitialScrollRef.current = false;
     setPageIndex(0);
     pageIndexRef.current = 0;
-  }, [blockCount, pageWidth, pageHeight]);
+  }, [blockCount, pageWidth, contentHeight]);
+
+  const contentHeight = Math.max(80, pageHeight - Math.max(0, bottomReserve));
 
   const allMeasured =
     blockCount === 0 ||
@@ -64,10 +102,10 @@ export function ReaderPagesView({
 
   const pages = useMemo(() => {
     if (!allMeasured) return [{ startIndex: 0, endIndex: Math.max(blockCount, 0) }];
-    const packed = packBlocksIntoPages(heights as number[], pageHeight);
+    const packed = packBlocksIntoPages(heights as number[], contentHeight);
     if (!firstPageHeader || headerHeight <= 0 || packed.length === 0) return packed;
 
-    const firstPageBudget = Math.max(80, pageHeight - headerHeight);
+    const firstPageBudget = Math.max(80, contentHeight - headerHeight);
     let used = 0;
     let cut = 0;
     for (let i = 0; i < (heights as number[]).length; i += 1) {
@@ -78,7 +116,7 @@ export function ReaderPagesView({
       cut = i + 1;
     }
     if (cut === 0 && (heights as number[]).length > 0) cut = 1;
-    const rest = packBlocksIntoPages((heights as number[]).slice(cut), pageHeight);
+    const rest = packBlocksIntoPages((heights as number[]).slice(cut), contentHeight);
     return [
       { startIndex: 0, endIndex: cut },
       ...rest.map((page) => ({
@@ -86,7 +124,7 @@ export function ReaderPagesView({
         endIndex: page.endIndex + cut,
       })),
     ];
-  }, [allMeasured, heights, pageHeight, blockCount, firstPageHeader, headerHeight]);
+  }, [allMeasured, heights, contentHeight, blockCount, firstPageHeader, headerHeight]);
 
   const scrollToPage = useCallback(
     (index: number, animated: boolean) => {
@@ -165,11 +203,18 @@ export function ReaderPagesView({
       // Treat as tap only when movement is tiny (swipe goes to ScrollView paging).
       if (dx > 14 || dy > 14) return;
       const localX = event.nativeEvent.pageX - wrapPageXRef.current;
-      if (localX < pageWidth * 0.28) {
-        scrollToPage(pageIndexRef.current - 1, true);
-      } else if (localX > pageWidth * 0.72) {
-        scrollToPage(pageIndexRef.current + 1, true);
-      }
+      const goPrev = localX < pageWidth * 0.28;
+      const goNext = localX > pageWidth * 0.72;
+      if (!goPrev && !goNext) return;
+      if (pendingEdgeTapRef.current) clearTimeout(pendingEdgeTapRef.current);
+      pendingEdgeTapRef.current = setTimeout(() => {
+        pendingEdgeTapRef.current = null;
+        if (ignoreEdgeTapRef.current) {
+          ignoreEdgeTapRef.current = false;
+          return;
+        }
+        scrollToPage(pageIndexRef.current + (goPrev ? -1 : 1), true);
+      }, 70);
     },
     [pageWidth, pages.length, scrollToPage]
   );
@@ -223,14 +268,14 @@ export function ReaderPagesView({
             }}
             onTouchStart={onTouchStart}
             onTouchEnd={onTouchEnd}
-            style={{ width: pageWidth, height: pageHeight }}
+            style={{ width: pageWidth, height: contentHeight }}
           >
             {pages.map((item, index) => (
               <View
                 key={`page-${index}-${item.startIndex}-${item.endIndex}`}
                 style={{
                   width: pageWidth,
-                  height: pageHeight,
+                  height: contentHeight,
                   paddingHorizontal: 20,
                   overflow: "hidden",
                 }}
@@ -245,9 +290,15 @@ export function ReaderPagesView({
               </View>
             ))}
           </ScrollView>
-          <Text style={[styles.indicator, { color: mutedColor }]} pointerEvents="none">
-            {pageIndex + 1} / {pages.length}
-          </Text>
+          <View style={[styles.reserve, { height: Math.max(0, bottomReserve) }]}>
+            {renderFooter ? (
+              renderFooter(pageIndex, pages.length, pageIndex >= pages.length - 1)
+            ) : (
+              <Text style={[styles.indicator, { color: mutedColor }]} pointerEvents="none">
+                {pageIndex + 1} / {pages.length}
+              </Text>
+            )}
+          </View>
         </>
       ) : (
         <View style={styles.loading}>
@@ -267,12 +318,10 @@ const styles = StyleSheet.create({
     opacity: 0,
     zIndex: -1,
   },
+  reserve: {
+    justifyContent: "flex-start",
+  },
   indicator: {
-    position: "absolute",
-    bottom: 8,
-    alignSelf: "center",
-    left: 0,
-    right: 0,
     textAlign: "center",
     fontSize: 12,
     fontWeight: "600",
