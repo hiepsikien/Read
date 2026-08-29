@@ -707,6 +707,19 @@ function hookStartBeforeMarker(before: string, note: ReaderNote): number | null 
   return null;
 }
 
+function extraNearFootnoteMarker(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 16), start);
+  const after = text.slice(end, end + 32);
+  if (/\[\d+\]/.test(`${before} ${after}`)) return true;
+  const prefix = text.slice(0, start);
+  const lastBreak = Math.max(prefix.lastIndexOf("."), prefix.lastIndexOf("!"), prefix.lastIndexOf("?"), prefix.lastIndexOf("\n"));
+  const sentenceStart = lastBreak < 0 ? 0 : lastBreak + 1;
+  const rest = text.slice(start);
+  const nextBreak = rest.search(/[.!?\n]/);
+  const sentenceEnd = nextBreak < 0 ? text.length : start + nextBreak;
+  return /\[\d+\]/.test(text.slice(sentenceStart, sentenceEnd));
+}
+
 export function findNoteSpans(
   text: string,
   notes: ReaderNote[],
@@ -749,7 +762,8 @@ export function findNoteSpans(
     const folded = foldVi(text);
     for (const phrase of phrases) {
       const at = folded.indexOf(foldVi(phrase));
-      if (at >= 0 && take(at, at + phrase.length, note)) {
+      if (at < 0 || extraNearFootnoteMarker(text, at, at + phrase.length)) continue;
+      if (take(at, at + phrase.length, note)) {
         phraseOnce?.add(note.id);
         break;
       }

@@ -342,6 +342,9 @@ def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit
         if episode_key and entry_episode and entry_episode.upper() == episode_key.upper():
             best += 15
         hits.append((entry, best))
+    kept = _drop_extras_covered_by_footnotes([entry for entry, _ in hits], text)
+    keep_ids = {id(entry) for entry in kept}
+    hits = [item for item in hits if id(item[0]) in keep_ids]
     hits.sort(
         key=lambda item: (
             _first_hit_offset(item[0], text, folded_text),
@@ -350,6 +353,88 @@ def find_names_in_text(entries: list, text: str, *, episode_key: str = "", limit
         )
     )
     return [entry for entry, _ in hits[:limit]]
+
+
+def _is_book_footnote(entry: object) -> bool:
+    return any(re.fullmatch(r"\[\d+\]", part.strip()) for part in _entry_needles(entry))
+
+
+def _extra_phrase(entry: object) -> str:
+    phrases = [
+        part
+        for part in _entry_needles(entry)
+        if not re.fullmatch(r"\[\d+\]", part.strip())
+    ]
+    phrases.sort(key=len, reverse=True)
+    for phrase in phrases:
+        key = normalize_lookup(phrase)
+        if len(key) >= 6:
+            return phrase
+    return ""
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in re.finditer(r"[.!?\n]+", text):
+        if match.start() > start:
+            spans.append((start, match.start()))
+        start = match.end()
+    if start < len(text):
+        spans.append((start, len(text)))
+    return spans
+
+
+def _markers_covering_phrase(text: str, phrase: str) -> set[str]:
+    found: set[str] = set()
+    if not text or not phrase:
+        return found
+    for match in re.finditer(re.escape(phrase), text, flags=re.IGNORECASE):
+        after = text[match.end() : match.end() + 32]
+        before = text[max(0, match.start() - 16) : match.start()]
+        for nearby in re.finditer(r"\[\d+\]", f"{before} {after}"):
+            found.add(nearby.group(0))
+        for start, end in _sentence_spans(text):
+            if start <= match.start() < end:
+                for nearby in re.finditer(r"\[\d+\]", text[start:end]):
+                    found.add(nearby.group(0))
+                break
+    return found
+
+
+def _drop_extras_covered_by_footnotes(entries: list, text: str) -> list:
+    notes = [entry for entry in entries if is_reader_note(entry)]
+    footnotes = [entry for entry in notes if _is_book_footnote(entry)]
+    if not footnotes:
+        return entries
+    drop: set[int] = set()
+    for extra in notes:
+        if extra in footnotes:
+            continue
+        phrase = _extra_phrase(extra)
+        if not phrase:
+            continue
+        key = re.sub(r"\s+", " ", phrase).casefold()
+        covering = _markers_covering_phrase(text, phrase)
+        for footnote in footnotes:
+            markers = [part.strip() for part in _entry_needles(footnote) if re.fullmatch(r"\[\d+\]", part.strip())]
+            title = re.sub(
+                r"\s+",
+                " ",
+                f"{getattr(footnote, 'name', '')} {getattr(footnote, 'episode_title', '')}",
+            ).casefold()
+            if key in title:
+                drop.add(id(extra))
+                break
+            blob = re.sub(
+                r"\s+",
+                " ",
+                f"{getattr(footnote, 'name', '')} {getattr(footnote, 'episode_title', '')} {getattr(footnote, 'summary', '')}",
+            ).casefold()
+            if key in blob and any(marker in covering for marker in markers):
+                drop.add(id(extra))
+                break
+    return [entry for entry in entries if id(entry) not in drop]
 
 
 def _entry_needles(entry: object) -> list[str]:

@@ -82,6 +82,46 @@ def test_reader_note_matches_only_its_marker():
     assert [e.name for e in later] == ["Luật các dân tộc"]
 
 
+def test_reader_notes_prefer_book_footnote_over_extra():
+    class Entry:
+        def __init__(self, name, aliases, group_label="Chú thích", episode_title="", summary=""):
+            self.name = name
+            self.aliases = aliases
+            self.group_label = group_label
+            self.episode_key = ""
+            self.episode_title = episode_title
+            self.summary = summary
+
+    twelve = Entry(
+        "Augustine [12]",
+        ["[12]"],
+        episode_title="Augustine",
+        summary="Ông lập luận rằng việc từ chối một lối đi vô hại là lý do chính đáng.",
+    )
+    extra = Entry("lối đi vô hại", [], "Bối cảnh", "lối đi vô hại", "Khái niệm transitus innoxius.")
+    vasquez = Entry("Vasquez", [], "Bối cảnh", "Vasquez", "Luật gia Salamanca.")
+    monopoly = Entry(
+        "độc quyền [171]",
+        ["[171]"],
+        episode_title="độc quyền",
+        summary="Lập luận về độc quyền thương mại.",
+    )
+    law = Entry("Luật các dân tộc", [], "Thuật ngữ", "Luật các dân tộc")
+    paragraph = (
+        "Chúng ta đọc thấy trong các tác phẩm của Augustine,[12] "
+        "khi người Israel bị khước từ lối đi vô hại qua lãnh thổ."
+    )
+    found = find_names_in_text([twelve, extra, law], paragraph)
+    assert [e.name for e in found] == ["Augustine [12]"]
+    other = find_names_in_text(
+        [vasquez, monopoly],
+        "Vasquez bác bỏ độc quyền.[171]",
+    )
+    assert [e.name for e in other] == ["Vasquez", "độc quyền [171]"]
+    alone = find_names_in_text([extra], "Nguyên tắc lối đi vô hại vẫn còn hiệu lực.")
+    assert [e.name for e in alone] == ["lối đi vô hại"]
+
+
 def test_reader_notes_in_paragraph_follow_text_order():
     class Entry:
         def __init__(self, name, aliases):
