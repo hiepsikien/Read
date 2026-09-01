@@ -22,8 +22,8 @@ const SOURCES = {
 
 // Kept in sync with scripts/brand/build.mjs, which prints both ratios.
 const ASPECT = {
-  wordmark: 1059 / 354,
-  mark: 152.5 / 134,
+  wordmark: 702 / 354,
+  mark: 143 / 125,
 } as const;
 
 export function BrandLogo({

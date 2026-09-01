@@ -1,9 +1,9 @@
 /**
  * Read brand mark geometry — single source of truth.
  *
- * "The Arch" — an upright open book whose left page carries reading lines
- * and whose right edge radiates equalizer bars for listen/TTS. Replaces the
- * previous horizontal book + sound-wave arcs.
+ * Open book with two soft listening arcs — refined from the original mark
+ * with thinner strokes and fewer arcs. Used for favicon / login / app icon;
+ * the header wordmark is typography-only (Fraunces "Read").
  */
 
 export const PALETTE = {
@@ -16,57 +16,50 @@ export const PALETTE = {
   white: "#ffffff",
 };
 
-const SPINE_X = 58;
-const SPINE_BOTTOM = 102;
-const SPINE_TOP = 26;
-const LEFT_X = 10;
-const RIGHT_X = 106;
-const TOP_Y = 10;
-const STROKE = 8;
+const SPINE_X = 52;
+const PAGE_W = 36;
+const OUTER_TOP = 18;
+const OUTER_BOTTOM = 88;
+const SPINE_TOP = 38;
+const SPINE_BOTTOM = 108;
+const STROKE = 7;
 const HALF = STROKE / 2;
-const DETAIL_STROKE = 5;
+
+const LEFT_X = SPINE_X - PAGE_W;
+const RIGHT_X = SPINE_X + PAGE_W;
+
+const ARC_CX = RIGHT_X;
+const ARC_CY = 56;
+const ARC_RADII = [20, 36];
+const ARC_HALF_ANGLE = (44 * Math.PI) / 180;
+const ARC_OPACITY = [0.75, 0.4];
 
 const bookPaths = [
-  `M ${LEFT_X} ${TOP_Y + 8} C ${LEFT_X + 2} ${TOP_Y} ${SPINE_X - 10} ${SPINE_TOP - 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X - 10} ${SPINE_BOTTOM - 10} ${LEFT_X + 8} ${SPINE_BOTTOM - 6} ${LEFT_X} ${SPINE_BOTTOM - 16}`,
-  `M ${RIGHT_X} ${TOP_Y + 8} C ${RIGHT_X - 2} ${TOP_Y} ${SPINE_X + 10} ${SPINE_TOP - 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X + 10} ${SPINE_BOTTOM - 10} ${RIGHT_X - 8} ${SPINE_BOTTOM - 6} ${RIGHT_X} ${SPINE_BOTTOM - 16}`,
+  `M ${LEFT_X} ${OUTER_TOP} C ${LEFT_X + 16} ${OUTER_TOP} ${SPINE_X - 6} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X - 6} ${SPINE_BOTTOM - 12} ${LEFT_X + 16} ${OUTER_BOTTOM} ${LEFT_X} ${OUTER_BOTTOM}`,
+  `M ${RIGHT_X} ${OUTER_TOP} C ${RIGHT_X - 16} ${OUTER_TOP} ${SPINE_X + 6} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X + 6} ${SPINE_BOTTOM - 12} ${RIGHT_X - 16} ${OUTER_BOTTOM} ${RIGHT_X} ${OUTER_BOTTOM}`,
 ];
 
-const readingLines = [
-  [LEFT_X + 16, 50, LEFT_X + 42, 50],
-  [LEFT_X + 16, 62, LEFT_X + 38, 62],
-  [LEFT_X + 16, 74, LEFT_X + 32, 74],
-].map(([x1, y1, x2, y2]) => `M ${x1} ${y1} L ${x2} ${y2}`);
-
-const equalizerBars = [
-  { x: RIGHT_X + 8, y0: 54, y1: 66, opacity: 0.45 },
-  { x: RIGHT_X + 16, y0: 46, y1: 74, opacity: 0.72 },
-  { x: RIGHT_X + 24, y0: 40, y1: 80, opacity: 1 },
-];
-
-const bookmark = `M ${SPINE_X - 5} ${SPINE_TOP - 2} L ${SPINE_X} ${SPINE_TOP - 14} L ${SPINE_X + 5} ${SPINE_TOP - 2} Z`;
+function arcPath(r) {
+  const dx = Math.cos(ARC_HALF_ANGLE) * r;
+  const dy = Math.sin(ARC_HALF_ANGLE) * r;
+  const x = round(ARC_CX + dx);
+  return `M ${x} ${round(ARC_CY - dy)} A ${r} ${r} 0 0 1 ${x} ${round(ARC_CY + dy)}`;
+}
 
 function round(n) {
   return Math.round(n * 100) / 100;
 }
 
 /**
- * @param {{ waves?: number, pad?: number }} [opts] waves: how many equalizer
- * bars to draw. Kept for lockup API compatibility with build.mjs.
+ * @param {{ waves?: number, pad?: number }} [opts] waves: listening arcs (1–2).
  */
-export function markGeometry({ waves = equalizerBars.length, pad = 10 } = {}) {
-  const barCount = Math.min(waves, equalizerBars.length);
-  const bars = equalizerBars.slice(0, barCount).map(({ x, y0, y1, opacity }) => ({
-    d: `M ${x} ${y0} L ${x} ${y1}`,
-    opacity,
-  }));
-  const outerX =
-    barCount > 0
-      ? equalizerBars[barCount - 1].x + DETAIL_STROKE / 2
-      : RIGHT_X;
+export function markGeometry({ waves = ARC_RADII.length, pad = 14 } = {}) {
+  const radii = ARC_RADII.slice(0, waves);
+  const outerR = radii.length ? radii[radii.length - 1] : 0;
 
   const inkLeft = LEFT_X - HALF;
-  const inkRight = outerX + HALF + 2;
-  const inkTop = TOP_Y - HALF - 14;
+  const inkRight = Math.max(RIGHT_X, ARC_CX + outerR) + HALF;
+  const inkTop = OUTER_TOP - HALF;
   const inkBottom = SPINE_BOTTOM + HALF;
 
   const ox = pad - inkLeft;
@@ -81,50 +74,39 @@ export function markGeometry({ waves = equalizerBars.length, pad = 10 } = {}) {
       height: round(inkBottom - inkTop),
     },
     stroke: STROKE,
-    detailStroke: DETAIL_STROKE,
     book: bookPaths,
-    reading: readingLines,
-    equalizer: bars,
-    bookmark,
+    arcs: radii.map((r, i) => ({ d: arcPath(r), opacity: ARC_OPACITY[i] })),
   };
 }
 
 /** Strokes for the mark, in one of the three brand tones. */
 export function markColors(tone) {
-  const main =
+  const book =
     tone === "ink"
       ? PALETTE.ink
       : tone === "white"
         ? PALETTE.white
         : PALETTE.sage;
-  const accent = tone === "color" ? PALETTE.sageDeep : main;
-  return { main, accent };
+  const arc = tone === "color" ? PALETTE.sageDeep : book;
+  return { book, arc };
 }
 
 /** Inner `<g>` of the mark, ready to drop into any canvas. */
 export function markGroup(geo, tone, extraTransform = "") {
-  const { main, accent } = markColors(tone);
+  const { book, arc } = markColors(tone);
   const transform =
     `${extraTransform} translate(${geo.offset.x} ${geo.offset.y})`.trim();
   const common = `fill="none" stroke-width="${geo.stroke}" stroke-linecap="round" stroke-linejoin="round"`;
-  const detail = `fill="none" stroke-width="${geo.detailStroke}" stroke-linecap="round"`;
-  const book = geo.book
-    .map((d) => `    <path d="${d}" stroke="${main}" ${common}/>`)
+  const pages = geo.book
+    .map((d) => `    <path d="${d}" stroke="${book}" ${common}/>`)
     .join("\n");
-  const lines = geo.reading
-    .map(
-      (d) =>
-        `    <path d="${d}" stroke="${accent}" stroke-opacity="0.85" ${detail}/>`
-    )
-    .join("\n");
-  const bars = geo.equalizer
+  const arcs = geo.arcs
     .map(
       (a) =>
-        `    <path d="${a.d}" stroke="${main}" stroke-opacity="${a.opacity}" ${detail}/>`
+        `    <path d="${a.d}" stroke="${arc}" stroke-opacity="${a.opacity}" ${common}/>`
     )
     .join("\n");
-  const bm = `    <path d="${geo.bookmark}" fill="${accent}" stroke="none"/>`;
-  return `  <g transform="${transform}">\n${book}\n${lines}\n${bars}\n${bm}\n  </g>`;
+  return `  <g transform="${transform}">\n${pages}\n${arcs}\n  </g>`;
 }
 
 export function svgDocument({ width, height, body, background }) {
