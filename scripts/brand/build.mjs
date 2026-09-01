@@ -3,8 +3,8 @@
  *
  *   node scripts/brand/build.mjs
  *
- * Letterforms come from ./read-letters.path — the original Fraunces-based
- * "Read" outlines, kept so the typography stays continuous across the rebrand.
+ * Letterforms come from ./read-letters.path — Fraunces "Read" outlines.
+ * The mark ("The Arch") is defined entirely in logo.mjs.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -24,8 +24,26 @@ const LETTERS = fs
   .join(" ")
   .trim();
 
-// Measured ink box of LETTERS in its original 823x354 user space.
-const LETTERS_BOX = { x0: 49, x1: 657.8, y0: 49, y1: 305.5 };
+/** Ink box of the letter outlines — recomputed whenever read-letters.path changes. */
+function pathBBox(d) {
+  const nums = d.match(/-?\d+\.?\d*/g)?.map(Number) ?? [];
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i + 1 < nums.length; i += 2) {
+    const x = nums[i];
+    const y = nums[i + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    x0 = Math.min(x0, x);
+    x1 = Math.max(x1, x);
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+  }
+  return { x0, x1, y0, y1 };
+}
+
+const LETTERS_BOX = pathBBox(LETTERS);
 
 const TONES = ["color", "ink", "white"];
 const letterFill = (tone) =>
@@ -61,12 +79,12 @@ function markSquareSvg(tone, size, { background = null, fill = 0.62 } = {}) {
 /* -------------------------------------------------------------- wordmark */
 
 const LOCKUP = {
-  /** Book height in wordmark units, against a 214 cap height. */
-  bookHeight: 186,
+  /** Mark height in wordmark units, against a 214 cap height. */
+  bookHeight: 178,
   /** Gap between the "d" and the mark's leftmost ink. */
-  gap: 40,
+  gap: 36,
   /** Vertical centre of the mark, aligned to the lowercase optical centre. */
-  centerY: 191,
+  centerY: 188,
   pad: 49,
   waves: 3,
 };

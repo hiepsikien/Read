@@ -325,7 +325,7 @@ API tiêu biểu:
 
 ### Logo & brand assets
 
-**Mark hiện tại:** cuốn sách mở với **sóng âm toả ra từ trang phải** — nói đúng cả hai vế của sản phẩm (đọc *và* nghe TTS). Chữ “Read” giữ nguyên bộ chữ Fraunces cũ để thương hiệu không đứt gãy.
+**Mark hiện tại ("The Arch"):** cuốn sách mở **đứng dạng vòm** — trang trái có **dòng chữ** (đọc), cạnh phải có **thanh equalizer** (nghe TTS), đỉnh gáy có **bookmark**. Thay thế hoàn toàn mark cũ (sách nằm ngang + sóng âm). Chữ “Read” được sinh lại từ Fraunces variable (`read-letters.path`).
 
 **Toàn bộ asset được sinh ra từ code**, không chỉnh tay:
 
@@ -335,9 +335,9 @@ npm run brand:build
 
 | File | Vai trò |
 |------|---------|
-| `scripts/brand/logo.mjs` | **Nguồn sự thật** — hình học của mark (toạ độ sách, bán kính sóng âm, độ dày nét, bảng màu) |
+| `scripts/brand/logo.mjs` | **Nguồn sự thật** — hình học mark "The Arch" (sách đứng, dòng chữ, equalizer, bookmark) |
 | `scripts/brand/build.mjs` | Dựng lockup wordmark + xuất mọi SVG/PNG cho web và mobile |
-| `scripts/brand/read-letters.path` | Outline chữ “Read” (Fraunces) tách khỏi mark cũ |
+| `scripts/brand/read-letters.path` | Outline chữ “Read” (Fraunces variable) |
 
 Đổi logo = sửa hằng số trong `logo.mjs` rồi chạy lại `npm run brand:build`. Script in ra tỉ lệ wordmark/mark — nếu tỉ lệ đổi, cập nhật `ASPECT` trong **cả hai** `BrandLogo.tsx` (web + mobile).
 
@@ -356,7 +356,7 @@ npm run brand:build
 
 **Quy ước UI**
 - **Wordmark** = chữ + mark → dùng **một mình**, không kèm text “Read”
-- **Mark** = **chỉ icon sách + sóng âm** → compact chrome, login, app icon
+- **Mark** = **icon sách đứng + dòng chữ + equalizer** → compact chrome, login, app icon
 - `BrandLogo` hỗ trợ `tone`: `color` \| `ink` \| `white`; luôn truyền `height`, chiều rộng tự suy ra từ `ASPECT`
 - `adaptive-icon.png` (Android) vẽ mark nhỏ hơn `icon.png` vì hệ điều hành cắt ~25% viền ngoài
 
