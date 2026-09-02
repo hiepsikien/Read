@@ -62,6 +62,14 @@ class HubCredits(BaseModel):
     source: HubSourceWork | None = None
 
 
+class HubChapterIn(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1)
+    blocks: list[dict[str, Any]] | None = None
+    word_count: int | None = None
+
+
 class HubWorkIn(BaseModel):
     hub_work_id: str = Field(min_length=3, max_length=120)
     hub_version: int = 1
@@ -80,6 +88,15 @@ class HubWorkIn(BaseModel):
     glossary: list[HubGlossaryEntry] | None = None
     notes: list[HubNote] | None = None
     credits: HubCredits | None = None
+    # REF/1 pilot contract — KnowledgeHub docs/ref-read-contract.md
+    edition_format: str | None = None
+    edition_hash: str | None = None
+    content_kind: str | None = None
+    reading_markdown: str | None = None
+    blocks: list[dict[str, Any]] | None = None
+    split_hints: list[dict[str, Any]] | None = None
+    quotation_profile: dict[str, Any] | None = None
+    chapters: list[HubChapterIn] | None = None
 
 
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
@@ -190,18 +207,65 @@ def create_hub_work(
 ) -> dict[str, Any]:
     if body.status not in {"draft", "pending_review", "published"}:
         raise HTTPException(status_code=400, detail="Invalid status.")
+
+    edition_hash = (body.edition_hash or "").strip() or None
+    if edition_hash:
+        existing = db.scalar(
+            select(Book)
+            .where(Book.hub_work_id == body.hub_work_id, Book.edition_hash == edition_hash)
+            .order_by(Book.created_at.desc())
+        )
+        if existing is not None:
+            return {
+                "id": existing.id,
+                "hub_work_id": body.hub_work_id,
+                "created": False,
+                "unchanged": True,
+                "chapter_count": len(existing.chapters),
+                "glossary_count": len(existing.glossary_entries),
+                "status": existing.status,
+                "edition_format": existing.edition_format,
+                "used_hub_chapters": any(ch.hub_chapter_id for ch in existing.chapters),
+            }
+
     categories = ensure_categories(db)
     category = next((c for c in categories if c.slug == body.category_slug), None)
     if not category:
         category = next((c for c in categories if c.slug == "other"), categories[0])
     publisher = _hub_publisher(db)
     now = datetime.now(timezone.utc)
-    units = split_into_chapters(
-        body.raw_text, preserve_paragraphs=True, length=body.split_length
-    )
-    if not units:
-        raise HTTPException(status_code=400, detail="Could not split manuscript into chapters.")
+    hub_chapters = list(body.chapters or [])
+    if hub_chapters:
+        units = [
+            {
+                "title": ch.title,
+                "content": ch.content,
+                "word_count": ch.word_count if ch.word_count is not None else count_words(ch.content),
+                "group_index": 1,
+                "hub_chapter_id": ch.id,
+                "blocks_json": json.dumps(ch.blocks, ensure_ascii=False) if ch.blocks else None,
+            }
+            for ch in hub_chapters
+        ]
+    else:
+        split_units = split_into_chapters(
+            body.raw_text, preserve_paragraphs=True, length=body.split_length
+        )
+        if not split_units:
+            raise HTTPException(status_code=400, detail="Could not split manuscript into chapters.")
+        units = [
+            {
+                "title": unit.title,
+                "content": unit.content,
+                "word_count": count_words(unit.content),
+                "group_index": unit.group_index,
+                "hub_chapter_id": None,
+                "blocks_json": None,
+            }
+            for unit in split_units
+        ]
 
+    raw_text = (body.reading_markdown or body.raw_text).strip() or body.raw_text
     book = Book(
         id=generate(),
         publisher_id=publisher.id,
@@ -211,11 +275,14 @@ def create_hub_work(
         price_cents=max(0, body.price_cents),
         status=body.status,
         source_filename=f"{body.hub_work_id}.txt",
-        raw_text=body.raw_text,
+        raw_text=raw_text,
         hub_work_id=body.hub_work_id,
         hub_version=body.hub_version,
         hub_content_hash=body.hub_content_hash,
         hub_license_snapshot=json.dumps(body.hub_license_snapshot or {}, ensure_ascii=False),
+        edition_format=body.edition_format,
+        edition_hash=edition_hash,
+        content_kind=body.content_kind,
         submitted_at=now if body.status == "pending_review" else None,
         created_at=now,
         updated_at=now,
@@ -228,10 +295,12 @@ def create_hub_work(
                 id=generate(),
                 book_id=book.id,
                 position=index + 1,
-                title=unit.title,
-                content=unit.content,
-                word_count=count_words(unit.content),
-                group_index=unit.group_index,
+                title=unit["title"],
+                content=unit["content"],
+                word_count=unit["word_count"],
+                group_index=unit["group_index"],
+                hub_chapter_id=unit["hub_chapter_id"],
+                blocks_json=unit["blocks_json"],
             )
         )
     glossary_count = _upsert_hub_glossary(db, book, body.glossary, body.notes)
@@ -246,4 +315,6 @@ def create_hub_work(
         "chapter_count": len(units),
         "glossary_count": 0 if glossary_count < 0 else glossary_count,
         "status": book.status,
+        "edition_format": book.edition_format,
+        "used_hub_chapters": bool(hub_chapters),
     }

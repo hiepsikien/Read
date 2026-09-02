@@ -516,6 +516,7 @@ export interface ReaderNote {
   episode_key: string;
   episode_title: string;
   group_label: string;
+  summary?: string;
 }
 
 export interface NoteSpan {
@@ -527,6 +528,42 @@ export interface NoteSpan {
 export type ContentBlock =
   | { type: "text"; value: string }
   | { type: "figure"; src: string; caption: string };
+
+/** Hub REF/1 block (pilot subset). */
+export interface RefSpan {
+  style?: string;
+  start?: number;
+  end?: number;
+  text?: string;
+  note?: string;
+}
+
+export interface RefBlock {
+  type?: string;
+  text?: string;
+  level?: number;
+  spans?: RefSpan[];
+}
+
+export type ReaderRenderRole =
+  | "paragraph"
+  | "heading"
+  | "blockquote"
+  | "verse"
+  | "list_item"
+  | "dialogue"
+  | "stage_direction";
+
+export type ReaderRenderBlock =
+  | {
+      kind: "prose";
+      role: ReaderRenderRole;
+      level?: number;
+      value: string;
+      tokens: InlineMarkdownToken[];
+    }
+  | { kind: "figure"; src: string; caption: string }
+  | { kind: "hr" };
 
 function isEscaped(value: string, index: number) {
   let slashes = 0;
@@ -942,6 +979,167 @@ export function uniqueNotesFromTokens(
   return result;
 }
 
+function matchFootnoteNote(marker: string, notes: ReaderNote[]): ReaderNote | undefined {
+  const needle = marker.trim();
+  if (!needle) return undefined;
+  for (const note of notes) {
+    if (note.aliases.some((alias) => alias.trim() === needle)) return note;
+    if (note.name.trim() === needle) return note;
+    if (note.name.trim().endsWith(needle)) return note;
+  }
+  return undefined;
+}
+
+function mergeAdjacentTokens(tokens: InlineMarkdownToken[]): InlineMarkdownToken[] {
+  const out: InlineMarkdownToken[] = [];
+  for (const token of tokens) {
+    if (!token.text) continue;
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      prev.bold === token.bold &&
+      prev.italic === token.italic &&
+      prev.noteId === token.noteId
+    ) {
+      prev.text += token.text;
+      continue;
+    }
+    out.push({ ...token });
+  }
+  return out;
+}
+
+/**
+ * Build inline tokens from REF spans. When blocks are present, Read must not
+ * re-parse markdown markers — honor Hub offsets for `em` / `footnote` only.
+ */
+export function tokensFromRefSpans(
+  text: string,
+  spans: RefSpan[] | undefined,
+  notes: ReaderNote[]
+): InlineMarkdownToken[] {
+  const sorted = [...(spans || [])]
+    .filter(
+      (span) =>
+        typeof span.start === "number" &&
+        typeof span.end === "number" &&
+        (span.end as number) > (span.start as number)
+    )
+    .sort((a, b) => (a.start as number) - (b.start as number) || (a.end as number) - (b.end as number));
+
+  if (!sorted.length) {
+    return [{ text, bold: false, italic: false }];
+  }
+
+  const tokens: InlineMarkdownToken[] = [];
+  let cursor = 0;
+
+  const emitPlain = (from: number, to: number) => {
+    if (to <= from) return;
+    tokens.push({ text: text.slice(from, to), bold: false, italic: false });
+  };
+
+  for (const span of sorted) {
+    const start = Math.max(cursor, span.start as number);
+    const end = Math.min(text.length, span.end as number);
+    if (end <= start) continue;
+    if (start > cursor) emitPlain(cursor, start);
+
+    let chunk = text.slice(start, end);
+    let italic = false;
+    let noteId: string | undefined;
+    const style = String(span.style || "");
+
+    if (style === "em") {
+      italic = true;
+      if (chunk.length >= 2 && chunk.startsWith("_") && chunk.endsWith("_")) {
+        chunk = chunk.slice(1, -1);
+      }
+    } else if (style === "footnote") {
+      const marker = String(span.text || chunk).trim();
+      const note = matchFootnoteNote(marker, notes);
+      if (note) noteId = note.id;
+    }
+
+    tokens.push({ text: chunk, bold: false, italic, noteId });
+    cursor = end;
+  }
+  emitPlain(cursor, text.length);
+  return mergeAdjacentTokens(tokens);
+}
+
+function refRoleForType(type: string): ReaderRenderRole | "skip" | "hr" {
+  switch (type) {
+    case "heading":
+      return "heading";
+    case "paragraph":
+      return "paragraph";
+    case "blockquote":
+      return "blockquote";
+    case "verse_line":
+    case "stanza":
+      return "verse";
+    case "hr":
+      return "hr";
+    case "metadata":
+      return "skip";
+    case "list_item":
+      return "list_item";
+    case "dialogue":
+      return "dialogue";
+    case "stage_direction":
+      return "stage_direction";
+    default:
+      return "paragraph";
+  }
+}
+
+/**
+ * Prefer Hub REF chapter `blocks` when present; otherwise fall back to
+ * markdown content + note annotation.
+ */
+export function buildReaderBlocks(
+  content: string,
+  options?: { refBlocks?: RefBlock[] | null; notes?: ReaderNote[] }
+): ReaderRenderBlock[] {
+  const notes = options?.notes ?? [];
+  const refBlocks = options?.refBlocks;
+  if (refBlocks && refBlocks.length) {
+    const out: ReaderRenderBlock[] = [];
+    for (const block of refBlocks) {
+      const role = refRoleForType(String(block.type || "paragraph"));
+      if (role === "skip") continue;
+      if (role === "hr") {
+        out.push({ kind: "hr" });
+        continue;
+      }
+      const value = String(block.text || "");
+      if (!value && role !== "heading") continue;
+      out.push({
+        kind: "prose",
+        role,
+        level: role === "heading" ? Math.min(4, Math.max(1, Number(block.level) || 1)) : undefined,
+        value,
+        tokens: tokensFromRefSpans(value, block.spans, notes),
+      });
+    }
+    if (out.length) return out;
+  }
+
+  const phraseOnce = new Set<string>();
+  return parseContentBlocks(content).map((block) => {
+    if (block.type === "figure") {
+      return { kind: "figure" as const, src: block.src, caption: block.caption };
+    }
+    return {
+      kind: "prose" as const,
+      role: "paragraph" as const,
+      value: block.value,
+      tokens: annotateInlineTokens(block.value, notes, { phraseOnce }),
+    };
+  });
+}
+
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -1269,6 +1467,8 @@ export function createApiClient(options: ApiClientOptions) {
           title: string;
           content: string;
           word_count: number;
+          blocks?: RefBlock[] | null;
+          hub_chapter_id?: string | null;
         };
         chapters: ChapterListItem[];
         progress?: ReadingProgress | null;

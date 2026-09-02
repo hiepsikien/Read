@@ -118,6 +118,9 @@ class Book(Base):
     hub_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     hub_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     hub_license_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edition_format: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    edition_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     author_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     author_hub_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     translator_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -187,6 +190,8 @@ class Chapter(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     word_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     group_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    hub_chapter_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    blocks_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     book: Mapped[Book] = relationship(back_populates="chapters")
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, parseContentBlocks, parseInlineMarkdown, type BookListItem, type ReadingProgress } from "@read/api-client";
+import { ApiError, buildReaderBlocks, noteDisplayTitle, parseInlineMarkdown, type BookListItem, type ReaderNote, type ReadingProgress, type RefBlock } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getStoredToken } from "@/lib/api";
@@ -31,8 +31,10 @@ type ReaderPayload = {
     title: string;
     content: string;
     word_count: number;
+    blocks?: RefBlock[] | null;
   };
   chapters: ChapterMeta[];
+  notes: ReaderNote[];
 };
 
 const THEMES = {
@@ -89,6 +91,7 @@ export function InAppReader({
   const [progress, setProgress] = useState(0);
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
+  const [activeNote, setActiveNote] = useState<ReaderNote | null>(null);
   const [finishedRecs, setFinishedRecs] = useState<{
     next_episode: BookListItem | null;
     next_episode_owned: boolean | null;
@@ -107,6 +110,7 @@ export function InAppReader({
       setError("");
       setLocked(false);
       setResumeProgress(null);
+      setActiveNote(null);
       restoredKeyRef.current = null;
       try {
         const payload = await createBrowserApi().getChapter(bookId, chapterId);
@@ -121,6 +125,7 @@ export function InAppReader({
             word_count: chapter.word_count,
             locked: Boolean(chapter.locked),
           })),
+          notes: payload.notes ?? [],
         });
         const serverProgress =
           payload.progress?.chapter_id === chapterId ? payload.progress : null;
@@ -316,6 +321,21 @@ export function InAppReader({
       next: index >= 0 && index < data.chapters.length - 1 ? data.chapters[index + 1] : null,
     };
   }, [data]);
+
+  const readerBlocks = useMemo(
+    () =>
+      buildReaderBlocks(data?.chapter.content ?? "", {
+        refBlocks: data?.chapter.blocks,
+        notes: data?.notes ?? [],
+      }),
+    [data?.chapter.blocks, data?.chapter.content, data?.notes]
+  );
+
+  const notesById = useMemo(() => {
+    const map = new Map<string, ReaderNote>();
+    for (const note of data?.notes ?? []) map.set(note.id, note);
+    return map;
+  }, [data?.notes]);
 
   async function markFinished() {
     const latest = latestScrollRef.current;
@@ -535,37 +555,96 @@ export function InAppReader({
           className="reader-serif mt-10 space-y-6 leading-[1.75]"
           style={{ fontSize: `${fontSize}px` }}
         >
-          {parseContentBlocks(data.chapter.content).map((block, index) =>
-            block.type === "figure" ? (
-              <figure
+          {readerBlocks.map((block, index) => {
+            if (block.kind === "figure") {
+              return (
+                <figure
+                  key={index}
+                  data-read-paragraph={index}
+                  className="-mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)]"
+                >
+                  <ReaderFigure src={block.src} caption={block.caption} />
+                  {block.caption ? (
+                    <figcaption
+                      className="mt-3 text-center italic"
+                      style={{
+                        color: palette.muted,
+                        fontSize: `${Math.max(13, fontSize * 0.85)}px`,
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {block.caption}
+                    </figcaption>
+                  ) : null}
+                </figure>
+              );
+            }
+            if (block.kind === "hr") {
+              return (
+                <hr
+                  key={index}
+                  data-read-paragraph={index}
+                  className="border-0 border-t"
+                  style={{ borderColor: "color-mix(in srgb, currentColor 18%, transparent)" }}
+                />
+              );
+            }
+            const Tag =
+              block.role === "heading"
+                ? ((["h2", "h3", "h4", "h5"] as const)[Math.min(3, Math.max(0, (block.level || 1) - 1))] ??
+                  "h2")
+                : block.role === "blockquote"
+                  ? "blockquote"
+                  : "p";
+            return (
+              <Tag
                 key={index}
                 data-read-paragraph={index}
-                className="-mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)]"
+                className={
+                  block.role === "verse"
+                    ? "whitespace-pre-wrap"
+                    : block.role === "blockquote"
+                      ? "border-l-2 pl-4 italic"
+                      : block.role === "heading"
+                        ? "font-semibold tracking-tight"
+                        : "whitespace-pre-wrap"
+                }
+                style={
+                  block.role === "blockquote"
+                    ? { borderColor: "color-mix(in srgb, currentColor 25%, transparent)" }
+                    : undefined
+                }
               >
-                <ReaderFigure src={block.src} caption={block.caption} />
-                {block.caption ? (
-                  <figcaption
-                    className="mt-3 text-center italic"
-                    style={{
-                      color: palette.muted,
-                      fontSize: `${Math.max(13, fontSize * 0.85)}px`,
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    {block.caption}
-                  </figcaption>
-                ) : null}
-              </figure>
-            ) : (
-              <p
-                key={index}
-                data-read-paragraph={index}
-                className="whitespace-pre-wrap"
-              >
-                <InlineMarkdown value={block.value} />
-              </p>
-            )
-          )}
+                {block.tokens.map((token, tokenIndex) => {
+                  const note = token.noteId ? notesById.get(token.noteId) : undefined;
+                  const styled = token.bold ? (
+                    <strong>{token.italic ? <em>{token.text}</em> : token.text}</strong>
+                  ) : token.italic ? (
+                    <em>{token.text}</em>
+                  ) : (
+                    token.text
+                  );
+                  if (!note) {
+                    return <span key={`${tokenIndex}-${token.text}`}>{styled}</span>;
+                  }
+                  return (
+                    <button
+                      key={`${tokenIndex}-${token.text}`}
+                      type="button"
+                      onClick={() => setActiveNote(note)}
+                      className="cursor-pointer underline decoration-dotted underline-offset-4"
+                      style={{
+                        background: "color-mix(in srgb, currentColor 6%, transparent)",
+                        textDecorationColor: "color-mix(in srgb, currentColor 45%, transparent)",
+                      }}
+                    >
+                      {styled}
+                    </button>
+                  );
+                })}
+              </Tag>
+            );
+          })}
         </div>
 
         <nav className="mt-14 flex items-center justify-between gap-4 border-t pt-6"
@@ -756,6 +835,30 @@ export function InAppReader({
           </div>
         </div>
       )}
+      {activeNote ? (
+        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 sm:items-center">
+          <div
+            className="max-h-[70vh] w-full max-w-lg overflow-y-auto rounded-t-2xl p-6 sm:rounded-2xl"
+            style={{ background: palette.bg, color: palette.fg }}
+          >
+            <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
+              {activeNote.group_label || "Note"}
+            </p>
+            <h2 className="mt-2 text-xl font-semibold">{noteDisplayTitle(activeNote)}</h2>
+            <p className="mt-4 whitespace-pre-wrap leading-relaxed">
+              {(activeNote.summary || "").trim() || "No note text."}
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveNote(null)}
+              className="mt-6 rounded-md px-3 py-2 text-sm font-medium"
+              style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

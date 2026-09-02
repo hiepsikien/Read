@@ -281,3 +281,79 @@ def test_hub_sync_rejects_bad_token(client, hub_token):
         headers={"X-Hub-Sync-Token": "nope"},
     )
     assert r.status_code == 401
+
+
+def test_hub_sync_uses_hub_chapters_and_ref_meta(client, db_session, hub_token):
+    from sqlalchemy import select
+
+    from app.models import Book, Chapter
+
+    ensure_categories(db_session)
+    body = {
+        "hub_work_id": "arnold--essays_in_criticism",
+        "hub_version": 1,
+        "hub_content_hash": "ref-pilot-1",
+        "title": "Essays in Criticism",
+        "category_slug": "essays",
+        "raw_text": "fallback should not drive split",
+        "edition_format": "ref/1",
+        "edition_hash": "b" * 64,
+        "content_kind": "prose",
+        "chapters": [
+            {
+                "id": "ch-001",
+                "title": "The Function of Criticism",
+                "content": "Poetry is the criticism of life.[1]",
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "text": "Poetry is the criticism of life.[1]",
+                        "spans": [
+                            {
+                                "style": "footnote",
+                                "start": 32,
+                                "end": 35,
+                                "text": "[1]",
+                                "note": "Arnold's phrase.",
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "id": "ch-002",
+                "title": "The Literary Influence of Academies",
+                "content": "Second chapter body.",
+            },
+        ],
+        "notes": [
+            {
+                "kind": "footnote",
+                "label": "[1]",
+                "marker": "[1]",
+                "body": "Arnold's phrase.",
+                "chapter": "ch-001",
+            }
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    payload = res.json()
+    assert payload["chapter_count"] == 2
+    assert payload["used_hub_chapters"] is True
+    assert payload["edition_format"] == "ref/1"
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "arnold--essays_in_criticism"))
+    assert book is not None
+    assert book.edition_hash == "b" * 64
+    chapters = list(db_session.scalars(select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.position)))
+    assert [c.title for c in chapters] == [
+        "The Function of Criticism",
+        "The Literary Influence of Academies",
+    ]
+    assert chapters[0].hub_chapter_id == "ch-001"
+    assert chapters[0].blocks_json and '"footnote"' in chapters[0].blocks_json

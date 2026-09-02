@@ -137,4 +137,65 @@ assert.deepEqual(
 // No matching note leaves the plain markdown result untouched.
 assert.deepEqual(annotateInlineTokens(thesis, []), parseInlineMarkdown(thesis));
 
+import {
+  buildReaderBlocks,
+  tokensFromRefSpans,
+} from "./index.ts";
+
+const arnoldNote: ReaderNote = {
+  id: "note-1",
+  name: "[1]",
+  aliases: ["[1]"],
+  episode_key: "ch-001",
+  episode_title: "",
+  group_label: "Chú thích",
+  summary: "Arnold's phrase.",
+};
+
+assert.deepEqual(
+  tokensFromRefSpans(
+    "Poetry is the criticism of life.[1]",
+    [
+      { style: "em", start: 0, end: 6, text: "Poetry" },
+      { style: "footnote", start: 32, end: 35, text: "[1]" },
+    ],
+    [arnoldNote]
+  ).map((token) => ({
+    text: token.text,
+    italic: token.italic,
+    noteId: token.noteId,
+  })),
+  [
+    { text: "Poetry", italic: true, noteId: undefined },
+    { text: " is the criticism of life.", italic: false, noteId: undefined },
+    { text: "[1]", italic: false, noteId: "note-1" },
+  ]
+);
+
+assert.deepEqual(
+  tokensFromRefSpans("_italics_", [{ style: "em", start: 0, end: 9, text: "_italics_" }], []).map(
+    (token) => ({ text: token.text, italic: token.italic })
+  ),
+  [{ text: "italics", italic: true }]
+);
+
+const rendered = buildReaderBlocks("fallback", {
+  refBlocks: [
+    {
+      type: "paragraph",
+      text: "Poetry is the criticism of life.[1]",
+      spans: [{ style: "footnote", start: 32, end: 35, text: "[1]" }],
+    },
+    { type: "metadata", text: "skip me" },
+    { type: "hr" },
+  ],
+  notes: [arnoldNote],
+});
+assert.equal(rendered.length, 2);
+assert.equal(rendered[0]?.kind, "prose");
+assert.equal(rendered[1]?.kind, "hr");
+if (rendered[0]?.kind === "prose") {
+  assert.ok(rendered[0].tokens.some((token) => token.noteId === "note-1"));
+}
+
 console.log("ok");

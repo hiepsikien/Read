@@ -23,12 +23,14 @@ import {
 import {
   ApiError,
   annotateInlineTokens,
-  parseContentBlocks,
+  buildReaderBlocks,
   parseInlineMarkdown,
   uniqueNotesFromTokens,
   type ChapterListItem,
   type ReaderNote,
+  type ReaderRenderRole,
   type ReadingProgress,
+  type RefBlock,
 } from "@read/api-client";
 import { AuthenticatedImage } from "../../../components/AuthenticatedImage";
 import { BrandLogo } from "../../../components/BrandLogo";
@@ -64,7 +66,15 @@ import {
 
 type ReaderPayload = {
   book: { id: string; title: string; price_cents: number; publisher_name: string };
-  chapter: { id: string; position: number; title: string; content: string; word_count: number };
+  chapter: {
+    id: string;
+    position: number;
+    title: string;
+    content: string;
+    word_count: number;
+    blocks?: RefBlock[] | null;
+    hub_chapter_id?: string | null;
+  };
   chapters: ChapterListItem[];
   notes?: ReaderNote[];
 };
@@ -358,17 +368,19 @@ export default function ReaderScreen() {
         .filter(Boolean),
     [data?.chapter.content]
   );
-  const blocks = useMemo(
-    () => parseContentBlocks(data?.chapter.content ?? ""),
-    [data?.chapter.content]
-  );
   const notes = data?.notes ?? EMPTY_NOTES;
-  const blockTokens = useMemo(() => {
-    const phraseOnce = new Set<string>();
-    return blocks.map((block) =>
-      block.type === "text" ? annotateInlineTokens(block.value, notes, { phraseOnce }) : null
-    );
-  }, [blocks, notes]);
+  const blocks = useMemo(
+    () =>
+      buildReaderBlocks(data?.chapter.content ?? "", {
+        refBlocks: data?.chapter.blocks,
+        notes,
+      }),
+    [data?.chapter.blocks, data?.chapter.content, notes]
+  );
+  const blockTokens = useMemo(
+    () => blocks.map((block) => (block.kind === "prose" ? block.tokens : null)),
+    [blocks]
+  );
   const explainParagraphNotes = useMemo(() => {
     if (explainEntryId || explainParagraph == null) return [];
     return uniqueNotesFromTokens(blockTokens[explainParagraph] ?? [], notes);
@@ -954,7 +966,7 @@ export default function ReaderScreen() {
                     },
                   ]}
                 >
-                  {block.type === "figure" ? (
+                  {block.kind === "figure" ? (
                     <View style={styles.figure}>
                       {api.mediaUrl(block.src) ? (
                         <AuthenticatedImage
@@ -975,6 +987,14 @@ export default function ReaderScreen() {
                         </Text>
                       ) : null}
                     </View>
+                  ) : block.kind === "hr" ? (
+                    <View
+                      style={{
+                        height: 1,
+                        marginVertical: 12,
+                        backgroundColor: withAlpha(palette.fg, 0.18),
+                      }}
+                    />
                   ) : (
                     <AnnotatedParagraph
                       value={block.value}
@@ -982,6 +1002,8 @@ export default function ReaderScreen() {
                       notes={notes}
                       palette={palette}
                       fontSize={fontSize}
+                      role={block.role}
+                      level={block.level}
                       onPressNote={(noteId) => {
                         edgeTapGuardRef.current?.consume();
                         setPressedParagraph(null);
@@ -1054,7 +1076,7 @@ export default function ReaderScreen() {
                     },
                   ]}
                 >
-                {block.type === "figure" ? (
+                {block.kind === "figure" ? (
                   <View style={styles.figure}>
                     {api.mediaUrl(block.src) ? (
                       <AuthenticatedImage
@@ -1075,6 +1097,14 @@ export default function ReaderScreen() {
                       </Text>
                     ) : null}
                   </View>
+                ) : block.kind === "hr" ? (
+                  <View
+                    style={{
+                      height: 1,
+                      marginVertical: 12,
+                      backgroundColor: withAlpha(palette.fg, 0.18),
+                    }}
+                  />
                 ) : (
                   <AnnotatedParagraph
                     value={block.value}
@@ -1082,6 +1112,8 @@ export default function ReaderScreen() {
                     notes={notes}
                     palette={palette}
                     fontSize={fontSize}
+                    role={block.role}
+                    level={block.level}
                     onPressNote={(noteId) => {
                       edgeTapGuardRef.current?.consume();
                       setPressedParagraph(null);
@@ -1281,6 +1313,8 @@ function AnnotatedParagraph({
   notes,
   palette,
   fontSize,
+  role = "paragraph",
+  level,
   onPressNote,
   onPressParagraph,
   onPressParagraphIn,
@@ -1291,6 +1325,8 @@ function AnnotatedParagraph({
   notes: ReaderNote[];
   palette: { fg: string };
   fontSize: number;
+  role?: ReaderRenderRole;
+  level?: number;
   onPressNote: (noteId: string) => void;
   onPressParagraph: () => void;
   onPressParagraphIn?: () => void;
@@ -1298,10 +1334,23 @@ function AnnotatedParagraph({
 }) {
   const tokens = tokensProp ?? annotateInlineTokens(value, notes);
   const byId = new Map(notes.map((note) => [note.id, note]));
+  const headingScale =
+    role === "heading" ? Math.max(1.05, 1.45 - 0.08 * Math.min(4, Math.max(1, level || 1))) : 1;
+  const isVerse = role === "verse";
   return (
     <Text
       accessibilityRole="text"
-      style={{ color: palette.fg, fontSize, lineHeight: fontSize * 1.7 }}
+      style={{
+        color: palette.fg,
+        fontSize: fontSize * headingScale,
+        lineHeight: fontSize * (isVerse ? 1.55 : 1.7),
+        fontWeight: role === "heading" ? "700" : "400",
+        fontStyle: role === "blockquote" || role === "stage_direction" ? "italic" : "normal",
+        marginLeft: role === "blockquote" ? 12 : 0,
+        paddingLeft: role === "blockquote" ? 10 : 0,
+        borderLeftWidth: role === "blockquote" ? 2 : 0,
+        borderLeftColor: role === "blockquote" ? withAlpha(palette.fg, 0.25) : "transparent",
+      }}
     >
       {tokens.map((token, index) => {
         const note = token.noteId ? byId.get(token.noteId) : undefined;

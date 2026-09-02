@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1466,6 +1467,8 @@ def get_chapter(
             "title": chapter.title,
             "content": chapter.content,
             "word_count": chapter.word_count,
+            "blocks": json.loads(chapter.blocks_json) if chapter.blocks_json else None,
+            "hub_chapter_id": chapter.hub_chapter_id,
         },
         "chapters": chapters,
         "progress": _progress_payload(
@@ -1483,6 +1486,7 @@ def get_chapter(
                 "episode_key": row.episode_key,
                 "episode_title": row.episode_title,
                 "group_label": row.group_label,
+                "summary": row.summary,
             }
             for row in db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
             if is_reader_note(row)
