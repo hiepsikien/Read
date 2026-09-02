@@ -24,6 +24,7 @@ import {
   ApiError,
   annotateInlineTokens,
   buildReaderBlocks,
+  notesFromRefBlocks,
   parseInlineMarkdown,
   uniqueNotesFromTokens,
   type ChapterListItem,
@@ -368,7 +369,10 @@ export default function ReaderScreen() {
         .filter(Boolean),
     [data?.chapter.content]
   );
-  const notes = data?.notes ?? EMPTY_NOTES;
+  const notes = useMemo(
+    () => notesFromRefBlocks(data?.chapter.blocks, data?.notes ?? EMPTY_NOTES),
+    [data?.chapter.blocks, data?.notes]
+  );
   const blocks = useMemo(
     () =>
       buildReaderBlocks(data?.chapter.content ?? "", {
@@ -382,9 +386,9 @@ export default function ReaderScreen() {
     [blocks]
   );
   const explainParagraphNotes = useMemo(() => {
-    if (explainEntryId || explainParagraph == null) return [];
+    if (explainParagraph == null) return [];
     return uniqueNotesFromTokens(blockTokens[explainParagraph] ?? [], notes);
-  }, [blockTokens, explainEntryId, explainParagraph, notes]);
+  }, [blockTokens, explainParagraph, notes]);
 
   const handleChapterComplete = useCallback(() => {
     if (!bookId) return;

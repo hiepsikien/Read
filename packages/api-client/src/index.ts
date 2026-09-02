@@ -990,6 +990,55 @@ function matchFootnoteNote(marker: string, notes: ReaderNote[]): ReaderNote | un
   return undefined;
 }
 
+const REF_SPAN_NOTE_PREFIX = "span-note:";
+
+function spanNoteId(marker: string): string {
+  return `${REF_SPAN_NOTE_PREFIX}${marker || "note"}`;
+}
+
+export function isRefSpanNoteId(id: string | undefined | null): boolean {
+  return Boolean(id && id.startsWith(REF_SPAN_NOTE_PREFIX));
+}
+
+/**
+ * Merge Hub ``span.note`` bodies into the notes list used for matching/display.
+ * Prefer a non-empty ``notes[]`` summary; otherwise take ``span.note``.
+ * Web/mobile clients that pass ``data.notes`` separately should call this
+ * before ``tokensFromRefSpans`` / ``uniqueNotesFromTokens``.
+ */
+export function notesFromRefBlocks(
+  refBlocks: RefBlock[] | undefined | null,
+  notes: ReaderNote[]
+): ReaderNote[] {
+  const merged: ReaderNote[] = notes.map((note) => ({
+    ...note,
+    aliases: [...(note.aliases || [])],
+  }));
+  for (const block of refBlocks || []) {
+    for (const span of block.spans || []) {
+      if (String(span.style || "") !== "footnote") continue;
+      const body = String(span.note || "").trim();
+      if (!body) continue;
+      const marker = String(span.text || "").trim();
+      const existing = matchFootnoteNote(marker, merged);
+      if (existing) {
+        if (!(existing.summary || "").trim()) existing.summary = body;
+        continue;
+      }
+      merged.push({
+        id: spanNoteId(marker),
+        name: marker || "[note]",
+        aliases: marker ? [marker] : [],
+        episode_key: "",
+        episode_title: "",
+        group_label: "Chú thích",
+        summary: body,
+      });
+    }
+  }
+  return merged;
+}
+
 function mergeAdjacentTokens(tokens: InlineMarkdownToken[]): InlineMarkdownToken[] {
   const out: InlineMarkdownToken[] = [];
   for (const token of tokens) {
@@ -1059,6 +1108,7 @@ export function tokensFromRefSpans(
       const marker = String(span.text || chunk).trim();
       const note = matchFootnoteNote(marker, notes);
       if (note) noteId = note.id;
+      else if (String(span.note || "").trim()) noteId = spanNoteId(marker);
     }
 
     tokens.push({ text: chunk, bold: false, italic, noteId });
@@ -1102,8 +1152,8 @@ export function buildReaderBlocks(
   content: string,
   options?: { refBlocks?: RefBlock[] | null; notes?: ReaderNote[] }
 ): ReaderRenderBlock[] {
-  const notes = options?.notes ?? [];
   const refBlocks = options?.refBlocks;
+  const notes = notesFromRefBlocks(refBlocks, options?.notes ?? []);
   if (refBlocks && refBlocks.length) {
     const out: ReaderRenderBlock[] = [];
     for (const block of refBlocks) {

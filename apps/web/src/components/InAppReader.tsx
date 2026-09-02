@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, buildReaderBlocks, noteDisplayTitle, parseInlineMarkdown, type BookListItem, type ReaderNote, type ReadingProgress, type RefBlock } from "@read/api-client";
+import { ApiError, buildReaderBlocks, noteDisplayTitle, notesFromRefBlocks, parseInlineMarkdown, type BookListItem, type ReaderNote, type ReadingProgress, type RefBlock } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getStoredToken } from "@/lib/api";
@@ -322,20 +322,25 @@ export function InAppReader({
     };
   }, [data]);
 
+  const notes = useMemo(
+    () => notesFromRefBlocks(data?.chapter.blocks, data?.notes ?? []),
+    [data?.chapter.blocks, data?.notes]
+  );
+
   const readerBlocks = useMemo(
     () =>
       buildReaderBlocks(data?.chapter.content ?? "", {
         refBlocks: data?.chapter.blocks,
-        notes: data?.notes ?? [],
+        notes,
       }),
-    [data?.chapter.blocks, data?.chapter.content, data?.notes]
+    [data?.chapter.blocks, data?.chapter.content, notes]
   );
 
   const notesById = useMemo(() => {
     const map = new Map<string, ReaderNote>();
-    for (const note of data?.notes ?? []) map.set(note.id, note);
+    for (const note of notes) map.set(note.id, note);
     return map;
-  }, [data?.notes]);
+  }, [notes]);
 
   async function markFinished() {
     const latest = latestScrollRef.current;

@@ -139,7 +139,9 @@ assert.deepEqual(annotateInlineTokens(thesis, []), parseInlineMarkdown(thesis));
 
 import {
   buildReaderBlocks,
+  notesFromRefBlocks,
   tokensFromRefSpans,
+  uniqueNotesFromTokens,
 } from "./index.ts";
 
 const arnoldNote: ReaderNote = {
@@ -197,5 +199,46 @@ assert.equal(rendered[1]?.kind, "hr");
 if (rendered[0]?.kind === "prose") {
   assert.ok(rendered[0].tokens.some((token) => token.noteId === "note-1"));
 }
+
+const spanOnlyBlocks = [
+  {
+    type: "paragraph",
+    text: "Poetry is the criticism of life.[1]",
+    spans: [
+      {
+        style: "footnote",
+        start: 32,
+        end: 35,
+        text: "[1]",
+        note: "Arnold's phrase from the page.",
+      },
+    ],
+  },
+];
+const mergedSpanNotes = notesFromRefBlocks(spanOnlyBlocks, []);
+assert.equal(mergedSpanNotes.length, 1);
+assert.equal(mergedSpanNotes[0]?.id, "span-note:[1]");
+assert.equal(mergedSpanNotes[0]?.summary, "Arnold's phrase from the page.");
+const spanOnlyRendered = buildReaderBlocks("fallback", { refBlocks: spanOnlyBlocks, notes: [] });
+if (spanOnlyRendered[0]?.kind === "prose") {
+  const noteId = spanOnlyRendered[0].tokens.find((token) => token.noteId)?.noteId;
+  assert.equal(noteId, "span-note:[1]");
+  assert.equal(uniqueNotesFromTokens(spanOnlyRendered[0].tokens, []).length, 0);
+  assert.equal(uniqueNotesFromTokens(spanOnlyRendered[0].tokens, mergedSpanNotes).length, 1);
+}
+
+const emptyCatalogNote: ReaderNote = {
+  id: "note-empty",
+  name: "[1]",
+  aliases: ["[1]"],
+  episode_key: "ch-001",
+  episode_title: "",
+  group_label: "Chú thích",
+  summary: "",
+};
+assert.equal(
+  notesFromRefBlocks(spanOnlyBlocks, [emptyCatalogNote])[0]?.summary,
+  "Arnold's phrase from the page."
+);
 
 console.log("ok");

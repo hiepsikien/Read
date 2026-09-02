@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import {
   ApiError,
+  isRefSpanNoteId,
   noteDisplayTitle,
   type ApiClient,
   type ExplainCandidate,
@@ -72,6 +73,30 @@ export function ExplainSheet({
     let cancelled = false;
 
     if (entryId) {
+      const local = paragraphNotes.find((note) => note.id === entryId);
+      const localBody = (local?.summary || "").trim();
+      if (localBody) {
+        setCard({
+          title: noteDisplayTitle(local!),
+          book_note: localBody,
+          ai_context: "",
+          sources: ["book"],
+          followups: [],
+          glossary_entry: null,
+        });
+        return;
+      }
+      if (isRefSpanNoteId(entryId)) {
+        setCard({
+          title: local ? noteDisplayTitle(local) : entryId.slice("span-note:".length) || "Note",
+          book_note: "",
+          ai_context: "",
+          sources: ["book"],
+          followups: [],
+          glossary_entry: null,
+        });
+        return;
+      }
       setBusy(true);
       void api
         .explainChapter(bookId, chapterId, { entry_id: entryId })
