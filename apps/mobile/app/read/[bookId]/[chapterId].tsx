@@ -1201,6 +1201,7 @@ export default function ReaderScreen() {
         api={api}
         bookId={bookId!}
         chapterId={chapterId!}
+        bookLanguage={data?.book.language || "en"}
         palette={palette}
         bookLanguage={data.book.language}
         paragraphIndex={explainParagraph}

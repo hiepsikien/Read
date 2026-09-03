@@ -1213,10 +1213,9 @@ function foldHeadingText(value: string): string {
 }
 
 function isSkippedRefBlock(block: RefBlock): boolean {
-  if (block.hidden) return true;
+  if (block.hidden || block.suppress_in_reader) return true;
   const role = String(block.role || "");
   if (role === "aside") return true;
-  if (String(block.type || "") === "heading" && block.suppress_in_reader) return true;
   return false;
 }
 
@@ -1225,10 +1224,13 @@ function isFigureRefBlock(block: RefBlock): boolean {
 }
 
 function isDuplicateChapterHeading(block: RefBlock, chapterTitle?: string): boolean {
-  if (String(block.type || "") !== "heading") return false;
   const title = (chapterTitle || "").trim();
   if (!title) return false;
-  return foldHeadingText(String(block.text || "")) === foldHeadingText(title);
+  const kind = String(block.type || "");
+  const text = String(block.text || "");
+  if (kind !== "heading" && kind !== "paragraph") return false;
+  if (isDuplicateChapterBanner(text, title)) return true;
+  return foldHeadingText(text) === foldHeadingText(title);
 }
 
 function refRoleForType(type: string): ReaderRenderRole | "skip" | "hr" {
@@ -1257,6 +1259,58 @@ function refRoleForType(type: string): ReaderRenderRole | "skip" | "hr" {
   }
 }
 
+const CHAPTER_MARK_KEY = /^(?:chapter|chap|book|part|volume)\s+([ivxlcdm]+|\d+)$/;
+const CHAPTER_MARK_KINDS = ["chapter", "chap", "book", "part", "volume"] as const;
+
+export function headingKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function titleHasChapterNumber(titleKey: string, number: string): boolean {
+  if (titleKey === number || titleKey.startsWith(`${number} `)) return true;
+  return CHAPTER_MARK_KINDS.some(
+    (kind) => titleKey === `${kind} ${number}` || titleKey.startsWith(`${kind} ${number} `)
+  );
+}
+
+/** True when chrome already shows this CHAPTER/BOOK/PART line as the chapter title. */
+export function isDuplicateChapterBanner(blockText: string, chapterTitle: string): boolean {
+  const head = headingKey(blockText);
+  const title = headingKey(chapterTitle);
+  if (!head || !title) return false;
+  if (head === title) return true;
+  const mark = head.match(CHAPTER_MARK_KEY);
+  if (!mark) return false;
+  return titleHasChapterNumber(title, mark[1]);
+}
+
+function skipLeadingChapterBanner<T extends { kind: string; role?: string; value?: string }>(
+  blocks: T[],
+  chapterTitle: string | undefined
+): T[] {
+  if (!chapterTitle) return blocks;
+  const out: T[] = [];
+  let inPreamble = true;
+  for (const block of blocks) {
+    if (block.kind === "hr" || block.kind === "figure") {
+      out.push(block);
+      continue;
+    }
+    const value = block.value || "";
+    const role = block.role || "paragraph";
+    if (
+      inPreamble &&
+      (role === "heading" || CHAPTER_MARK_KEY.test(headingKey(value))) &&
+      isDuplicateChapterBanner(value, chapterTitle)
+    ) {
+      continue;
+    }
+    inPreamble = false;
+    out.push(block);
+  }
+  return out;
+}
+
 /**
  * Prefer Hub REF chapter `blocks` when present; otherwise fall back to
  * markdown content + note annotation.
@@ -1267,6 +1321,7 @@ export function buildReaderBlocks(
 ): ReaderRenderBlock[] {
   const refBlocks = options?.refBlocks;
   const notes = notesFromRefBlocks(refBlocks, options?.notes ?? []);
+  const chapterTitle = options?.chapterTitle;
   if (refBlocks && refBlocks.length) {
     const out: ReaderRenderBlock[] = [];
     for (const block of refBlocks) {
@@ -1297,11 +1352,11 @@ export function buildReaderBlocks(
         tokens: tokensFromRefSpans(value, block.spans, notes),
       });
     }
-    if (out.length) return out;
+    if (out.length) return skipLeadingChapterBanner(out, chapterTitle);
   }
 
   const phraseOnce = new Set<string>();
-  return parseContentBlocks(content).map((block) => {
+  const fallback = parseContentBlocks(content).map((block) => {
     if (block.type === "figure") {
       return { kind: "figure" as const, src: block.src, caption: block.caption };
     }
@@ -1312,6 +1367,7 @@ export function buildReaderBlocks(
       tokens: annotateInlineTokens(block.value, notes, { phraseOnce }),
     };
   });
+  return skipLeadingChapterBanner(fallback, chapterTitle);
 }
 
 export class ApiError extends Error {

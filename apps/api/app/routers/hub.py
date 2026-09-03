@@ -320,6 +320,8 @@ def create_hub_work(
     glossary_count = _upsert_hub_glossary(db, book, body.glossary, body.notes)
     if body.credits is not None:
         apply_credits(book, body.credits.model_dump())
+    if not str(getattr(book, "source_language", "") or "").strip():
+        book.source_language = (body.language or "en").strip()[:16]
     db.commit()
     return {
         "id": book.id,

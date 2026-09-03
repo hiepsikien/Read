@@ -139,6 +139,7 @@ assert.deepEqual(annotateInlineTokens(thesis, []), parseInlineMarkdown(thesis));
 
 import {
   buildReaderBlocks,
+  isDuplicateChapterBanner,
   notesFromRefBlocks,
   normalizeExplainLanguage,
   tokensFromRefSpans,
@@ -306,5 +307,44 @@ if (layout[2]?.kind === "figure") {
 assert.equal(normalizeExplainLanguage("VI"), "vi");
 assert.equal(normalizeExplainLanguage("en-GB"), "en");
 assert.equal(normalizeExplainLanguage("de", "vi"), "vi");
+
+assert.equal(isDuplicateChapterBanner("CHAPTER III", "Chapter III"), true);
+assert.equal(isDuplicateChapterBanner("Chapter III", "III. Early years at Weimar"), true);
+assert.equal(isDuplicateChapterBanner("CHAPTER I", "CHAPTER II"), false);
+assert.equal(isDuplicateChapterBanner("CHAPTER I", "CHAPTER IX"), false);
+
+const bannerSkipped = buildReaderBlocks("fallback", {
+  chapterTitle: "Chapter III",
+  refBlocks: [
+    { type: "heading", text: "Chapter III", level: 1 },
+    { type: "paragraph", text: "Bach went to Weimar for a longer stay than the last visit." },
+  ],
+});
+assert.equal(bannerSkipped.length, 1);
+assert.equal(bannerSkipped[0]?.kind, "prose");
+if (bannerSkipped[0]?.kind === "prose") {
+  assert.ok(bannerSkipped[0].value.startsWith("Bach went"));
+}
+
+const tocTitleBanner = buildReaderBlocks("fallback", {
+  chapterTitle: "III. Early years at Weimar",
+  refBlocks: [
+    { type: "heading", text: "CHAPTER III", level: 1 },
+    { type: "paragraph", text: "Bach went to Weimar for a longer stay than the last visit." },
+  ],
+});
+assert.equal(tocTitleBanner.length, 1);
+if (tocTitleBanner[0]?.kind === "prose") {
+  assert.ok(tocTitleBanner[0].value.startsWith("Bach went"));
+}
+
+const markdownBanner = buildReaderBlocks(
+  "Chapter III\n\nBach went to Weimar for a longer stay than the last visit.",
+  { chapterTitle: "Chapter III" }
+);
+assert.equal(markdownBanner.length, 1);
+if (markdownBanner[0]?.kind === "prose") {
+  assert.ok(markdownBanner[0].value.startsWith("Bach went"));
+}
 
 console.log("ok");
