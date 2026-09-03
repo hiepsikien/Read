@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError, buildReaderBlocks, noteDisplayTitle, notesFromRefBlocks, parseInlineMarkdown, type BookListItem, type ReaderNote, type ReadingProgress, type RefBlock } from "@read/api-client";
+import { ApiError, buildReaderBlocks, EXPLAIN_LANGUAGE_OPTIONS, EXPLAIN_LANGUAGE_STORAGE_KEY, normalizeExplainLanguage, noteDisplayTitle, notesFromRefBlocks, parseInlineMarkdown, type BookListItem, type ExplainLanguage, type ReaderNote, type ReadingProgress, type RefBlock } from "@read/api-client";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useAuth } from "@/components/AuthProvider";
 import { createBrowserApi, getStoredToken } from "@/lib/api";
@@ -24,7 +24,7 @@ type ChapterMeta = {
 };
 
 type ReaderPayload = {
-  book: { id: string; title: string; price_cents: number; publisher_name: string };
+  book: { id: string; title: string; price_cents: number; publisher_name: string; language?: string | null };
   chapter: {
     id: string;
     position: number;
@@ -92,6 +92,10 @@ export function InAppReader({
   const [resumeProgress, setResumeProgress] = useState<ReadingProgress | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
   const [activeNote, setActiveNote] = useState<ReaderNote | null>(null);
+  const [explainLanguage, setExplainLanguage] = useState<ExplainLanguage>("en");
+  const [explainBusy, setExplainBusy] = useState(false);
+  const [explainError, setExplainError] = useState("");
+  const [explainExtra, setExplainExtra] = useState("");
   const [finishedRecs, setFinishedRecs] = useState<{
     next_episode: BookListItem | null;
     next_episode_owned: boolean | null;
@@ -248,6 +252,24 @@ export function InAppReader({
   }, []);
 
   useEffect(() => {
+    const fallback = normalizeExplainLanguage(data?.book.language);
+    try {
+      const stored = localStorage.getItem(EXPLAIN_LANGUAGE_STORAGE_KEY);
+      setExplainLanguage(normalizeExplainLanguage(stored, fallback));
+    } catch {
+      setExplainLanguage(fallback);
+    }
+  }, [data?.book.language]);
+
+  useEffect(() => {
+    if (!activeNote) {
+      setExplainExtra("");
+      setExplainError("");
+      setExplainBusy(false);
+    }
+  }, [activeNote]);
+
+  useEffect(() => {
     // Skip the first pass so defaults never overwrite what was just restored.
     if (!prefsRestored) return;
     localStorage.setItem(PREFS_KEY, JSON.stringify({ fontSize, theme }));
@@ -332,8 +354,9 @@ export function InAppReader({
       buildReaderBlocks(data?.chapter.content ?? "", {
         refBlocks: data?.chapter.blocks,
         notes,
+        chapterTitle: data?.chapter.title,
       }),
-    [data?.chapter.blocks, data?.chapter.content, notes]
+    [data?.chapter.blocks, data?.chapter.content, data?.chapter.title, notes]
   );
 
   const notesById = useMemo(() => {
@@ -568,7 +591,7 @@ export function InAppReader({
                   data-read-paragraph={index}
                   className="-mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)]"
                 >
-                  <ReaderFigure src={block.src} caption={block.caption} />
+                  {block.src ? <ReaderFigure src={block.src} caption={block.caption} /> : null}
                   {block.caption ? (
                     <figcaption
                       className="mt-3 text-center italic"
@@ -612,7 +635,9 @@ export function InAppReader({
                       ? "border-l-2 pl-4 italic"
                       : block.role === "heading"
                         ? "font-semibold tracking-tight"
-                        : "whitespace-pre-wrap"
+                        : block.role === "synopsis"
+                          ? "whitespace-pre-wrap italic"
+                          : "whitespace-pre-wrap"
                 }
                 style={
                   block.role === "blockquote"
@@ -853,14 +878,92 @@ export function InAppReader({
             <p className="mt-4 whitespace-pre-wrap leading-relaxed">
               {(activeNote.summary || "").trim() || "No note text."}
             </p>
-            <button
-              type="button"
-              onClick={() => setActiveNote(null)}
-              className="mt-6 rounded-md px-3 py-2 text-sm font-medium"
-              style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
-            >
-              Close
-            </button>
+            {explainExtra ? (
+              <div className="mt-4">
+                <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
+                  Giải thích thêm
+                </p>
+                <p className="mt-2 whitespace-pre-wrap leading-relaxed">{explainExtra}</p>
+              </div>
+            ) : null}
+            {explainError ? (
+              <p className="mt-3 text-sm" style={{ color: palette.muted }}>
+                {explainError}
+              </p>
+            ) : null}
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <label className="text-xs uppercase tracking-[0.12em]" style={{ color: palette.muted }}>
+                Language
+                <select
+                  value={explainLanguage}
+                  onChange={(event) => {
+                    const next = normalizeExplainLanguage(event.target.value);
+                    setExplainLanguage(next);
+                    try {
+                      localStorage.setItem(EXPLAIN_LANGUAGE_STORAGE_KEY, next);
+                    } catch {
+                      // Ignore storage failures.
+                    }
+                  }}
+                  className="ml-2 rounded-md border-0 px-2 py-1 text-sm"
+                  style={{
+                    background: "color-mix(in srgb, currentColor 8%, transparent)",
+                    color: palette.fg,
+                  }}
+                  aria-label="Explain language"
+                >
+                  {EXPLAIN_LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={explainBusy}
+                onClick={() => {
+                  void (async () => {
+                    setExplainBusy(true);
+                    setExplainError("");
+                    try {
+                      const payload = await createBrowserApi().explainChapter(bookId, chapterId, {
+                        entry_id: activeNote.id,
+                        need_context: true,
+                        language: explainLanguage,
+                        host_text: activeNote.host_text,
+                        note_body: activeNote.summary,
+                        query: noteDisplayTitle(activeNote),
+                      });
+                      const extra = (payload.card?.ai_context || "").trim();
+                      if (!extra) {
+                        setExplainError("Chưa giải thích được đoạn này.");
+                        return;
+                      }
+                      setExplainExtra(extra);
+                    } catch (err) {
+                      setExplainError(
+                        err instanceof ApiError ? err.message : "Chưa giải thích được đoạn này."
+                      );
+                    } finally {
+                      setExplainBusy(false);
+                    }
+                  })();
+                }}
+                className="rounded-md px-3 py-2 text-sm font-medium"
+                style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
+              >
+                {explainBusy ? "…" : "Giải thích thêm"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveNote(null)}
+                className="rounded-md px-3 py-2 text-sm font-medium"
+                style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

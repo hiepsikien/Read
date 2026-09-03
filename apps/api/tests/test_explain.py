@@ -418,3 +418,72 @@ def test_paragraph_card_title_truncates_on_word():
     title = paragraph_card_title(long)
     assert title.endswith("…")
     assert len(title) <= 73
+
+
+def test_explain_language_defaults_to_english_and_ignores_quotes():
+    from app.explain import (
+        book_explain_language,
+        explain_language_rule,
+        normalize_explain_language,
+        resolve_explain_passage,
+    )
+
+    assert normalize_explain_language("EN-GB") == "en"
+    assert normalize_explain_language("vi-VN") == "vi"
+    assert normalize_explain_language(None, default="vi") == "vi"
+    class Book:
+        language = "en"
+        source_language = "la"
+
+    assert book_explain_language(Book()) == "en"
+    rule = explain_language_rule("en")
+    assert "English" in rule
+    assert "German" in rule
+    host = "An Wasserflüssen Babylon”;[12] and a motet."
+    drifted = "Unrelated later paragraph."
+    assert (
+        resolve_explain_passage(
+            host_text=host,
+            content=f"{host}\n\n{drifted}",
+            paragraph_index=1,
+            paragraph_explain=True,
+        )
+        == host
+    )
+
+
+def test_explain_uses_stored_host_text(client, seeded):
+    from app.glossary import aliases_to_storage
+    from app.models import GlossaryEntry
+
+    book = seeded["book"]
+    book.language = "en"
+    chapter = seeded["chapter"]
+    now = datetime.now(timezone.utc)
+    note = GlossaryEntry(
+        id=generate(),
+        book_id=book.id,
+        episode_key="I",
+        episode_title="Adlung",
+        group_label="Chú thích",
+        name="Adlung [12]",
+        aliases=aliases_to_storage(["[12]"]),
+        summary="Adlung of Erfurt.",
+        host_block_id="ch-001:paragraph:he-studied",
+        host_text="He studied with Adlung.[12]",
+        sort_key="adlung [12]",
+        created_at=now,
+        updated_at=now,
+    )
+    seeded["db"].add(note)
+    seeded["db"].commit()
+
+    response = client.post(
+        f"/api/books/{book.id}/chapters/{chapter.id}/explain",
+        json={"entry_id": note.id, "language": "en"},
+    )
+    assert response.status_code == 200, response.text
+    card = response.json()["card"]
+    assert card["title"] == "Adlung [12]"
+    assert "Erfurt" in card["book_note"]
+    assert card["ai_context"] == ""

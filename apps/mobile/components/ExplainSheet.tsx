@@ -11,15 +11,20 @@ import {
 } from "react-native";
 import {
   ApiError,
+  EXPLAIN_LANGUAGE_OPTIONS,
+  EXPLAIN_LANGUAGE_STORAGE_KEY,
   isRefSpanNoteId,
+  normalizeExplainLanguage,
   noteDisplayTitle,
   REF_SPAN_NOTE_PREFIX,
   type ApiClient,
   type ExplainCandidate,
   type ExplainCard,
+  type ExplainLanguage,
   type ExplainResponse,
   type ReaderNote,
 } from "@read/api-client";
+import * as SecureStore from "expo-secure-store";
 
 type Palette = {
   bg: string;
@@ -38,6 +43,7 @@ type Props = {
   paragraphIndex?: number | null;
   paragraphNotes?: ReaderNote[];
   entryId?: string | null;
+  bookLanguage?: string | null;
   onClose: () => void;
 };
 
@@ -52,6 +58,7 @@ export function ExplainSheet({
   paragraphIndex = null,
   paragraphNotes = [],
   entryId = null,
+  bookLanguage = "en",
   onClose,
 }: Props) {
   const [query, setQuery] = useState(initialQuery);
@@ -60,6 +67,40 @@ export function ExplainSheet({
   const [card, setCard] = useState<ExplainCard | null>(null);
   const [candidates, setCandidates] = useState<ExplainCandidate[]>([]);
   const [inlineNotes, setInlineNotes] = useState<ExplainCandidate[]>([]);
+  const [language, setLanguage] = useState<ExplainLanguage>(() =>
+    normalizeExplainLanguage(bookLanguage)
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await SecureStore.getItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY);
+        if (cancelled) return;
+        setLanguage(normalizeExplainLanguage(stored, normalizeExplainLanguage(bookLanguage)));
+      } catch {
+        if (!cancelled) setLanguage(normalizeExplainLanguage(bookLanguage));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookLanguage]);
+
+  function persistLanguage(next: ExplainLanguage) {
+    setLanguage(next);
+    void SecureStore.setItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY, next);
+  }
+
+  function explainExtras(note?: ReaderNote) {
+    const host = (note?.host_text || "").trim();
+    const body = (note?.summary || "").trim();
+    return {
+      language,
+      ...(host ? { host_text: host } : {}),
+      ...(body ? { note_body: body } : {}),
+    };
+  }
 
   useEffect(() => {
     if (!visible) return;
@@ -100,7 +141,10 @@ export function ExplainSheet({
       }
       setBusy(true);
       void api
-        .explainChapter(bookId, chapterId, { entry_id: entryId })
+        .explainChapter(bookId, chapterId, {
+          entry_id: entryId,
+          ...explainExtras(local),
+        })
         .then((payload) => {
           if (cancelled) return;
           applyExplainPayload(payload, setCard, setCandidates);
@@ -133,7 +177,10 @@ export function ExplainSheet({
         const filled = await Promise.all(
           missing.map(async (item) => {
             try {
-              const payload = await api.explainChapter(bookId, chapterId, { entry_id: item.id });
+              const payload = await api.explainChapter(bookId, chapterId, {
+                entry_id: item.id,
+                ...explainExtras(paragraphNotes.find((note) => note.id === item.id)),
+              });
               return {
                 ...item,
                 name: payload.card?.title || item.name,
@@ -153,6 +200,7 @@ export function ExplainSheet({
       try {
         const payload = await api.explainChapter(bookId, chapterId, {
           paragraph_index: paragraphIndex ?? undefined,
+          language,
         });
         if (cancelled) return;
         if (payload.card && !payload.card.glossary_entry) {
@@ -184,13 +232,19 @@ export function ExplainSheet({
       paragraph_index?: number;
       entry_id?: string;
       need_context?: boolean;
+      language?: ExplainLanguage;
+      host_text?: string;
+      note_body?: string;
     },
     opts?: { quiet?: boolean }
   ) {
     if (!opts?.quiet) setBusy(true);
     setError("");
     try {
-      const payload: ExplainResponse = await api.explainChapter(bookId, chapterId, body);
+      const payload: ExplainResponse = await api.explainChapter(bookId, chapterId, {
+        ...body,
+        language: body.language ?? language,
+      });
       applyExplainPayload(payload, setCard, setCandidates);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not explain this selection.");
@@ -215,6 +269,32 @@ export function ExplainSheet({
           <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
             <Text style={{ color: palette.fg }}>Close</Text>
           </Pressable>
+        </View>
+        <View style={styles.langRow}>
+          <Text style={[styles.label, { color: palette.muted }]}>Language</Text>
+          <View style={styles.langChips}>
+            {EXPLAIN_LANGUAGE_OPTIONS.map((option) => {
+              const active = language === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => persistLanguage(option.value)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  style={[
+                    styles.langChip,
+                    {
+                      backgroundColor: withAlpha(palette.fg, active ? 0.16 : 0.06),
+                    },
+                  ]}
+                >
+                  <Text style={{ color: palette.fg, fontSize: 13, fontWeight: active ? "700" : "500" }}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
 
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
@@ -266,21 +346,24 @@ export function ExplainSheet({
                   query: q,
                   need_context: true,
                   paragraph_index: paragraphIndex ?? undefined,
+                  ...explainExtras(paragraphNotes.find((note) => note.id === entryId)),
                 })
               }
-              onNeedContext={
-                isRefSpanNoteId(entryId)
-                  ? undefined
-                  : () =>
-                      runExplain(
-                        {
-                          entry_id: card.glossary_entry?.id ?? entryId ?? undefined,
-                          need_context: true,
-                          paragraph_index: paragraphIndex ?? undefined,
-                        },
-                        { quiet: true }
-                      )
-              }
+              onNeedContext={() => {
+                const local = paragraphNotes.find((note) => note.id === entryId);
+                return runExplain(
+                  {
+                    entry_id: isRefSpanNoteId(entryId)
+                      ? undefined
+                      : card.glossary_entry?.id ?? entryId ?? undefined,
+                    query: card.title,
+                    need_context: true,
+                    paragraph_index: paragraphIndex ?? undefined,
+                    ...explainExtras(local),
+                  },
+                  { quiet: true }
+                );
+              }}
             />
           ) : null}
 
@@ -309,6 +392,7 @@ export function ExplainSheet({
                     const payload = await api.explainChapter(bookId, chapterId, {
                       need_context: true,
                       paragraph_index: paragraphIndex ?? undefined,
+                      language,
                     });
                     if (payload.card && !payload.card.glossary_entry) {
                       setCard(payload.card);
@@ -563,6 +647,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
+  langRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 8,
+  },
+  langChips: { flexDirection: "row", gap: 8 },
+  langChip: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   title: { fontSize: 17, fontWeight: "600" },
   body: { paddingBottom: 24, gap: 8 },
   askRow: { flexDirection: "row", gap: 8, alignItems: "center" },

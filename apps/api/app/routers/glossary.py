@@ -18,6 +18,7 @@ from ..auth import get_current_user_optional, require_publisher
 from ..config import get_settings
 from ..db import get_db
 from ..explain import (
+    book_explain_language,
     cache_key,
     candidate_payload,
     compose_card,
@@ -25,9 +26,9 @@ from ..explain import (
     entry_cache_key,
     loads_card,
     maybe_generate_ai_context,
+    normalize_explain_language,
     paragraph_card_title,
-    paragraph_window,
-    single_paragraph,
+    resolve_explain_passage,
 )
 from ..glossary import (
     aliases_from_storage,
@@ -54,6 +55,9 @@ class ExplainBody(BaseModel):
     paragraph_index: int | None = None
     entry_id: str | None = None
     need_context: bool = False
+    language: str | None = None
+    host_text: str | None = None
+    note_body: str | None = None
 
 
 def _assert_editable(book: Book) -> None:
@@ -254,6 +258,11 @@ async def explain_selection(
     if len(query) > 120:
         query = query[:120].rstrip()
 
+    language = normalize_explain_language(body.language, default=book_explain_language(book))
+    host_text = (body.host_text or "").strip()
+    note_body = (body.note_body or "").strip()
+    span_note = bool(body.entry_id and str(body.entry_id).startswith("span-note:"))
+
     entries = list(db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id)))
     episode_key = infer_episode_key(
         chapter.title, book.source_filename or "", book.title, query
@@ -263,7 +272,7 @@ async def explain_selection(
     paragraph_explain = False
     note_candidates: list[dict] = []
 
-    if body.entry_id:
+    if body.entry_id and not span_note:
         selected = next((row for row in entries if row.id == body.entry_id), None)
         if selected is None:
             raise HTTPException(status_code=404, detail="Glossary entry not found.")
@@ -298,6 +307,9 @@ async def explain_selection(
             candidate_payload(entry, include_summary=True)
             for entry in find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
         ]
+    elif span_note or note_body:
+        if not query:
+            query = paragraph_card_title(note_body or "Note")
     else:
         raise HTTPException(
             status_code=400,
@@ -309,15 +321,17 @@ async def explain_selection(
     if not query:
         raise HTTPException(status_code=400, detail="Query is required.")
 
-    editorial = bool(selected is not None and is_reader_note(selected))
-    book_note = selected.summary if selected else ""
+    editorial = bool(selected is not None and is_reader_note(selected)) or bool(note_body)
+    book_note = (selected.summary if selected else "") or note_body
+    if selected is not None and not host_text:
+        host_text = str(getattr(selected, "host_text", "") or "").strip()
     # Footnotes and whole-paragraph taps wait for "Giải thích thêm".
     want_ai = bool(body.need_context) if (editorial or paragraph_explain) else bool(
         body.need_context or not book_note
     )
 
     if selected is not None:
-        key = entry_cache_key(book_id=book.id, glossary_entry_id=selected.id)
+        key = entry_cache_key(book_id=book.id, glossary_entry_id=selected.id, language=language)
     else:
         key = cache_key(
             book_id=book.id,
@@ -326,12 +340,14 @@ async def explain_selection(
             glossary_entry_id=None,
             paragraph_index=body.paragraph_index,
             need_context=False,
+            language=language,
         )
     cached = db.scalar(select(ExplainCache).where(ExplainCache.cache_key == key))
-    passage = (
-        single_paragraph(chapter.content, body.paragraph_index)
-        if paragraph_explain
-        else paragraph_window(chapter.content, body.paragraph_index)
+    passage = resolve_explain_passage(
+        host_text=host_text,
+        content=chapter.content,
+        paragraph_index=body.paragraph_index,
+        paragraph_explain=paragraph_explain,
     )
     if cached:
         card = loads_card(cached.response_json)
@@ -346,6 +362,7 @@ async def explain_selection(
                 need_context=True,
                 editorial=editorial,
                 passage_explain=paragraph_explain,
+                language=language,
             )
             if ai_context:
                 card["ai_context"] = ai_context
@@ -374,6 +391,7 @@ async def explain_selection(
         need_context=want_ai,
         editorial=editorial,
         passage_explain=paragraph_explain,
+        language=language,
     )
 
     if book_note or ai_context:

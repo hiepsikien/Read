@@ -357,3 +357,65 @@ def test_hub_sync_uses_hub_chapters_and_ref_meta(client, db_session, hub_token):
     ]
     assert chapters[0].hub_chapter_id == "ch-001"
     assert chapters[0].blocks_json and '"footnote"' in chapters[0].blocks_json
+    assert book.language == "en"
+    chapter = client.get(f"/api/books/{book.id}/chapters/{chapters[0].id}")
+    assert chapter.status_code == 200
+    assert chapter.json()["book"]["language"] == "en"
+
+
+def test_hub_sync_stores_note_host_and_language(client, db_session, hub_token):
+    from sqlalchemy import select
+
+    from app.models import Book, GlossaryEntry
+
+    ensure_categories(db_session)
+    body = {
+        "hub_work_id": "bach--abdy_williams",
+        "hub_version": 1,
+        "hub_content_hash": "host-1",
+        "title": "Bach",
+        "language": "en",
+        "category_slug": "essays",
+        "raw_text": "CHAPTER I\n\nHe studied with Adlung.[12]\n\n" * 10,
+        "chapters": [
+            {
+                "id": "ch-001",
+                "title": "CHAPTER I",
+                "content": "He studied with Adlung.[12]",
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "block_id": "ch-001:paragraph:he-studied",
+                        "text": "He studied with Adlung.[12]",
+                    }
+                ],
+            }
+        ],
+        "notes": [
+            {
+                "kind": "footnote",
+                "label": "Adlung [12]",
+                "marker": "[12]",
+                "body": "Adlung of Erfurt.",
+                "chapter": "ch-001",
+                "host_block_id": "ch-001:paragraph:he-studied",
+                "host_text": "He studied with Adlung.[12]",
+            }
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "bach--abdy_williams"))
+    assert book.language == "en"
+    note = db_session.scalar(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
+    assert note.host_block_id == "ch-001:paragraph:he-studied"
+    assert note.host_text == "He studied with Adlung.[12]"
+    chapter_id = book.chapters[0].id
+    payload = client.get(f"/api/books/{book.id}/chapters/{chapter_id}").json()
+    assert payload["book"]["language"] == "en"
+    assert payload["notes"][0]["host_text"] == "He studied with Adlung.[12]"

@@ -129,6 +129,7 @@ class Book(Base):
     source_title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     source_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_language: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    language: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(
@@ -306,6 +307,8 @@ class GlossaryEntry(Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     aliases: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    host_block_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    host_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     sort_key: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     gender: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     age_band: Mapped[str] = mapped_column(String(16), nullable=False, default="")

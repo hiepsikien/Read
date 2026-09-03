@@ -66,7 +66,7 @@ import {
 } from "../../../lib/theme";
 
 type ReaderPayload = {
-  book: { id: string; title: string; price_cents: number; publisher_name: string };
+  book: { id: string; title: string; price_cents: number; publisher_name: string; language?: string | null };
   chapter: {
     id: string;
     position: number;
@@ -378,8 +378,9 @@ export default function ReaderScreen() {
       buildReaderBlocks(data?.chapter.content ?? "", {
         refBlocks: data?.chapter.blocks,
         notes,
+        chapterTitle: data?.chapter.title,
       }),
-    [data?.chapter.blocks, data?.chapter.content, notes]
+    [data?.chapter.blocks, data?.chapter.content, data?.chapter.title, notes]
   );
   const blockTokens = useMemo(
     () => blocks.map((block) => (block.kind === "prose" ? block.tokens : null)),
@@ -1201,6 +1202,7 @@ export default function ReaderScreen() {
         bookId={bookId!}
         chapterId={chapterId!}
         palette={palette}
+        bookLanguage={data.book.language}
         paragraphIndex={explainParagraph}
         paragraphNotes={explainParagraphNotes}
         entryId={explainEntryId}
@@ -1349,7 +1351,10 @@ function AnnotatedParagraph({
         fontSize: fontSize * headingScale,
         lineHeight: fontSize * (isVerse ? 1.55 : 1.7),
         fontWeight: role === "heading" ? "700" : "400",
-        fontStyle: role === "blockquote" || role === "stage_direction" ? "italic" : "normal",
+        fontStyle:
+          role === "blockquote" || role === "stage_direction" || role === "synopsis"
+            ? "italic"
+            : "normal",
         marginLeft: role === "blockquote" ? 12 : 0,
         paddingLeft: role === "blockquote" ? 10 : 0,
         borderLeftWidth: role === "blockquote" ? 2 : 0,
