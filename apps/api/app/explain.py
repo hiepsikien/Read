@@ -20,6 +20,59 @@ MAX_AI_CONTEXT_CHARS = 420
 MAX_QUERY_CHARS = 120
 
 
+def normalize_catalog_language(raw: str | None, default: str = "en") -> str:
+    """Store Hub ``book.language`` as a short tag; do not collapse to en|vi."""
+    value = (raw or "").strip().lower().replace("_", "-")
+    if not value:
+        value = (default or "en").strip().lower().replace("_", "-")
+    return value[:16]
+
+
+def normalize_explain_language(raw: str | None, default: str = "en") -> str:
+    value = (raw or "").strip().lower().replace("_", "-")
+    if value.startswith("vi"):
+        return "vi"
+    if value.startswith("en"):
+        return "en"
+    fallback = (default or "en").strip().lower().replace("_", "-")
+    return "vi" if fallback.startswith("vi") else "en"
+
+
+def book_explain_language(book: Any) -> str:
+    return normalize_explain_language(
+        str(getattr(book, "language", "") or "") or str(getattr(book, "source_language", "") or "")
+    )
+
+
+def explain_language_rule(language: str) -> str:
+    if language == "vi":
+        return (
+            "Reply in Vietnamese. Keep Vietnamese even if the passage quotes "
+            "English, German, Italian, Latin, or another language."
+        )
+    return (
+        "Reply in English. Keep English even if the passage quotes "
+        "German, Italian, Latin, or another language."
+    )
+
+
+def resolve_explain_passage(
+    *,
+    host_text: str = "",
+    content: str = "",
+    paragraph_index: int | None = None,
+    paragraph_explain: bool = False,
+) -> str:
+    host = re.sub(r"\s+", " ", (host_text or "").strip())
+    if host:
+        if len(host) > MAX_SUMMARY_CHARS:
+            return host[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"
+        return host
+    if paragraph_explain:
+        return single_paragraph(content, paragraph_index)
+    return paragraph_window(content, paragraph_index)
+
+
 def _plain_paragraphs(content: str) -> list[str]:
     return [
         re.sub(r"\s+", " ", part.replace("\n", " ")).strip()
@@ -70,9 +123,9 @@ def paragraph_window(content: str, paragraph_index: int | None) -> str:
     return chunk
 
 
-def entry_cache_key(*, book_id: str, glossary_entry_id: str) -> str:
+def entry_cache_key(*, book_id: str, glossary_entry_id: str, language: str = "") -> str:
     """Stable card cache for one book note — reused across chapters."""
-    payload = f"{book_id}|entry|{glossary_entry_id}"
+    payload = f"{book_id}|entry|{glossary_entry_id}|{language}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -84,6 +137,7 @@ def cache_key(
     glossary_entry_id: str | None,
     paragraph_index: int | None,
     need_context: bool,
+    language: str = "",
 ) -> str:
     payload = "|".join(
         [
@@ -93,6 +147,7 @@ def cache_key(
             glossary_entry_id or "",
             "" if paragraph_index is None else str(paragraph_index),
             "1" if need_context else "0",
+            language,
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -204,16 +259,19 @@ async def maybe_generate_ai_context(
     need_context: bool,
     editorial: bool = False,
     passage_explain: bool = False,
+    language: str = "en",
 ) -> str:
     if not need_context:
         return ""
     if not gemini_available(settings):
         return ""
 
+    lang = normalize_explain_language(language)
+    lang_rule = explain_language_rule(lang)
     if passage_explain:
         system = (
             "You help readers understand a passage of a book. "
-            "Reply in the same language as the passage. "
+            f"{lang_rule} "
             "Write 2-4 short sentences that explain the meaning of this paragraph — "
             "the argument or idea, not a word-for-word paraphrase. "
             "No spoilers beyond the passage. No bullet lists."
@@ -221,26 +279,30 @@ async def maybe_generate_ai_context(
     elif editorial:
         system = (
             "You help readers understand a scholarly footnote. "
-            "Reply in the same language as the book note / passage. "
+            f"{lang_rule} "
+            "Use the host paragraph together with the book note. "
             "Write 1-3 short sentences that add context the note itself does not repeat. "
             "No bullet lists."
         )
     else:
         system = (
             "You help readers understand historical names in a novel. "
-            "Reply in the same language as the book note / passage. "
+            f"{lang_rule} "
             "Write 1-3 short sentences. "
             "If a book note is provided, do not repeat it; only add why this person matters "
             "in the given passage. No spoilers beyond the passage. No bullet lists."
         )
     user_parts = [f"Query: {query[:MAX_QUERY_CHARS]}"]
+    if passage:
+        cap = MAX_SUMMARY_CHARS if passage_explain or editorial else MAX_PARAGRAPH_CHARS
+        user_parts.append(f"Host paragraph:\n{passage[:cap]}")
     if book_note:
         user_parts.append(f"Book note:\n{book_note[:MAX_SUMMARY_CHARS]}")
-    if passage:
-        cap = MAX_SUMMARY_CHARS if passage_explain else MAX_PARAGRAPH_CHARS
-        user_parts.append(f"Passage:\n{passage[:cap]}")
+    written = "Vietnamese" if lang == "vi" else "English"
     user_parts.append(
-        "Write the brief explanation now." if passage_explain else "Write the brief context now."
+        f"Write the brief explanation in {written} now."
+        if passage_explain
+        else f"Write the brief context in {written} now."
     )
 
     try:

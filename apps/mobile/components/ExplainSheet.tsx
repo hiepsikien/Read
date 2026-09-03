@@ -11,15 +11,22 @@ import {
 } from "react-native";
 import {
   ApiError,
+  EXPLAIN_LANGUAGE_OPTIONS,
+  EXPLAIN_LANGUAGE_STORAGE_KEY,
   isRefSpanNoteId,
+  normalizeExplainLanguage,
   noteDisplayTitle,
   REF_SPAN_NOTE_PREFIX,
   type ApiClient,
   type ExplainCandidate,
   type ExplainCard,
+  type ExplainLanguage,
   type ExplainResponse,
   type ReaderNote,
+  type ReaderNoteFigure,
 } from "@read/api-client";
+import * as SecureStore from "expo-secure-store";
+import { AuthenticatedImage } from "./AuthenticatedImage";
 
 type Palette = {
   bg: string;
@@ -38,6 +45,7 @@ type Props = {
   paragraphIndex?: number | null;
   paragraphNotes?: ReaderNote[];
   entryId?: string | null;
+  bookLanguage?: string | null;
   onClose: () => void;
 };
 
@@ -52,6 +60,7 @@ export function ExplainSheet({
   paragraphIndex = null,
   paragraphNotes = [],
   entryId = null,
+  bookLanguage = "en",
   onClose,
 }: Props) {
   const [query, setQuery] = useState(initialQuery);
@@ -60,9 +69,47 @@ export function ExplainSheet({
   const [card, setCard] = useState<ExplainCard | null>(null);
   const [candidates, setCandidates] = useState<ExplainCandidate[]>([]);
   const [inlineNotes, setInlineNotes] = useState<ExplainCandidate[]>([]);
+  const [language, setLanguage] = useState<ExplainLanguage>(() =>
+    normalizeExplainLanguage(bookLanguage)
+  );
+  const [languageReady, setLanguageReady] = useState(false);
 
   useEffect(() => {
-    if (!visible) return;
+    let cancelled = false;
+    setLanguageReady(false);
+    void (async () => {
+      try {
+        const stored = await SecureStore.getItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY);
+        if (cancelled) return;
+        setLanguage(normalizeExplainLanguage(stored, normalizeExplainLanguage(bookLanguage)));
+      } catch {
+        if (!cancelled) setLanguage(normalizeExplainLanguage(bookLanguage));
+      } finally {
+        if (!cancelled) setLanguageReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookLanguage]);
+
+  function persistLanguage(next: ExplainLanguage) {
+    setLanguage(next);
+    void SecureStore.setItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY, next);
+  }
+
+  function explainExtras(note?: ReaderNote) {
+    const host = (note?.host_text || "").trim();
+    const body = (note?.summary || "").trim();
+    return {
+      language,
+      ...(host ? { host_text: host } : {}),
+      ...(body ? { note_body: body } : {}),
+    };
+  }
+
+  useEffect(() => {
+    if (!visible || !languageReady) return;
     setQuery(initialQuery);
     setError("");
     setCard(null);
@@ -100,7 +147,10 @@ export function ExplainSheet({
       }
       setBusy(true);
       void api
-        .explainChapter(bookId, chapterId, { entry_id: entryId })
+        .explainChapter(bookId, chapterId, {
+          entry_id: entryId,
+          ...explainExtras(local),
+        })
         .then((payload) => {
           if (cancelled) return;
           applyExplainPayload(payload, setCard, setCandidates);
@@ -133,7 +183,10 @@ export function ExplainSheet({
         const filled = await Promise.all(
           missing.map(async (item) => {
             try {
-              const payload = await api.explainChapter(bookId, chapterId, { entry_id: item.id });
+              const payload = await api.explainChapter(bookId, chapterId, {
+                entry_id: item.id,
+                ...explainExtras(paragraphNotes.find((note) => note.id === item.id)),
+              });
               return {
                 ...item,
                 name: payload.card?.title || item.name,
@@ -153,6 +206,7 @@ export function ExplainSheet({
       try {
         const payload = await api.explainChapter(bookId, chapterId, {
           paragraph_index: paragraphIndex ?? undefined,
+          language,
         });
         if (cancelled) return;
         if (payload.card && !payload.card.glossary_entry) {
@@ -176,6 +230,7 @@ export function ExplainSheet({
     bookId,
     chapterId,
     api,
+    languageReady,
   ]);
 
   async function runExplain(
@@ -184,13 +239,19 @@ export function ExplainSheet({
       paragraph_index?: number;
       entry_id?: string;
       need_context?: boolean;
+      language?: ExplainLanguage;
+      host_text?: string;
+      note_body?: string;
     },
     opts?: { quiet?: boolean }
   ) {
     if (!opts?.quiet) setBusy(true);
     setError("");
     try {
-      const payload: ExplainResponse = await api.explainChapter(bookId, chapterId, body);
+      const payload: ExplainResponse = await api.explainChapter(bookId, chapterId, {
+        ...body,
+        language: body.language ?? language,
+      });
       applyExplainPayload(payload, setCard, setCandidates);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not explain this selection.");
@@ -215,6 +276,32 @@ export function ExplainSheet({
           <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
             <Text style={{ color: palette.fg }}>Close</Text>
           </Pressable>
+        </View>
+        <View style={styles.langRow}>
+          <Text style={[styles.label, { color: palette.muted }]}>Language</Text>
+          <View style={styles.langChips}>
+            {EXPLAIN_LANGUAGE_OPTIONS.map((option) => {
+              const active = language === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => persistLanguage(option.value)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  style={[
+                    styles.langChip,
+                    {
+                      backgroundColor: withAlpha(palette.fg, active ? 0.16 : 0.06),
+                    },
+                  ]}
+                >
+                  <Text style={{ color: palette.fg, fontSize: 13, fontWeight: active ? "700" : "500" }}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
 
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
@@ -249,7 +336,9 @@ export function ExplainSheet({
             </View>
           ) : null}
 
-          {busy ? <ActivityIndicator color="#5f7d6a" style={{ marginVertical: 16 }} /> : null}
+          {busy || (visible && !languageReady && mode === "result") ? (
+            <ActivityIndicator color="#5f7d6a" style={{ marginVertical: 16 }} />
+          ) : null}
           {error ? (
             <Text accessibilityRole="alert" style={[styles.error, { color: palette.muted }]}>
               {error}
@@ -260,27 +349,33 @@ export function ExplainSheet({
             <ExplainCardView
               card={card}
               palette={palette}
+              language={language}
+              figures={paragraphNotes.find((note) => note.id === entryId)?.figures}
+              resolveMediaUrl={(src) => api.mediaUrl(src)}
               extraLabel="Giải thích thêm"
               onFollowup={(q) =>
                 void runExplain({
                   query: q,
                   need_context: true,
                   paragraph_index: paragraphIndex ?? undefined,
+                  ...explainExtras(paragraphNotes.find((note) => note.id === entryId)),
                 })
               }
-              onNeedContext={
-                isRefSpanNoteId(entryId)
-                  ? undefined
-                  : () =>
-                      runExplain(
-                        {
-                          entry_id: card.glossary_entry?.id ?? entryId ?? undefined,
-                          need_context: true,
-                          paragraph_index: paragraphIndex ?? undefined,
-                        },
-                        { quiet: true }
-                      )
-              }
+              onNeedContext={() => {
+                const local = paragraphNotes.find((note) => note.id === entryId);
+                return runExplain(
+                  {
+                    entry_id: isRefSpanNoteId(entryId)
+                      ? undefined
+                      : card.glossary_entry?.id ?? entryId ?? undefined,
+                    query: card.title,
+                    need_context: true,
+                    paragraph_index: paragraphIndex ?? undefined,
+                    ...explainExtras(local),
+                  },
+                  { quiet: true }
+                );
+              }}
             />
           ) : null}
 
@@ -303,12 +398,14 @@ export function ExplainSheet({
               ) : null}
               <ParagraphExtra
                 palette={palette}
+                language={language}
                 aiContext={card && !card.glossary_entry ? card.ai_context : ""}
                 onNeedContext={async () => {
                   try {
                     const payload = await api.explainChapter(bookId, chapterId, {
                       need_context: true,
                       paragraph_index: paragraphIndex ?? undefined,
+                      language,
                     });
                     if (payload.card && !payload.card.glossary_entry) {
                       setCard(payload.card);
@@ -402,12 +499,18 @@ function sheetTitle(
 function ExplainCardView({
   card,
   palette,
+  language,
+  figures,
+  resolveMediaUrl,
   extraLabel = "Giải thích thêm",
   onFollowup,
   onNeedContext,
 }: {
   card: ExplainCard;
   palette: Palette;
+  language: ExplainLanguage;
+  figures?: ReaderNoteFigure[];
+  resolveMediaUrl?: (src: string) => string | null;
   extraLabel?: string;
   onFollowup?: (query: string) => void;
   onNeedContext?: () => Promise<void>;
@@ -422,8 +525,8 @@ function ExplainCardView({
     setExtraBusy(false);
   }, [cardKey]);
 
-  async function openExtra() {
-    if (card.ai_context) {
+  async function openExtra(force = false) {
+    if (card.ai_context && !force) {
       setExtraOpen(true);
       return;
     }
@@ -437,6 +540,13 @@ function ExplainCardView({
     }
   }
 
+  useEffect(() => {
+    if (!extraOpen) return;
+    void openExtra(true);
+    // Re-run extra in the selected language without making the user tap again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
+
   return (
     <View style={styles.block}>
       <Text style={[styles.cardTitle, { color: palette.fg }]}>{card.title}</Text>
@@ -444,6 +554,29 @@ function ExplainCardView({
       {card.book_note ? (
         <View style={styles.noteBlock}>
           <Text style={[styles.note, { color: palette.fg }]}>{card.book_note}</Text>
+        </View>
+      ) : null}
+
+      {figures?.length ? (
+        <View style={styles.noteBlock}>
+          {figures.map((figure, index) => {
+            const url = figure.src ? resolveMediaUrl?.(figure.src) : null;
+            return (
+              <View key={`${figure.src || figure.caption || index}`}>
+                {url ? (
+                  <AuthenticatedImage
+                    url={url}
+                    fillWidth
+                    accessibilityLabel={figure.caption || "Illustration"}
+                    style={styles.noteFigure}
+                  />
+                ) : null}
+                {figure.caption ? (
+                  <Text style={[styles.figureCaption, { color: palette.muted }]}>{figure.caption}</Text>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
       ) : null}
 
@@ -484,10 +617,12 @@ function ExplainCardView({
 
 function ParagraphExtra({
   palette,
+  language,
   aiContext,
   onNeedContext,
 }: {
   palette: Palette;
+  language: ExplainLanguage;
   aiContext: string;
   onNeedContext: () => Promise<void>;
 }) {
@@ -498,8 +633,8 @@ function ParagraphExtra({
     if (!aiContext) setOpen(false);
   }, [aiContext]);
 
-  async function openExtra() {
-    if (aiContext) {
+  async function openExtra(force = false) {
+    if (aiContext && !force) {
       setOpen(true);
       return;
     }
@@ -511,6 +646,12 @@ function ParagraphExtra({
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!open) return;
+    void openExtra(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]);
 
   if (open && aiContext) {
     return (
@@ -563,6 +704,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
+  langRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 8,
+  },
+  langChips: { flexDirection: "row", gap: 8 },
+  langChip: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   title: { fontSize: 17, fontWeight: "600" },
   body: { paddingBottom: 24, gap: 8 },
   askRow: { flexDirection: "row", gap: 8, alignItems: "center" },
@@ -599,6 +749,8 @@ const styles = StyleSheet.create({
   sources: { fontSize: 12, marginBottom: 4 },
   noteBlock: { gap: 6, marginTop: 4 },
   note: { fontSize: 15, lineHeight: 23 },
+  noteFigure: { width: "100%", minHeight: 120, borderRadius: 8 },
+  figureCaption: { fontSize: 13, fontStyle: "italic", lineHeight: 18 },
   extraLink: {
     fontSize: 13,
     letterSpacing: 0.3,

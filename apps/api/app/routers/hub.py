@@ -17,9 +17,10 @@ from ..categories import ensure_categories
 from ..chapters import count_words, split_into_chapters
 from ..config import get_settings
 from ..db import get_db
-from ..glossary import aliases_to_storage
+from ..glossary import aliases_to_storage, figures_to_storage, note_figures
 from ..handles import normalize_handle
 from ..credits import apply_credits
+from ..explain import normalize_catalog_language
 from ..models import Book, Chapter, GlossaryEntry, User
 
 router = APIRouter(prefix="/api/internal/hub", tags=["hub"])
@@ -34,6 +35,9 @@ class HubGlossaryEntry(BaseModel):
     marker: str = ""
     anchor: str = ""
     chapter: str = ""
+    host_block_id: str = ""
+    host_text: str = ""
+    figures: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HubNote(BaseModel):
@@ -45,6 +49,9 @@ class HubNote(BaseModel):
     chapter: str = ""
     body: str = ""
     group_label: str = "Chú thích"
+    host_block_id: str = ""
+    host_text: str = ""
+    figures: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HubSourceWork(BaseModel):
@@ -154,6 +161,9 @@ def _notes_as_glossary(notes: list[HubNote]) -> list[HubGlossaryEntry]:
                 marker=item.marker.strip(),
                 anchor=item.anchor.strip(),
                 chapter=item.chapter.strip(),
+                host_block_id=(item.host_block_id or "").strip()[:128],
+                host_text=(item.host_text or "").strip()[:4000],
+                figures=note_figures(item.figures),
             )
         )
     return rows
@@ -186,6 +196,9 @@ def _upsert_hub_glossary(
                 name=item.name.strip()[:300],
                 aliases=aliases_to_storage(aliases),
                 summary=(item.summary or "")[:8000],
+                host_block_id=(item.host_block_id or "").strip()[:128],
+                host_text=(item.host_text or "").strip()[:4000],
+                figures_json=figures_to_storage(item.figures),
                 sort_key=item.name.casefold()[:300],
                 gender="",
                 age_band="",
@@ -283,6 +296,7 @@ def create_hub_work(
         edition_format=body.edition_format,
         edition_hash=edition_hash,
         content_kind=body.content_kind,
+        language=normalize_catalog_language(body.language),
         submitted_at=now if body.status == "pending_review" else None,
         created_at=now,
         updated_at=now,

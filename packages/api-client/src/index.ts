@@ -29,6 +29,35 @@ export const SUGGEST_LANGUAGE_OPTIONS: Array<{
   { value: "bilingual", label: "Bilingual", hint: "EN + VI" },
 ];
 
+export type ExplainLanguage = "en" | "vi";
+
+export const EXPLAIN_LANGUAGE_OPTIONS: Array<{
+  value: ExplainLanguage;
+  label: string;
+}> = [
+  { value: "en", label: "English" },
+  { value: "vi", label: "Tiếng Việt" },
+];
+
+export const EXPLAIN_LANGUAGE_STORAGE_KEY = "read:explain-language";
+
+export function normalizeExplainLanguage(
+  raw?: string | null,
+  fallback: ExplainLanguage = "en"
+): ExplainLanguage {
+  const value = String(raw || fallback || "en")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (value.startsWith("vi")) return "vi";
+  if (value.startsWith("en")) return "en";
+  const fb = String(fallback || "en")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+  return fb.startsWith("vi") ? "vi" : "en";
+}
+
 export const SEGMENT_TITLE_COMPONENT_OPTIONS: Array<{
   value: SegmentTitleComponent;
   label: string;
@@ -509,6 +538,11 @@ export interface InlineMarkdownToken {
   noteId?: string;
 }
 
+export interface ReaderNoteFigure {
+  caption?: string;
+  src?: string;
+}
+
 export interface ReaderNote {
   id: string;
   name: string;
@@ -517,6 +551,9 @@ export interface ReaderNote {
   episode_title: string;
   group_label: string;
   summary?: string;
+  host_block_id?: string;
+  host_text?: string;
+  figures?: ReaderNoteFigure[];
 }
 
 export interface NoteSpan {
@@ -543,6 +580,11 @@ export interface RefBlock {
   text?: string;
   level?: number;
   spans?: RefSpan[];
+  block_id?: string;
+  hidden?: boolean;
+  suppress_in_reader?: boolean;
+  role?: string;
+  src?: string;
 }
 
 export type ReaderRenderRole =
@@ -552,7 +594,8 @@ export type ReaderRenderRole =
   | "verse"
   | "list_item"
   | "dialogue"
-  | "stage_direction";
+  | "stage_direction"
+  | "synopsis";
 
 export type ReaderRenderBlock =
   | {
@@ -1015,6 +1058,8 @@ export function notesFromRefBlocks(
     aliases: [...(note.aliases || [])],
   }));
   for (const block of refBlocks || []) {
+    const hostId = String(block.block_id || "").trim();
+    const hostText = String(block.text || "").trim();
     for (const span of block.spans || []) {
       if (String(span.style || "") !== "footnote") continue;
       const body = String(span.note || "").trim();
@@ -1023,6 +1068,8 @@ export function notesFromRefBlocks(
       const existing = matchFootnoteNote(marker, merged);
       if (existing) {
         if (!(existing.summary || "").trim()) existing.summary = body;
+        if (!(existing.host_text || "").trim() && hostText) existing.host_text = hostText;
+        if (!(existing.host_block_id || "").trim() && hostId) existing.host_block_id = hostId;
         continue;
       }
       merged.push({
@@ -1033,6 +1080,8 @@ export function notesFromRefBlocks(
         episode_title: "",
         group_label: "Chú thích",
         summary: body,
+        host_block_id: hostId || undefined,
+        host_text: hostText || undefined,
       });
     }
   }
@@ -1060,7 +1109,7 @@ function mergeAdjacentTokens(tokens: InlineMarkdownToken[]): InlineMarkdownToken
 
 /**
  * Build inline tokens from REF spans. When blocks are present, Read must not
- * re-parse markdown markers — honor Hub offsets for `em` / `footnote` only.
+ * re-parse markdown markers — honor Hub offsets for `em` / `strong` / `footnote`.
  */
 export function tokensFromRefSpans(
   text: string,
@@ -1080,42 +1129,106 @@ export function tokensFromRefSpans(
     return [{ text, bold: false, italic: false }];
   }
 
-  const tokens: InlineMarkdownToken[] = [];
-  let cursor = 0;
-
-  const emitPlain = (from: number, to: number) => {
-    if (to <= from) return;
-    tokens.push({ text: text.slice(from, to), bold: false, italic: false });
+  type Cover = {
+    start: number;
+    end: number;
+    italic: boolean;
+    bold: boolean;
+    noteId?: string;
   };
 
-  for (const span of sorted) {
-    const start = Math.max(cursor, span.start as number);
-    const end = Math.min(text.length, span.end as number);
-    if (end <= start) continue;
-    if (start > cursor) emitPlain(cursor, start);
+  const covers: Cover[] = [];
+  const skip = new Set<number>();
 
-    let chunk = text.slice(start, end);
-    let italic = false;
-    let noteId: string | undefined;
+  for (const span of sorted) {
+    let start = span.start as number;
+    let end = Math.min(text.length, span.end as number);
+    start = Math.max(0, start);
+    if (end <= start) continue;
     const style = String(span.style || "");
+    const chunk = text.slice(start, end);
+    let italic = false;
+    let bold = false;
+    let noteId: string | undefined;
 
     if (style === "em") {
       italic = true;
       if (chunk.length >= 2 && chunk.startsWith("_") && chunk.endsWith("_")) {
-        chunk = chunk.slice(1, -1);
+        skip.add(start);
+        skip.add(end - 1);
+        start += 1;
+        end -= 1;
+      }
+    } else if (style === "strong") {
+      bold = true;
+      if (chunk.length >= 2 && chunk.startsWith("~") && chunk.endsWith("~")) {
+        skip.add(start);
+        skip.add(end - 1);
+        start += 1;
+        end -= 1;
       }
     } else if (style === "footnote") {
       const marker = String(span.text || chunk).trim();
       const note = matchFootnoteNote(marker, notes);
       if (note) noteId = note.id;
       else if (String(span.note || "").trim()) noteId = spanNoteId(marker);
+    } else {
+      continue;
     }
 
-    tokens.push({ text: chunk, bold: false, italic, noteId });
-    cursor = end;
+    if (end <= start && !noteId) continue;
+    covers.push({ start, end, italic, bold, noteId });
   }
-  emitPlain(cursor, text.length);
+
+  const tokens: InlineMarkdownToken[] = [];
+  for (let index = 0; index < text.length; index += 1) {
+    if (skip.has(index)) continue;
+    let italic = false;
+    let bold = false;
+    let noteId: string | undefined;
+    for (const cover of covers) {
+      if (index < cover.start || index >= cover.end) continue;
+      if (cover.italic) italic = true;
+      if (cover.bold) bold = true;
+      if (cover.noteId) noteId = cover.noteId;
+    }
+    const last = tokens[tokens.length - 1];
+    if (last && last.bold === bold && last.italic === italic && last.noteId === noteId) {
+      last.text += text[index];
+      continue;
+    }
+    const token: InlineMarkdownToken = { text: text[index], bold, italic };
+    if (noteId) token.noteId = noteId;
+    tokens.push(token);
+  }
   return mergeAdjacentTokens(tokens);
+}
+
+function foldHeadingText(value: string): string {
+  return value
+    .replace(/[_~*`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("vi");
+}
+
+function isSkippedRefBlock(block: RefBlock): boolean {
+  if (block.hidden) return true;
+  const role = String(block.role || "");
+  if (role === "aside") return true;
+  if (String(block.type || "") === "heading" && block.suppress_in_reader) return true;
+  return false;
+}
+
+function isFigureRefBlock(block: RefBlock): boolean {
+  return String(block.type || "") === "figure" || String(block.role || "") === "figure";
+}
+
+function isDuplicateChapterHeading(block: RefBlock, chapterTitle?: string): boolean {
+  if (String(block.type || "") !== "heading") return false;
+  const title = (chapterTitle || "").trim();
+  if (!title) return false;
+  return foldHeadingText(String(block.text || "")) === foldHeadingText(title);
 }
 
 function refRoleForType(type: string): ReaderRenderRole | "skip" | "hr" {
@@ -1150,21 +1263,32 @@ function refRoleForType(type: string): ReaderRenderRole | "skip" | "hr" {
  */
 export function buildReaderBlocks(
   content: string,
-  options?: { refBlocks?: RefBlock[] | null; notes?: ReaderNote[] }
+  options?: { refBlocks?: RefBlock[] | null; notes?: ReaderNote[]; chapterTitle?: string }
 ): ReaderRenderBlock[] {
   const refBlocks = options?.refBlocks;
   const notes = notesFromRefBlocks(refBlocks, options?.notes ?? []);
   if (refBlocks && refBlocks.length) {
     const out: ReaderRenderBlock[] = [];
     for (const block of refBlocks) {
-      const role = refRoleForType(String(block.type || "paragraph"));
-      if (role === "skip") continue;
-      if (role === "hr") {
+      if (isSkippedRefBlock(block)) continue;
+      if (isDuplicateChapterHeading(block, options?.chapterTitle)) continue;
+      if (isFigureRefBlock(block)) {
+        const caption = String(block.text || "").trim();
+        const src = String(block.src || "").trim();
+        if (!caption && !src) continue;
+        out.push({ kind: "figure", src, caption });
+        continue;
+      }
+      const roleBase = refRoleForType(String(block.type || "paragraph"));
+      if (roleBase === "skip") continue;
+      if (roleBase === "hr") {
         out.push({ kind: "hr" });
         continue;
       }
       const value = String(block.text || "");
-      if (!value && role !== "heading") continue;
+      if (!value && roleBase !== "heading") continue;
+      const role: ReaderRenderRole =
+        String(block.role || "") === "synopsis" ? "synopsis" : roleBase;
       out.push({
         kind: "prose",
         role,
@@ -1510,6 +1634,7 @@ export function createApiClient(options: ApiClientOptions) {
           title: string;
           price_cents: number;
           publisher_name: string;
+          language?: string | null;
         };
         chapter: {
           id: string;
@@ -1565,6 +1690,9 @@ export function createApiClient(options: ApiClientOptions) {
         paragraph_index?: number;
         entry_id?: string;
         need_context?: boolean;
+        language?: ExplainLanguage | string;
+        host_text?: string;
+        note_body?: string;
       }
     ) {
       return request<ExplainResponse>(`/api/books/${bookId}/chapters/${chapterId}/explain`, {

@@ -46,7 +46,7 @@ from ..segment_titles import (
     normalize_suggest_language,
     normalize_title_components,
 )
-from ..glossary import aliases_from_storage, is_reader_note
+from ..glossary import aliases_from_storage, figures_from_storage, is_reader_note
 from ..covers import (
     ALLOWED_CONTENT_TYPES,
     ALLOWED_EXT,
@@ -625,6 +625,7 @@ def get_book(
             "submitted_at": book.submitted_at.isoformat() if book.submitted_at else None,
             "reviewed_at": book.reviewed_at.isoformat() if book.reviewed_at else None,
             "cover_url": cover_url_for(book.id, book.cover_path),
+            "language": book.language or book.source_language or "",
         },
         book,
         for_public=not is_manager,
@@ -1460,6 +1461,7 @@ def get_chapter(
             "price_cents": book.price_cents,
             "publisher_name": book.publisher.name,
             "publisher_handle": book.publisher.handle if book.publisher else None,
+            "language": book.language or book.source_language or "en",
         },
         "chapter": {
             "id": chapter.id,
@@ -1487,6 +1489,9 @@ def get_chapter(
                 "episode_title": row.episode_title,
                 "group_label": row.group_label,
                 "summary": row.summary,
+                "host_block_id": row.host_block_id or "",
+                "host_text": row.host_text or "",
+                "figures": figures_from_storage(row.figures_json),
             }
             for row in db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
             if is_reader_note(row)

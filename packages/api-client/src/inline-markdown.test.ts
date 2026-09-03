@@ -140,6 +140,7 @@ assert.deepEqual(annotateInlineTokens(thesis, []), parseInlineMarkdown(thesis));
 import {
   buildReaderBlocks,
   notesFromRefBlocks,
+  normalizeExplainLanguage,
   tokensFromRefSpans,
   uniqueNotesFromTokens,
 } from "./index.ts";
@@ -240,5 +241,70 @@ assert.equal(
   notesFromRefBlocks(spanOnlyBlocks, [emptyCatalogNote])[0]?.summary,
   "Arnold's phrase from the page."
 );
+
+assert.deepEqual(
+  tokensFromRefSpans("~Adlung~ wrote", [{ style: "strong", start: 0, end: 8, text: "~Adlung~" }], []).map(
+    (token) => ({ text: token.text, bold: token.bold, italic: token.italic })
+  ),
+  [
+    { text: "Adlung", bold: true, italic: false },
+    { text: " wrote", bold: false, italic: false },
+  ]
+);
+
+const hostedBlocks = [
+  {
+    type: "paragraph",
+    block_id: "ch-001:paragraph:he-studied",
+    text: "He studied with Adlung.[12]",
+    spans: [
+      {
+        style: "footnote",
+        start: 23,
+        end: 27,
+        text: "[12]",
+        note: "Adlung of Erfurt.",
+      },
+    ],
+  },
+];
+const hostedNotes = notesFromRefBlocks(hostedBlocks, []);
+assert.equal(hostedNotes[0]?.host_block_id, "ch-001:paragraph:he-studied");
+assert.equal(hostedNotes[0]?.host_text, "He studied with Adlung.[12]");
+
+const layout = buildReaderBlocks("fallback", {
+  chapterTitle: "CHAPTER III",
+  refBlocks: [
+    { type: "heading", level: 1, text: "CHAPTER III", suppress_in_reader: true },
+    { type: "paragraph", role: "synopsis", text: "Birth — Eisenach — 1685." },
+    { type: "paragraph", hidden: true, role: "aside", text: "[Sidenote: running header]" },
+    {
+      type: "paragraph",
+      text: "He studied with ~Adlung~.",
+      spans: [{ style: "strong", start: 16, end: 24, text: "~Adlung~" }],
+    },
+    { type: "paragraph", role: "figure", text: "Portrait of Bach" },
+    { type: "heading", level: 1, text: "CHAPTER III" },
+  ],
+});
+assert.equal(layout.length, 3);
+assert.equal(layout[0]?.kind, "prose");
+if (layout[0]?.kind === "prose") {
+  assert.equal(layout[0].role, "synopsis");
+  assert.equal(layout[0].value, "Birth — Eisenach — 1685.");
+}
+assert.equal(layout[1]?.kind, "prose");
+if (layout[1]?.kind === "prose") {
+  assert.ok(layout[1].tokens.some((token) => token.bold && token.text === "Adlung"));
+}
+assert.equal(layout[2]?.kind, "figure");
+if (layout[2]?.kind === "figure") {
+  assert.equal(layout[2].caption, "Portrait of Bach");
+  assert.equal(layout[2].src, "");
+}
+
+assert.equal(normalizeExplainLanguage("VI"), "vi");
+assert.equal(normalizeExplainLanguage("en-GB"), "en");
+assert.equal(normalizeExplainLanguage("de", "vi"), "vi");
 
 console.log("ok");
