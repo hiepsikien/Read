@@ -451,6 +451,31 @@ export function InAppReader({
     }
   }
 
+  async function requestExplainExtra(note: ReaderNote, language: ExplainLanguage) {
+    setExplainBusy(true);
+    setExplainError("");
+    try {
+      const payload = await createBrowserApi().explainChapter(bookId, chapterId, {
+        entry_id: note.id,
+        need_context: true,
+        language,
+        host_text: note.host_text,
+        note_body: note.summary,
+        query: noteDisplayTitle(note),
+      });
+      const extra = (payload.card?.ai_context || "").trim();
+      if (!extra) {
+        setExplainError("Chưa giải thích được đoạn này.");
+        return;
+      }
+      setExplainExtra(extra);
+    } catch (err) {
+      setExplainError(err instanceof ApiError ? err.message : "Chưa giải thích được đoạn này.");
+    } finally {
+      setExplainBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center text-[var(--ink-soft)]">
@@ -878,6 +903,23 @@ export function InAppReader({
             <p className="mt-4 whitespace-pre-wrap leading-relaxed">
               {(activeNote.summary || "").trim() || "No note text."}
             </p>
+            {activeNote.figures?.length ? (
+              <div className="mt-4 space-y-3">
+                {activeNote.figures.map((figure, index) => (
+                  <figure key={`${figure.src || figure.caption || index}`}>
+                    {figure.src ? <ReaderFigure src={figure.src} caption={figure.caption || ""} /> : null}
+                    {figure.caption ? (
+                      <figcaption
+                        className="mt-2 text-center italic"
+                        style={{ color: palette.muted, fontSize: 13 }}
+                      >
+                        {figure.caption}
+                      </figcaption>
+                    ) : null}
+                  </figure>
+                ))}
+              </div>
+            ) : null}
             {explainExtra ? (
               <div className="mt-4">
                 <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
@@ -904,6 +946,7 @@ export function InAppReader({
                     } catch {
                       // Ignore storage failures.
                     }
+                    if (explainExtra) void requestExplainExtra(activeNote, next);
                   }}
                   className="ml-2 rounded-md border-0 px-2 py-1 text-sm"
                   style={{
@@ -922,34 +965,7 @@ export function InAppReader({
               <button
                 type="button"
                 disabled={explainBusy}
-                onClick={() => {
-                  void (async () => {
-                    setExplainBusy(true);
-                    setExplainError("");
-                    try {
-                      const payload = await createBrowserApi().explainChapter(bookId, chapterId, {
-                        entry_id: activeNote.id,
-                        need_context: true,
-                        language: explainLanguage,
-                        host_text: activeNote.host_text,
-                        note_body: activeNote.summary,
-                        query: noteDisplayTitle(activeNote),
-                      });
-                      const extra = (payload.card?.ai_context || "").trim();
-                      if (!extra) {
-                        setExplainError("Chưa giải thích được đoạn này.");
-                        return;
-                      }
-                      setExplainExtra(extra);
-                    } catch (err) {
-                      setExplainError(
-                        err instanceof ApiError ? err.message : "Chưa giải thích được đoạn này."
-                      );
-                    } finally {
-                      setExplainBusy(false);
-                    }
-                  })();
-                }}
+                onClick={() => void requestExplainExtra(activeNote, explainLanguage)}
                 className="rounded-md px-3 py-2 text-sm font-medium"
                 style={{ background: "color-mix(in srgb, currentColor 10%, transparent)" }}
               >

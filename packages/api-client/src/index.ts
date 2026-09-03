@@ -538,6 +538,11 @@ export interface InlineMarkdownToken {
   noteId?: string;
 }
 
+export interface ReaderNoteFigure {
+  caption?: string;
+  src?: string;
+}
+
 export interface ReaderNote {
   id: string;
   name: string;
@@ -548,6 +553,7 @@ export interface ReaderNote {
   summary?: string;
   host_block_id?: string;
   host_text?: string;
+  figures?: ReaderNoteFigure[];
 }
 
 export interface NoteSpan {

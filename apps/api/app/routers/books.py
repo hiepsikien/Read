@@ -46,7 +46,7 @@ from ..segment_titles import (
     normalize_suggest_language,
     normalize_title_components,
 )
-from ..glossary import aliases_from_storage, is_reader_note
+from ..glossary import aliases_from_storage, figures_from_storage, is_reader_note
 from ..covers import (
     ALLOWED_CONTENT_TYPES,
     ALLOWED_EXT,
@@ -1491,6 +1491,7 @@ def get_chapter(
                 "summary": row.summary,
                 "host_block_id": row.host_block_id or "",
                 "host_text": row.host_text or "",
+                "figures": figures_from_storage(row.figures_json),
             }
             for row in db.scalars(select(GlossaryEntry).where(GlossaryEntry.book_id == book.id))
             if is_reader_note(row)

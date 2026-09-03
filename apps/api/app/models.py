@@ -309,6 +309,7 @@ class GlossaryEntry(Base):
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     host_block_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     host_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    figures_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     sort_key: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     gender: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     age_band: Mapped[str] = mapped_column(String(16), nullable=False, default="")

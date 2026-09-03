@@ -81,6 +81,42 @@ def aliases_from_storage(raw: str | None) -> list[str]:
     return []
 
 
+def note_figures(raw: list | None) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        caption = str(item.get("caption") or "").strip()[:500]
+        src = str(item.get("src") or "").strip()[:1000]
+        if not caption and not src:
+            continue
+        row: dict[str, str] = {}
+        if caption:
+            row["caption"] = caption
+        if src:
+            row["src"] = src
+        out.append(row)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def figures_to_storage(raw: list | None) -> str:
+    return json.dumps(note_figures(raw), ensure_ascii=False)
+
+
+def figures_from_storage(raw: str | None) -> list[dict[str, str]]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return note_figures(parsed)
+
+
 def _split_name_aliases(name_raw: str, meta: str | None) -> tuple[str, list[str]]:
     aliases: list[str] = []
     name = re.sub(r"\s+", " ", name_raw).strip(" .")

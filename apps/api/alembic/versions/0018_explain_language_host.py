@@ -21,9 +21,11 @@ def upgrade() -> None:
         "ALTER TABLE glossary_entries ADD COLUMN IF NOT EXISTS host_block_id VARCHAR(128) NOT NULL DEFAULT ''"
     )
     op.execute("ALTER TABLE glossary_entries ADD COLUMN IF NOT EXISTS host_text TEXT NOT NULL DEFAULT ''")
+    op.execute("ALTER TABLE glossary_entries ADD COLUMN IF NOT EXISTS figures_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def downgrade() -> None:
+    op.execute("ALTER TABLE glossary_entries DROP COLUMN IF EXISTS figures_json")
     op.execute("ALTER TABLE glossary_entries DROP COLUMN IF EXISTS host_text")
     op.execute("ALTER TABLE glossary_entries DROP COLUMN IF EXISTS host_block_id")
     op.execute("ALTER TABLE books DROP COLUMN IF EXISTS language")

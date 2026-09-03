@@ -436,6 +436,17 @@ def test_explain_language_defaults_to_english_and_ignores_quotes():
         source_language = "la"
 
     assert book_explain_language(Book()) == "en"
+    assert normalize_explain_language("de", default="en") == "en"
+    from app.explain import normalize_catalog_language
+
+    assert normalize_catalog_language("la") == "la"
+    assert normalize_catalog_language("DE-1996") == "de-1996"
+
+    class Catalog:
+        language = "la"
+        source_language = ""
+
+    assert book_explain_language(Catalog()) == "en"
     rule = explain_language_rule("en")
     assert "English" in rule
     assert "German" in rule
@@ -452,14 +463,23 @@ def test_explain_language_defaults_to_english_and_ignores_quotes():
     )
 
 
-def test_explain_uses_stored_host_text(client, seeded):
+def test_explain_need_context_uses_host_text_not_paragraph(client, seeded, monkeypatch):
     from app.glossary import aliases_to_storage
     from app.models import GlossaryEntry
+
+    captured: dict = {}
+
+    async def fake_ai(**kwargs):
+        captured.update(kwargs)
+        return "English gloss of the host paragraph."
+
+    monkeypatch.setattr("app.routers.glossary.maybe_generate_ai_context", fake_ai)
 
     book = seeded["book"]
     book.language = "en"
     chapter = seeded["chapter"]
     now = datetime.now(timezone.utc)
+    host = "He studied with Adlung.[12]"
     note = GlossaryEntry(
         id=generate(),
         book_id=book.id,
@@ -470,7 +490,7 @@ def test_explain_uses_stored_host_text(client, seeded):
         aliases=aliases_to_storage(["[12]"]),
         summary="Adlung of Erfurt.",
         host_block_id="ch-001:paragraph:he-studied",
-        host_text="He studied with Adlung.[12]",
+        host_text=host,
         sort_key="adlung [12]",
         created_at=now,
         updated_at=now,
@@ -480,10 +500,16 @@ def test_explain_uses_stored_host_text(client, seeded):
 
     response = client.post(
         f"/api/books/{book.id}/chapters/{chapter.id}/explain",
-        json={"entry_id": note.id, "language": "en"},
+        json={
+            "entry_id": note.id,
+            "need_context": True,
+            "language": "en",
+            "paragraph_index": 0,
+        },
     )
     assert response.status_code == 200, response.text
-    card = response.json()["card"]
-    assert card["title"] == "Adlung [12]"
-    assert "Erfurt" in card["book_note"]
-    assert card["ai_context"] == ""
+    assert captured["passage"] == host
+    assert captured["book_note"] == "Adlung of Erfurt."
+    assert captured["language"] == "en"
+    assert captured["passage"] != "Bờ biển Calicut."
+    assert response.json()["card"]["ai_context"] == "English gloss of the host paragraph."

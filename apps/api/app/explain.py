@@ -20,6 +20,14 @@ MAX_AI_CONTEXT_CHARS = 420
 MAX_QUERY_CHARS = 120
 
 
+def normalize_catalog_language(raw: str | None, default: str = "en") -> str:
+    """Store Hub ``book.language`` as a short tag; do not collapse to en|vi."""
+    value = (raw or "").strip().lower().replace("_", "-")
+    if not value:
+        value = (default or "en").strip().lower().replace("_", "-")
+    return value[:16]
+
+
 def normalize_explain_language(raw: str | None, default: str = "en") -> str:
     value = (raw or "").strip().lower().replace("_", "-")
     if value.startswith("vi"):
