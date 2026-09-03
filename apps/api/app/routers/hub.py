@@ -136,17 +136,27 @@ def _persist_hub_assets(book_id: str, assets: list[HubAsset] | None) -> dict[str
     """Save Hub illustrations; return original filename → Read media URL."""
     if not assets:
         return {}
+    if len(assets) > MAX_HUB_ASSETS:
+        logger.warning(
+            "Hub book %s sent %s assets; storing the first %s",
+            book_id,
+            len(assets),
+            MAX_HUB_ASSETS,
+        )
     upload_dir = get_settings().upload_dir
     mapping: dict[str, str] = {}
     for item in assets[:MAX_HUB_ASSETS]:
         filename = _safe_asset_filename(item.filename)
         if not filename:
+            logger.warning("Hub asset filename rejected for book %s: %r", book_id, item.filename)
             continue
         try:
-            raw = base64.b64decode(item.data)
+            raw = base64.b64decode(item.data, validate=True)
         except (binascii.Error, ValueError):
+            logger.warning("Hub asset %s for book %s is not valid base64", filename, book_id)
             continue
         if not raw:
+            logger.warning("Hub asset %s for book %s decoded empty", filename, book_id)
             continue
         try:
             asset_id = save_media_bytes(upload_dir, book_id, raw)
@@ -239,6 +249,21 @@ def _glossary_with_rewritten_srcs(
         item.model_copy(update={"figures": _rewrite_figure_dicts(item.figures, mapping)})
         for item in entries
     ]
+
+
+def _blob_has_hub_cms_src(blob: str | None) -> bool:
+    return bool(blob) and "/assets/" in blob
+
+
+def _book_still_has_hub_cms_paths(book: Book) -> bool:
+    """True when stored figure src still points at Hub CMS paths, not Read media."""
+    for chapter in book.chapters:
+        if _blob_has_hub_cms_src(chapter.blocks_json):
+            return True
+    for entry in book.glossary_entries:
+        if _blob_has_hub_cms_src(entry.figures_json):
+            return True
+    return False
 
 
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
@@ -364,17 +389,24 @@ def create_hub_work(
             .order_by(Book.created_at.desc())
         )
         if existing is not None:
-            return {
-                "id": existing.id,
-                "hub_work_id": body.hub_work_id,
-                "created": False,
-                "unchanged": True,
-                "chapter_count": len(existing.chapters),
-                "glossary_count": len(existing.glossary_entries),
-                "status": existing.status,
-                "edition_format": existing.edition_format,
-                "used_hub_chapters": any(ch.hub_chapter_id for ch in existing.chapters),
-            }
+            reingest = bool(body.assets) and _book_still_has_hub_cms_paths(existing)
+            if not reingest:
+                return {
+                    "id": existing.id,
+                    "hub_work_id": body.hub_work_id,
+                    "created": False,
+                    "unchanged": True,
+                    "chapter_count": len(existing.chapters),
+                    "glossary_count": len(existing.glossary_entries),
+                    "status": existing.status,
+                    "edition_format": existing.edition_format,
+                    "used_hub_chapters": any(ch.hub_chapter_id for ch in existing.chapters),
+                }
+            logger.info(
+                "Hub work %s edition already stored as %s but still has CMS asset paths; creating a new copy",
+                body.hub_work_id,
+                existing.id,
+            )
 
     categories = ensure_categories(db)
     category = next((c for c in categories if c.slug == body.category_slug), None)
