@@ -12,7 +12,6 @@ import {
 import {
   ApiError,
   EXPLAIN_LANGUAGE_OPTIONS,
-  EXPLAIN_LANGUAGE_STORAGE_KEY,
   isRefSpanNoteId,
   normalizeExplainLanguage,
   noteDisplayTitle,
@@ -27,6 +26,9 @@ import {
 } from "@read/api-client";
 import * as SecureStore from "expo-secure-store";
 import { AuthenticatedImage } from "./AuthenticatedImage";
+
+// SecureStore rejects ":", so this cannot share EXPLAIN_LANGUAGE_STORAGE_KEY ("read:explain-language").
+const EXPLAIN_LANGUAGE_KEY = "read_explain_language";
 
 type Palette = {
   bg: string;
@@ -79,7 +81,7 @@ export function ExplainSheet({
     setLanguageReady(false);
     void (async () => {
       try {
-        const stored = await SecureStore.getItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY);
+        const stored = await SecureStore.getItemAsync(EXPLAIN_LANGUAGE_KEY);
         if (cancelled) return;
         setLanguage(normalizeExplainLanguage(stored, normalizeExplainLanguage(bookLanguage)));
       } catch {
@@ -95,7 +97,7 @@ export function ExplainSheet({
 
   function persistLanguage(next: ExplainLanguage) {
     setLanguage(next);
-    void SecureStore.setItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY, next);
+    void SecureStore.setItemAsync(EXPLAIN_LANGUAGE_KEY, next).catch(() => {});
   }
 
   function explainExtras(note?: ReaderNote) {
