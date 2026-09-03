@@ -13,6 +13,7 @@ import {
   ApiError,
   isRefSpanNoteId,
   noteDisplayTitle,
+  REF_SPAN_NOTE_PREFIX,
   type ApiClient,
   type ExplainCandidate,
   type ExplainCard,
@@ -75,7 +76,7 @@ export function ExplainSheet({
     if (entryId) {
       const local = paragraphNotes.find((note) => note.id === entryId);
       const localBody = (local?.summary || "").trim();
-      if (localBody) {
+      if (localBody && (isRefSpanNoteId(entryId) || isEditorialReaderNote(local))) {
         setCard({
           title: noteDisplayTitle(local!),
           book_note: localBody,
@@ -88,7 +89,7 @@ export function ExplainSheet({
       }
       if (isRefSpanNoteId(entryId)) {
         setCard({
-          title: local ? noteDisplayTitle(local) : entryId.slice("span-note:".length) || "Note",
+          title: local ? noteDisplayTitle(local) : entryId.slice(REF_SPAN_NOTE_PREFIX.length) || "Note",
           book_note: "",
           ai_context: "",
           sources: ["book"],
@@ -267,15 +268,18 @@ export function ExplainSheet({
                   paragraph_index: paragraphIndex ?? undefined,
                 })
               }
-              onNeedContext={() =>
-                runExplain(
-                  {
-                    entry_id: card.glossary_entry?.id ?? entryId ?? undefined,
-                    need_context: true,
-                    paragraph_index: paragraphIndex ?? undefined,
-                  },
-                  { quiet: true }
-                )
+              onNeedContext={
+                isRefSpanNoteId(entryId)
+                  ? undefined
+                  : () =>
+                      runExplain(
+                        {
+                          entry_id: card.glossary_entry?.id ?? entryId ?? undefined,
+                          need_context: true,
+                          paragraph_index: paragraphIndex ?? undefined,
+                        },
+                        { quiet: true }
+                      )
               }
             />
           ) : null}
@@ -325,6 +329,21 @@ export function ExplainSheet({
         </ScrollView>
       </View>
     </Modal>
+  );
+}
+
+function isEditorialReaderNote(note: ReaderNote | undefined) {
+  if (!note) return false;
+  const label = (note.group_label || "").trim().toLowerCase();
+  const name = note.name || "";
+  return (
+    label === "chú thích" ||
+    label === "thuật ngữ" ||
+    label === "bối cảnh" ||
+    label.startsWith("bối cảnh") ||
+    name.toLowerCase().startsWith("bối cảnh") ||
+    /\s*\[\d+\]\s*$/.test(name) ||
+    note.aliases.some((alias) => /^\[\d+\]$/.test(alias.trim()))
   );
 }
 
@@ -433,7 +452,7 @@ function ExplainCardView({
           <Text style={[styles.label, { color: palette.muted }]}>{extraLabel}</Text>
           <Text style={[styles.note, { color: palette.fg }]}>{card.ai_context}</Text>
         </View>
-      ) : (
+      ) : card.ai_context || onNeedContext ? (
         <Pressable
           onPress={() => void openExtra()}
           disabled={extraBusy}
@@ -444,7 +463,7 @@ function ExplainCardView({
             {extraBusy ? "…" : extraLabel}
           </Text>
         </Pressable>
-      )}
+      ) : null}
 
       {!editorial && onFollowup && card.followups.length ? (
         <View style={styles.followups}>

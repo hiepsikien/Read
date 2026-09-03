@@ -990,7 +990,7 @@ function matchFootnoteNote(marker: string, notes: ReaderNote[]): ReaderNote | un
   return undefined;
 }
 
-const REF_SPAN_NOTE_PREFIX = "span-note:";
+export const REF_SPAN_NOTE_PREFIX = "span-note:";
 
 function spanNoteId(marker: string): string {
   return `${REF_SPAN_NOTE_PREFIX}${marker || "note"}`;
