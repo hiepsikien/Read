@@ -19,6 +19,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..glossary import aliases_to_storage
 from ..handles import normalize_handle
+from ..credits import apply_credits
 from ..explain import normalize_explain_language
 from ..models import Book, Chapter, GlossaryEntry, User
 

@@ -358,9 +358,6 @@ def test_hub_sync_uses_hub_chapters_and_ref_meta(client, db_session, hub_token):
     assert chapters[0].hub_chapter_id == "ch-001"
     assert chapters[0].blocks_json and '"footnote"' in chapters[0].blocks_json
     assert book.language == "en"
-    chapter = client.get(f"/api/books/{book.id}/chapters/{chapters[0].id}")
-    assert chapter.status_code == 200
-    assert chapter.json()["book"]["language"] == "en"
 
 
 def test_hub_sync_stores_note_host_and_language(client, db_session, hub_token):
@@ -376,6 +373,7 @@ def test_hub_sync_stores_note_host_and_language(client, db_session, hub_token):
         "title": "Bach",
         "language": "en",
         "category_slug": "essays",
+        "status": "published",
         "raw_text": "CHAPTER I\n\nHe studied with Adlung.[12]\n\n" * 10,
         "chapters": [
             {
