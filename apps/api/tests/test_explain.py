@@ -279,6 +279,22 @@ def test_explain_paragraph_notes_follow_marker_order(client, seeded):
     ]
 
 
+def test_explain_paragraph_host_text_avoids_block_index_mismatch(client, seeded):
+    """REF reader block indices include figures/headings; host_text selects the passage."""
+    book = seeded["book"]
+    chapter = seeded["chapter"]
+    host = "VASCO DA GAMA đã đi vào lịch sử."
+    response = client.post(
+        f"/api/books/{book.id}/chapters/{chapter.id}/explain",
+        json={"paragraph_index": 99, "host_text": host, "language": "vi"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert "VASCO DA GAMA" in payload["card"]["title"]
+    assert payload["candidates"][0]["name"] == "Vasco da Gama"
+
+
 def test_explain_paragraph_without_notes(client, seeded):
     book = seeded["book"]
     chapter = seeded["chapter"]

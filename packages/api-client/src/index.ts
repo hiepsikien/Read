@@ -58,6 +58,24 @@ export function normalizeExplainLanguage(
   return fb.startsWith("vi") ? "vi" : "en";
 }
 
+/** True when a figure `src` can be loaded from Read (not an unresolved Hub CMS path). */
+export function isReaderMediaSrc(src: string | null | undefined): boolean {
+  const value = String(src || "").trim();
+  if (!value) return false;
+  if (value.startsWith("/assets/") || value.startsWith("assets/")) return false;
+  return true;
+}
+
+/** Prose text for a reader block index — used for paragraph explain host_text. */
+export function readerBlockHostText(
+  blocks: ReaderRenderBlock[],
+  blockIndex: number | null | undefined
+): string {
+  if (blockIndex == null || blockIndex < 0 || blockIndex >= blocks.length) return "";
+  const block = blocks[blockIndex];
+  return block.kind === "prose" ? block.value.trim() : "";
+}
+
 export const SEGMENT_TITLE_COMPONENT_OPTIONS: Array<{
   value: SegmentTitleComponent;
   label: string;
@@ -1576,7 +1594,7 @@ export function createApiClient(options: ApiClientOptions) {
     },
     /** Resolve a relative or absolute manuscript figure URL against the API base. */
     mediaUrl(src: string | null | undefined) {
-      if (!src) return null;
+      if (!src || !isReaderMediaSrc(src)) return null;
       if (src.startsWith("http://") || src.startsWith("https://")) return src;
       return `${baseUrl}${src.startsWith("/") ? src : `/${src}`}`;
     },

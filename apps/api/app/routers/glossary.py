@@ -296,17 +296,32 @@ async def explain_selection(
                 "cache_hit": False,
                 "ai_used": False,
             }
-    elif body.paragraph_index is not None:
+    elif body.paragraph_index is not None or (body.host_text or "").strip():
+        host = (body.host_text or "").strip()
         paragraphs = _chapter_paragraphs(chapter.content)
-        if body.paragraph_index < 0 or body.paragraph_index >= len(paragraphs):
-            raise HTTPException(status_code=400, detail="paragraph_index out of range.")
-        paragraph = paragraphs[body.paragraph_index]
-        paragraph_explain = True
-        query = paragraph_card_title(paragraph)
-        note_candidates = [
-            candidate_payload(entry, include_summary=True)
-            for entry in find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
-        ]
+        if host:
+            paragraph = host
+            paragraph_explain = True
+            query = paragraph_card_title(paragraph)
+            note_candidates = [
+                candidate_payload(entry, include_summary=True)
+                for entry in find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
+            ]
+        elif body.paragraph_index is not None:
+            if body.paragraph_index < 0 or body.paragraph_index >= len(paragraphs):
+                raise HTTPException(status_code=400, detail="paragraph_index out of range.")
+            paragraph = paragraphs[body.paragraph_index]
+            paragraph_explain = True
+            query = paragraph_card_title(paragraph)
+            note_candidates = [
+                candidate_payload(entry, include_summary=True)
+                for entry in find_names_in_text(entries, paragraph, episode_key=episode_key, limit=24)
+            ]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide query, entry_id, or paragraph_index.",
+            )
     elif span_note or note_body:
         if not query:
             query = paragraph_card_title(note_body or "Note")

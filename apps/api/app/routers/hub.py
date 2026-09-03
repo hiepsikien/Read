@@ -266,6 +266,65 @@ def _book_still_has_hub_cms_paths(book: Book) -> bool:
     return False
 
 
+def _patch_book_hub_assets(
+    db: Session,
+    book: Book,
+    *,
+    assets: list[HubAsset] | None,
+    chapters: list[HubChapterIn] | None,
+    glossary: list[HubGlossaryEntry] | None,
+    notes: list[HubNote] | None,
+) -> bool:
+    """Rewrite CMS asset paths on an existing edition when asset bytes arrive."""
+    if not assets or not _book_still_has_hub_cms_paths(book):
+        return False
+    url_by_filename = _persist_hub_assets(book.id, assets)
+    if not url_by_filename:
+        return False
+
+    chapter_payload = {ch.id: ch for ch in (chapters or [])}
+    for chapter in book.chapters:
+        incoming = chapter_payload.get(chapter.hub_chapter_id or "")
+        blocks: list[dict[str, Any]] | None = None
+        if incoming and incoming.blocks:
+            blocks = incoming.blocks
+        elif chapter.blocks_json and _blob_has_hub_cms_src(chapter.blocks_json):
+            try:
+                parsed = json.loads(chapter.blocks_json)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                blocks = parsed
+        if blocks is not None:
+            chapter.blocks_json = json.dumps(
+                _rewrite_block_srcs(blocks, url_by_filename), ensure_ascii=False
+            )
+
+    for entry in book.glossary_entries:
+        if not _blob_has_hub_cms_src(entry.figures_json):
+            continue
+        try:
+            figures = json.loads(entry.figures_json or "[]")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(figures, list):
+            entry.figures_json = figures_to_storage(
+                _rewrite_figure_dicts(figures, url_by_filename)
+            )
+
+    if notes is not None or glossary is not None:
+        _upsert_hub_glossary(
+            db,
+            book,
+            _glossary_with_rewritten_srcs(glossary, url_by_filename),
+            _notes_with_rewritten_srcs(notes, url_by_filename),
+        )
+
+    book.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return True
+
+
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
     expected = get_settings().hub_sync_token.strip()
     if not expected:
@@ -390,7 +449,33 @@ def create_hub_work(
         )
         if existing is not None:
             reingest = bool(body.assets) and _book_still_has_hub_cms_paths(existing)
-            if not reingest:
+            if reingest:
+                if _patch_book_hub_assets(
+                    db,
+                    existing,
+                    assets=body.assets,
+                    chapters=body.chapters,
+                    glossary=body.glossary,
+                    notes=body.notes,
+                ):
+                    return {
+                        "id": existing.id,
+                        "hub_work_id": body.hub_work_id,
+                        "created": False,
+                        "unchanged": False,
+                        "assets_patched": True,
+                        "chapter_count": len(existing.chapters),
+                        "glossary_count": len(existing.glossary_entries),
+                        "status": existing.status,
+                        "edition_format": existing.edition_format,
+                        "used_hub_chapters": any(ch.hub_chapter_id for ch in existing.chapters),
+                    }
+                logger.info(
+                    "Hub work %s edition already stored as %s but asset patch failed; creating a new copy",
+                    body.hub_work_id,
+                    existing.id,
+                )
+            elif not reingest:
                 return {
                     "id": existing.id,
                     "hub_work_id": body.hub_work_id,

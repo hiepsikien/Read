@@ -695,10 +695,11 @@ def test_hub_sync_reingests_when_edition_hash_matches_cms_paths(
     ]
     reingest = client.post("/api/internal/hub/works", json=body, headers=headers)
     assert reingest.status_code == 200, reingest.text
-    assert reingest.json()["created"] is True
+    assert reingest.json()["created"] is False
     assert reingest.json()["unchanged"] is False
+    assert reingest.json().get("assets_patched") is True
     new_id = reingest.json()["id"]
-    assert new_id != first_id
+    assert new_id == first_id
 
     db_session.expire_all()
     book = db_session.get(Book, new_id)
@@ -715,7 +716,7 @@ def test_hub_sync_reingests_when_edition_hash_matches_cms_paths(
     assert already_ingested.json()["id"] == new_id
 
     rows = list(db_session.scalars(select(Book).where(Book.hub_work_id == "bach--edition_hash_assets")))
-    assert {row.id for row in rows} == {first_id, new_id}
+    assert {row.id for row in rows} == {first_id}
 
 
 def test_hub_sync_rewrites_glossary_figure_src(client, db_session, hub_token, hub_upload_dir):

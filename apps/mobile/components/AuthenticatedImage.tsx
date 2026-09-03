@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Image, type ImageStyle, type StyleProp } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Image, StyleSheet, View, type ImageStyle, type StyleProp } from "react-native";
 import { getToken } from "../lib/api";
 import { getFirebaseIdToken, firebaseConfigured } from "../lib/firebase";
 
@@ -12,6 +12,8 @@ type Props = {
   fillWidth?: boolean;
 };
 
+type LoadState = "loading" | "ready" | "failed";
+
 async function authToken(): Promise<string | null> {
   if (firebaseConfigured()) {
     return (await getFirebaseIdToken()) || (await getToken());
@@ -19,28 +21,7 @@ async function authToken(): Promise<string | null> {
   return getToken();
 }
 
-async function fetchImageDataUri(url: string): Promise<string | null> {
-  try {
-    const token = await authToken();
-    const response = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-    if (!response.ok) return null;
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
-    return `data:${contentType};base64,${globalThis.btoa(binary)}`;
-  } catch {
-    return null;
-  }
-}
-
-/** Loads an API image with optional auth (drafts) via data URI. */
+/** Loads an API image with optional auth (drafts) via Image headers. */
 export function AuthenticatedImage({
   url,
   style,
@@ -48,31 +29,47 @@ export function AuthenticatedImage({
   accessibilityLabel,
   fillWidth = false,
 }: Props) {
-  const [uri, setUri] = useState<string | null>(authenticated ? null : url);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const [authReady, setAuthReady] = useState(!authenticated);
+  const [useAuth, setUseAuth] = useState(authenticated);
+  const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setAspectRatio(null);
+    setLoadState("loading");
+    setUseAuth(authenticated);
     if (!authenticated) {
-      setUri(url);
+      setAuthReady(true);
+      setToken(null);
       return;
     }
-    setUri(null);
-    setAspectRatio(null);
+    setAuthReady(false);
     void (async () => {
-      const dataUri = await fetchImageDataUri(url);
-      if (!cancelled) setUri(dataUri);
+      const nextToken = await authToken();
+      if (cancelled) return;
+      setToken(nextToken);
+      setAuthReady(true);
     })();
     return () => {
       cancelled = true;
     };
   }, [url, authenticated]);
 
+  const source = useMemo(
+    () => ({
+      uri: url,
+      ...(useAuth && token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    }),
+    [url, useAuth, token]
+  );
+
   useEffect(() => {
-    if (!uri || !fillWidth) return;
+    if (loadState !== "ready" || !fillWidth) return;
     let cancelled = false;
     Image.getSize(
-      uri,
+      url,
       (width, height) => {
         if (!cancelled && width > 0 && height > 0) {
           setAspectRatio(width / height);
@@ -80,25 +77,61 @@ export function AuthenticatedImage({
       },
       () => {
         if (!cancelled) setAspectRatio(4 / 3);
-      },
+      }
     );
     return () => {
       cancelled = true;
     };
-  }, [uri, fillWidth]);
+  }, [url, loadState, fillWidth]);
 
-  if (!uri) return null;
+  const frameStyle = [
+    style,
+    fillWidth ? { width: "100%", aspectRatio: aspectRatio ?? 4 / 3, height: undefined } : null,
+  ];
+
+  if (!authReady) {
+    return (
+      <View
+        style={[...frameStyle, { backgroundColor: "rgba(127,127,127,0.08)" }]}
+        accessibilityLabel={accessibilityLabel || "Loading illustration"}
+      />
+    );
+  }
+
+  if (loadState === "failed") {
+    return (
+      <View
+        style={[...frameStyle, { backgroundColor: "rgba(127,127,127,0.12)" }]}
+        accessibilityLabel={accessibilityLabel || "Illustration unavailable"}
+      />
+    );
+  }
+
   return (
-    <Image
-      source={{ uri }}
-      style={[
-        style,
-        fillWidth
-          ? { width: "100%", aspectRatio: aspectRatio ?? 4 / 3, height: undefined }
-          : null,
-      ]}
-      resizeMode={fillWidth ? "cover" : "contain"}
-      accessibilityLabel={accessibilityLabel}
-    />
+    <View style={frameStyle}>
+      {loadState === "loading" ? (
+        <View
+          style={[
+            StyleSheet.absoluteFillObject,
+            { backgroundColor: "rgba(127,127,127,0.08)" },
+          ]}
+        />
+      ) : null}
+      <Image
+        source={source}
+        style={fillWidth ? { width: "100%", height: "100%" } : style}
+        resizeMode={fillWidth ? "cover" : "contain"}
+        accessibilityLabel={accessibilityLabel}
+        onLoad={() => setLoadState("ready")}
+        onError={() => {
+          if (useAuth && token) {
+            setUseAuth(false);
+            setLoadState("loading");
+            return;
+          }
+          setLoadState("failed");
+        }}
+      />
+    </View>
   );
 }
