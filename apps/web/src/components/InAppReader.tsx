@@ -614,19 +614,19 @@ export function InAppReader({
                 <figure
                   key={index}
                   data-read-paragraph={index}
-                  className="-mx-4 w-[calc(100%+2rem)] sm:-mx-6 sm:w-[calc(100%+3rem)]"
+                  className="-mx-4 flex w-[calc(100%+2rem)] flex-col items-center sm:-mx-6 sm:w-[calc(100%+3rem)]"
                 >
                   {block.src ? <ReaderFigure src={block.src} caption={block.caption} /> : null}
                   {block.caption ? (
                     <figcaption
-                      className="mt-3 text-center italic"
+                      className="mt-3 w-full text-center italic"
                       style={{
                         color: palette.muted,
                         fontSize: `${Math.max(13, fontSize * 0.85)}px`,
                         lineHeight: 1.45,
                       }}
                     >
-                      {block.caption}
+                      <InlineMarkdown value={block.caption} />
                     </figcaption>
                   ) : null}
                 </figure>
@@ -893,15 +893,21 @@ export function InAppReader({
       {activeNote ? (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 sm:items-center">
           <div
-            className="max-h-[70vh] w-full max-w-lg overflow-y-auto rounded-t-2xl p-6 sm:rounded-2xl"
+            className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-t-2xl p-6 sm:rounded-2xl"
             style={{ background: palette.bg, color: palette.fg }}
           >
             <p className="text-xs uppercase tracking-[0.16em]" style={{ color: palette.muted }}>
               {activeNote.group_label || "Note"}
             </p>
-            <h2 className="mt-2 text-xl font-semibold">{noteDisplayTitle(activeNote)}</h2>
+            <h2 className="mt-2 text-xl font-semibold">
+              <InlineMarkdown value={noteDisplayTitle(activeNote)} />
+            </h2>
             <p className="mt-4 whitespace-pre-wrap leading-relaxed">
-              {(activeNote.summary || "").trim() || "No note text."}
+              {(activeNote.summary || "").trim() ? (
+                <InlineMarkdown value={(activeNote.summary || "").trim()} />
+              ) : (
+                "No note text."
+              )}
             </p>
             {activeNote.figures?.length ? (
               <div className="mt-4 space-y-3">
@@ -913,7 +919,7 @@ export function InAppReader({
                         className="mt-2 text-center italic"
                         style={{ color: palette.muted, fontSize: 13 }}
                       >
-                        {figure.caption}
+                        <InlineMarkdown value={figure.caption} />
                       </figcaption>
                     ) : null}
                   </figure>
@@ -1033,7 +1039,7 @@ function ReaderFigure({ src, caption }: { src: string; caption: string }) {
     <img
       src={uri}
       alt={caption || "Illustration"}
-      className="max-h-[85vh] w-full rounded-md object-contain"
+      className="mx-auto max-h-[70vh] max-w-full rounded-md object-contain"
     />
   );
 }

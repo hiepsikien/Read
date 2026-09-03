@@ -221,9 +221,8 @@ def compose_card(
     title = query.strip()
     if entry is not None:
         title = note_card_title(entry) or entry.name
+        # Keep the full editorial note for the reader; only the model prompt is capped.
         book_note = entry.summary or ""
-        if len(book_note) > MAX_SUMMARY_CHARS:
-            book_note = book_note[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"
 
     resolved_sources = sources or []
     if book_note and "book" not in resolved_sources:

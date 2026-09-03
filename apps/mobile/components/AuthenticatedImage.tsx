@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { Image, type ImageStyle, type StyleProp } from "react-native";
+import {
+  Image,
+  useWindowDimensions,
+  View,
+  type ImageStyle,
+  type LayoutChangeEvent,
+  type StyleProp,
+} from "react-native";
 import { getToken } from "../lib/api";
 import { getFirebaseIdToken, firebaseConfigured } from "../lib/firebase";
 
@@ -8,8 +15,10 @@ type Props = {
   style?: StyleProp<ImageStyle>;
   authenticated?: boolean;
   accessibilityLabel?: string;
-  /** When true, height follows natural aspect ratio at full container width. */
+  /** Fit inside the container without upscaling past the image's natural size. */
   fillWidth?: boolean;
+  /** Cap the fitted height (defaults to 72% of the window when fillWidth). */
+  maxHeight?: number;
 };
 
 async function authToken(): Promise<string | null> {
@@ -47,9 +56,13 @@ export function AuthenticatedImage({
   authenticated = true,
   accessibilityLabel,
   fillWidth = false,
+  maxHeight,
 }: Props) {
+  const { height: windowHeight } = useWindowDimensions();
   const [uri, setUri] = useState<string | null>(authenticated ? null : url);
-  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const [boxWidth, setBoxWidth] = useState(0);
+  const heightCap = maxHeight ?? Math.round(windowHeight * 0.72);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +71,7 @@ export function AuthenticatedImage({
       return;
     }
     setUri(null);
-    setAspectRatio(null);
+    setNatural(null);
     void (async () => {
       const dataUri = await fetchImageDataUri(url);
       if (!cancelled) setUri(dataUri);
@@ -75,11 +88,11 @@ export function AuthenticatedImage({
       uri,
       (width, height) => {
         if (!cancelled && width > 0 && height > 0) {
-          setAspectRatio(width / height);
+          setNatural({ width, height });
         }
       },
       () => {
-        if (!cancelled) setAspectRatio(4 / 3);
+        if (!cancelled) setNatural(null);
       },
     );
     return () => {
@@ -87,18 +100,53 @@ export function AuthenticatedImage({
     };
   }, [uri, fillWidth]);
 
+  function onBoxLayout(event: LayoutChangeEvent) {
+    const next = event.nativeEvent.layout.width;
+    if (next > 0 && Math.abs(next - boxWidth) > 0.5) setBoxWidth(next);
+  }
+
   if (!uri) return null;
+
+  if (!fillWidth) {
+    return (
+      <Image
+        source={{ uri }}
+        style={style}
+        resizeMode="contain"
+        accessibilityLabel={accessibilityLabel}
+      />
+    );
+  }
+
+  const fitted =
+    natural && boxWidth > 0
+      ? fitImageSize(natural.width, natural.height, boxWidth, heightCap)
+      : null;
+
   return (
-    <Image
-      source={{ uri }}
-      style={[
-        style,
-        fillWidth
-          ? { width: "100%", aspectRatio: aspectRatio ?? 4 / 3, height: undefined }
-          : null,
-      ]}
-      resizeMode={fillWidth ? "cover" : "contain"}
-      accessibilityLabel={accessibilityLabel}
-    />
+    <View onLayout={onBoxLayout} style={{ alignSelf: "stretch", alignItems: "center" }}>
+      {fitted ? (
+        <Image
+          source={{ uri }}
+          style={[style, { width: fitted.width, height: fitted.height }]}
+          resizeMode="contain"
+          accessibilityLabel={accessibilityLabel}
+        />
+      ) : null}
+    </View>
   );
+}
+
+function fitImageSize(
+  naturalWidth: number,
+  naturalHeight: number,
+  boxWidth: number,
+  maxHeight: number
+) {
+  const maxWidth = boxWidth > 0 ? boxWidth : naturalWidth;
+  const scale = Math.min(1, maxWidth / naturalWidth, maxHeight / naturalHeight);
+  return {
+    width: Math.max(1, Math.round(naturalWidth * scale)),
+    height: Math.max(1, Math.round(naturalHeight * scale)),
+  };
 }

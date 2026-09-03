@@ -7,7 +7,10 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
+  type StyleProp,
+  type TextStyle,
 } from "react-native";
 import {
   ApiError,
@@ -15,6 +18,7 @@ import {
   isRefSpanNoteId,
   normalizeExplainLanguage,
   noteDisplayTitle,
+  parseInlineMarkdown,
   REF_SPAN_NOTE_PREFIX,
   type ApiClient,
   type ExplainCandidate,
@@ -75,6 +79,10 @@ export function ExplainSheet({
     normalizeExplainLanguage(bookLanguage)
   );
   const [languageReady, setLanguageReady] = useState(false);
+  const { height: windowHeight } = useWindowDimensions();
+  const [chromeHeight, setChromeHeight] = useState(108);
+  const sheetMax = Math.round(windowHeight * 0.78);
+  const scrollMax = Math.max(160, sheetMax - chromeHeight);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,43 +278,55 @@ export function ExplainSheet({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={[styles.sheet, { backgroundColor: palette.bg }]}>
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: palette.fg }]}>
-            {sheetTitle(mode, inlineNotes, card, noteCard)}
-          </Text>
-          <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
-            <Text style={{ color: palette.fg }}>Close</Text>
-          </Pressable>
-        </View>
-        <View style={styles.langRow}>
-          <Text style={[styles.label, { color: palette.muted }]}>Language</Text>
-          <View style={styles.langChips}>
-            {EXPLAIN_LANGUAGE_OPTIONS.map((option) => {
-              const active = language === option.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => persistLanguage(option.value)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  style={[
-                    styles.langChip,
-                    {
-                      backgroundColor: withAlpha(palette.fg, active ? 0.16 : 0.06),
-                    },
-                  ]}
-                >
-                  <Text style={{ color: palette.fg, fontSize: 13, fontWeight: active ? "700" : "500" }}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+      <View style={[styles.sheet, { backgroundColor: palette.bg, maxHeight: sheetMax }]}>
+        <View
+          onLayout={(event) => {
+            const next = Math.ceil(event.nativeEvent.layout.height);
+            if (next > 0 && next !== chromeHeight) setChromeHeight(next);
+          }}
+        >
+          <View style={styles.header}>
+            <Text style={[styles.title, { color: palette.fg }]}>
+              {sheetTitle(mode, inlineNotes, card, noteCard)}
+            </Text>
+            <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close">
+              <Text style={{ color: palette.fg }}>Close</Text>
+            </Pressable>
+          </View>
+          <View style={styles.langRow}>
+            <Text style={[styles.label, { color: palette.muted }]}>Language</Text>
+            <View style={styles.langChips}>
+              {EXPLAIN_LANGUAGE_OPTIONS.map((option) => {
+                const active = language === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    onPress={() => persistLanguage(option.value)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    style={[
+                      styles.langChip,
+                      {
+                        backgroundColor: withAlpha(palette.fg, active ? 0.16 : 0.06),
+                      },
+                    ]}
+                  >
+                    <Text style={{ color: palette.fg, fontSize: 13, fontWeight: active ? "700" : "500" }}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
         </View>
 
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          style={{ maxHeight: scrollMax }}
+          contentContainerStyle={styles.body}
+        >
           {mode === "ask" ? (
             <View style={styles.askRow}>
               <TextInput
@@ -353,6 +373,7 @@ export function ExplainSheet({
               palette={palette}
               language={language}
               figures={paragraphNotes.find((note) => note.id === entryId)?.figures}
+              figureMaxHeight={Math.round(windowHeight * 0.4)}
               resolveMediaUrl={(src) => api.mediaUrl(src)}
               extraLabel="Giải thích thêm"
               onFollowup={(q) =>
@@ -390,9 +411,15 @@ export function ExplainSheet({
                       key={candidate.id}
                       style={[styles.inlineNote, { borderBottomColor: withAlpha(palette.fg, 0.12) }]}
                     >
-                      <Text style={[styles.cardTitle, { color: palette.fg }]}>{candidate.name}</Text>
+                      <InlineMarkdownText
+                        value={candidate.name}
+                        style={[styles.cardTitle, { color: palette.fg }]}
+                      />
                       {candidate.summary ? (
-                        <Text style={[styles.note, { color: palette.fg }]}>{candidate.summary}</Text>
+                        <InlineMarkdownText
+                          value={candidate.summary}
+                          style={[styles.note, { color: palette.fg }]}
+                        />
                       ) : null}
                     </View>
                   ))}
@@ -503,6 +530,7 @@ function ExplainCardView({
   palette,
   language,
   figures,
+  figureMaxHeight,
   resolveMediaUrl,
   extraLabel = "Giải thích thêm",
   onFollowup,
@@ -512,6 +540,7 @@ function ExplainCardView({
   palette: Palette;
   language: ExplainLanguage;
   figures?: ReaderNoteFigure[];
+  figureMaxHeight?: number;
   resolveMediaUrl?: (src: string) => string | null;
   extraLabel?: string;
   onFollowup?: (query: string) => void;
@@ -551,11 +580,14 @@ function ExplainCardView({
 
   return (
     <View style={styles.block}>
-      <Text style={[styles.cardTitle, { color: palette.fg }]}>{card.title}</Text>
+      <InlineMarkdownText value={card.title} style={[styles.cardTitle, { color: palette.fg }]} />
 
       {card.book_note ? (
         <View style={styles.noteBlock}>
-          <Text style={[styles.note, { color: palette.fg }]}>{card.book_note}</Text>
+          <InlineMarkdownText
+            value={card.book_note}
+            style={[styles.note, { color: palette.fg }]}
+          />
         </View>
       ) : null}
 
@@ -569,12 +601,16 @@ function ExplainCardView({
                   <AuthenticatedImage
                     url={url}
                     fillWidth
+                    maxHeight={figureMaxHeight}
                     accessibilityLabel={figure.caption || "Illustration"}
                     style={styles.noteFigure}
                   />
                 ) : null}
                 {figure.caption ? (
-                  <Text style={[styles.figureCaption, { color: palette.muted }]}>{figure.caption}</Text>
+                  <InlineMarkdownText
+                    value={figure.caption}
+                    style={[styles.figureCaption, { color: palette.muted }]}
+                  />
                 ) : null}
               </View>
             );
@@ -585,7 +621,10 @@ function ExplainCardView({
       {extraOpen && card.ai_context ? (
         <View style={styles.noteBlock}>
           <Text style={[styles.label, { color: palette.muted }]}>{extraLabel}</Text>
-          <Text style={[styles.note, { color: palette.fg }]}>{card.ai_context}</Text>
+          <InlineMarkdownText
+            value={card.ai_context}
+            style={[styles.note, { color: palette.fg }]}
+          />
         </View>
       ) : card.ai_context || onNeedContext ? (
         <Pressable
@@ -659,7 +698,7 @@ function ParagraphExtra({
     return (
       <View style={styles.noteBlock}>
         <Text style={[styles.label, { color: palette.muted }]}>Giải thích thêm đoạn này</Text>
-        <Text style={[styles.note, { color: palette.fg }]}>{aiContext}</Text>
+        <InlineMarkdownText value={aiContext} style={[styles.note, { color: palette.fg }]} />
       </View>
     );
   }
@@ -675,6 +714,30 @@ function ParagraphExtra({
         {busy ? "…" : "Giải thích thêm đoạn này"}
       </Text>
     </Pressable>
+  );
+}
+
+function InlineMarkdownText({
+  value,
+  style,
+}: {
+  value: string;
+  style?: StyleProp<TextStyle>;
+}) {
+  return (
+    <Text style={style}>
+      {parseInlineMarkdown(value).map((token, index) => (
+        <Text
+          key={`${index}-${token.text}`}
+          style={[
+            token.bold ? styles.inlineBold : null,
+            token.italic ? styles.inlineItalic : null,
+          ]}
+        >
+          {token.text}
+        </Text>
+      ))}
+    </Text>
   );
 }
 
@@ -751,8 +814,10 @@ const styles = StyleSheet.create({
   sources: { fontSize: 12, marginBottom: 4 },
   noteBlock: { gap: 6, marginTop: 4 },
   note: { fontSize: 15, lineHeight: 23 },
-  noteFigure: { width: "100%", minHeight: 120, borderRadius: 8 },
+  noteFigure: { borderRadius: 8 },
   figureCaption: { fontSize: 13, fontStyle: "italic", lineHeight: 18 },
+  inlineBold: { fontWeight: "700" },
+  inlineItalic: { fontStyle: "italic" },
   extraLink: {
     fontSize: 13,
     letterSpacing: 0.3,

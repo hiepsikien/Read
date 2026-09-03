@@ -351,6 +351,10 @@ async def explain_selection(
     )
     if cached:
         card = loads_card(cached.response_json)
+        if book_note and str(card.get("book_note") or "") != book_note:
+            card["book_note"] = book_note
+            cached.response_json = dumps_card(card)
+            db.commit()
         generated = False
         if want_ai and not str(card.get("ai_context") or "").strip():
             settings = get_settings()

@@ -988,7 +988,7 @@ export default function ReaderScreen() {
                             { color: palette.muted, fontSize: Math.max(13, fontSize * 0.85) },
                           ]}
                         >
-                          {block.caption}
+                          {renderInlineTitle(block.caption)}
                         </Text>
                       ) : null}
                     </View>
@@ -1098,7 +1098,7 @@ export default function ReaderScreen() {
                           { color: palette.muted, fontSize: Math.max(13, fontSize * 0.85) },
                         ]}
                       >
-                        {block.caption}
+                        {renderInlineTitle(block.caption)}
                       </Text>
                     ) : null}
                   </View>
@@ -1449,9 +1449,10 @@ const styles = StyleSheet.create({
   paragraphs: { gap: 18, marginTop: 24 },
   paragraph: { borderRadius: 8, marginHorizontal: -6, paddingHorizontal: 6, paddingVertical: 3 },
   // Break out of readerBody padding (20) → ~12px from screen edges.
-  figure: { gap: 8, marginHorizontal: -8, alignSelf: "stretch" },
-  figureImage: { width: "100%", borderRadius: 0 },
+  figure: { gap: 8, alignSelf: "stretch", alignItems: "center" },
+  figureImage: { borderRadius: 0 },
   figureCaption: {
+    alignSelf: "stretch",
     textAlign: "center",
     fontStyle: "italic",
     lineHeight: 20,

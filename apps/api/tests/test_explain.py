@@ -513,3 +513,20 @@ def test_explain_need_context_uses_host_text_not_paragraph(client, seeded, monke
     assert captured["language"] == "en"
     assert captured["passage"] != "Bờ biển Calicut."
     assert response.json()["card"]["ai_context"] == "English gloss of the host paragraph."
+
+
+def test_compose_card_keeps_full_editorial_note():
+    from app.explain import compose_card
+
+    class Entry:
+        id = "note-adlung"
+        name = "Adlung [12]"
+        summary = ("Johann Christoph Adlung of Erfurt. " * 80).strip()
+        aliases = ["[12]"]
+        group_label = "Chú thích"
+        episode_key = "ch-001"
+
+    card = compose_card(query="Adlung", entry=Entry())
+    assert card["book_note"] == Entry.summary
+    assert not card["book_note"].endswith("…")
+    assert len(card["book_note"]) > 900
