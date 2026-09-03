@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+import base64
+from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
 from nanoid import generate
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -53,6 +56,13 @@ def hub_token(monkeypatch):
     get_settings.cache_clear()
     yield "hub-test-token"
     get_settings.cache_clear()
+
+
+def _png_b64(*, width: int = 320, height: int = 240, color=(40, 120, 200)) -> str:
+    image = Image.new("RGB", (width, height), color=color)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def test_hub_sync_creates_a_new_queue_book_each_publish(client, db_session, hub_token):
@@ -430,3 +440,200 @@ def test_hub_sync_stores_note_host_and_language(client, db_session, hub_token):
             "src": "https://cdn.example/fn77.jpg",
         }
     ]
+
+
+def test_hub_sync_keeps_hub_asset_path_without_bytes(client, db_session, hub_token):
+    from sqlalchemy import select
+
+    from app.models import Book
+
+    ensure_categories(db_session)
+    body = {
+        "hub_work_id": "bach--abdy_williams_path_only",
+        "hub_version": 1,
+        "hub_content_hash": "path-only",
+        "title": "Bach",
+        "category_slug": "essays",
+        "status": "published",
+        "raw_text": "Portrait of Bach.",
+        "chapters": [
+            {
+                "id": "ch-001",
+                "title": "CHAPTER I",
+                "content": "Portrait of Bach.",
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "role": "figure",
+                        "text": "Portrait of Bach",
+                        "src": "/assets/bach--abdy_williams/illoa001.png",
+                    }
+                ],
+            }
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "bach--abdy_williams_path_only"))
+    chapter_id = book.chapters[0].id
+    payload = client.get(f"/api/books/{book.id}/chapters/{chapter_id}").json()
+    assert payload["chapter"]["blocks"][0]["src"] == "/assets/bach--abdy_williams/illoa001.png"
+
+
+def test_hub_sync_ingests_assets_and_rewrites_src(
+    client, db_session, hub_token, tmp_path, monkeypatch
+):
+    from sqlalchemy import select
+
+    from app.models import Book
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setenv("UPLOAD_DIR", str(upload_dir))
+    get_settings.cache_clear()
+
+    ensure_categories(db_session)
+    portrait = _png_b64(color=(40, 120, 200))
+    house = _png_b64(color=(180, 60, 40))
+    body = {
+        "hub_work_id": "bach--abdy_williams",
+        "hub_version": 1,
+        "hub_content_hash": "assets-1",
+        "title": "Bach",
+        "category_slug": "essays",
+        "status": "published",
+        "raw_text": "Portrait of Bach.",
+        "chapters": [
+            {
+                "id": "ch-001",
+                "title": "CHAPTER I",
+                "content": "He studied with Adlung.[12]",
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "role": "figure",
+                        "text": "Portrait of Bach",
+                        "src": "/assets/bach--abdy_williams/illoa001.png",
+                    },
+                    {
+                        "type": "paragraph",
+                        "block_id": "ch-001:paragraph:he-studied",
+                        "text": "He studied with Adlung.[12]",
+                    },
+                ],
+            }
+        ],
+        "notes": [
+            {
+                "kind": "footnote",
+                "label": "Adlung [12]",
+                "marker": "[12]",
+                "body": "Adlung of Erfurt.",
+                "chapter": "ch-001",
+                "figures": [
+                    {
+                        "caption": "Bach's house at Eisenach.",
+                        "src": "/assets/bach--abdy_williams/fn77.jpg",
+                    }
+                ],
+            }
+        ],
+        "assets": [
+            {
+                "filename": "illoa001.png",
+                "content_type": "image/png",
+                "data": portrait,
+            },
+            {
+                "filename": "fn77.jpg",
+                "content_type": "image/jpeg",
+                "data": house,
+            },
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "bach--abdy_williams"))
+    assert book is not None
+    chapter_id = book.chapters[0].id
+    payload = client.get(f"/api/books/{book.id}/chapters/{chapter_id}").json()
+    figure_src = payload["chapter"]["blocks"][0]["src"]
+    note_src = payload["notes"][0]["figures"][0]["src"]
+    assert figure_src.startswith(f"/api/books/{book.id}/media/")
+    assert figure_src.endswith(".jpg")
+    assert note_src.startswith(f"/api/books/{book.id}/media/")
+    assert note_src.endswith(".jpg")
+    assert figure_src != note_src
+    assert "/assets/" not in figure_src
+    assert payload["notes"][0]["figures"][0]["caption"] == "Bach's house at Eisenach."
+
+    for src in (figure_src, note_src):
+        media = client.get(src)
+        assert media.status_code == 200, media.text
+        assert media.headers["content-type"].startswith("image/jpeg")
+        assert len(media.content) > 64
+
+
+def test_hub_sync_skips_corrupt_assets_without_failing(client, db_session, hub_token, tmp_path, monkeypatch):
+    from sqlalchemy import select
+
+    from app.models import Book
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setenv("UPLOAD_DIR", str(upload_dir))
+    get_settings.cache_clear()
+
+    ensure_categories(db_session)
+    body = {
+        "hub_work_id": "bach--corrupt_asset",
+        "hub_version": 1,
+        "hub_content_hash": "corrupt-1",
+        "title": "Bach",
+        "category_slug": "essays",
+        "status": "published",
+        "raw_text": "Portrait.",
+        "chapters": [
+            {
+                "id": "ch-001",
+                "title": "CHAPTER I",
+                "content": "Portrait.",
+                "blocks": [
+                    {
+                        "type": "paragraph",
+                        "role": "figure",
+                        "text": "Portrait of Bach",
+                        "src": "/assets/bach--abdy_williams/illoa001.png",
+                    }
+                ],
+            }
+        ],
+        "assets": [
+            {
+                "filename": "illoa001.png",
+                "content_type": "image/png",
+                "data": base64.b64encode(b"not-an-image").decode("ascii"),
+            }
+        ],
+    }
+    res = client.post(
+        "/api/internal/hub/works",
+        json=body,
+        headers={"X-Hub-Sync-Token": hub_token},
+    )
+    assert res.status_code == 200, res.text
+    db_session.expire_all()
+    book = db_session.scalar(select(Book).where(Book.hub_work_id == "bach--corrupt_asset"))
+    chapter_id = book.chapters[0].id
+    payload = client.get(f"/api/books/{book.id}/chapters/{chapter_id}").json()
+    assert payload["chapter"]["blocks"][0]["src"] == "/assets/bach--abdy_williams/illoa001.png"

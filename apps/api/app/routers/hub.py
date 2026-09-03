@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -21,7 +25,12 @@ from ..glossary import aliases_to_storage, figures_to_storage, note_figures
 from ..handles import normalize_handle
 from ..credits import apply_credits
 from ..explain import normalize_catalog_language
+from ..media import media_url_for, save_media_bytes
 from ..models import Book, Chapter, GlossaryEntry, User
+
+logger = logging.getLogger(__name__)
+
+MAX_HUB_ASSETS = 64
 
 router = APIRouter(prefix="/api/internal/hub", tags=["hub"])
 
@@ -77,6 +86,12 @@ class HubChapterIn(BaseModel):
     word_count: int | None = None
 
 
+class HubAsset(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = ""
+    data: str = Field(min_length=1)
+
+
 class HubWorkIn(BaseModel):
     hub_work_id: str = Field(min_length=3, max_length=120)
     hub_version: int = 1
@@ -104,6 +119,126 @@ class HubWorkIn(BaseModel):
     split_hints: list[dict[str, Any]] | None = None
     quotation_profile: dict[str, Any] | None = None
     chapters: list[HubChapterIn] | None = None
+    assets: list[HubAsset] | None = None
+
+
+def _safe_asset_filename(name: str) -> str | None:
+    raw = (name or "").strip()
+    if not raw or "/" in raw or "\\" in raw or raw in {".", ".."}:
+        return None
+    cleaned = Path(raw).name
+    if cleaned != raw:
+        return None
+    return cleaned
+
+
+def _persist_hub_assets(book_id: str, assets: list[HubAsset] | None) -> dict[str, str]:
+    """Save Hub illustrations; return original filename → Read media URL."""
+    if not assets:
+        return {}
+    upload_dir = get_settings().upload_dir
+    mapping: dict[str, str] = {}
+    for item in assets[:MAX_HUB_ASSETS]:
+        filename = _safe_asset_filename(item.filename)
+        if not filename:
+            continue
+        try:
+            raw = base64.b64decode(item.data)
+        except (binascii.Error, ValueError):
+            continue
+        if not raw:
+            continue
+        try:
+            asset_id = save_media_bytes(upload_dir, book_id, raw)
+        except Exception:  # noqa: BLE001 — skip corrupt or unsupported bytes
+            logger.warning("Hub asset %s for book %s could not be stored", filename, book_id)
+            continue
+        mapping[filename] = media_url_for(book_id, asset_id)
+    return mapping
+
+
+def _rewrite_src(src: str, mapping: dict[str, str]) -> str:
+    if not src or not mapping:
+        return src
+    return mapping.get(Path(src).name, src)
+
+
+def _rewrite_figure_dicts(
+    figures: list[dict[str, Any]], mapping: dict[str, str]
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for fig in figures:
+        if not isinstance(fig, dict):
+            out.append(fig)
+            continue
+        src = str(fig.get("src") or "")
+        rewritten = _rewrite_src(src, mapping)
+        if rewritten == src:
+            out.append(fig)
+            continue
+        row = dict(fig)
+        row["src"] = rewritten
+        out.append(row)
+    return out
+
+
+def _rewrite_block_srcs(
+    blocks: list[dict[str, Any]], mapping: dict[str, str]
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            out.append(block)
+            continue
+        src = str(block.get("src") or "")
+        rewritten = _rewrite_src(src, mapping)
+        if rewritten == src:
+            out.append(block)
+            continue
+        row = dict(block)
+        row["src"] = rewritten
+        out.append(row)
+    return out
+
+
+def _rewrite_unit_block_srcs(units: list[dict[str, Any]], mapping: dict[str, str]) -> None:
+    if not mapping:
+        return
+    for unit in units:
+        raw_blocks = unit.get("blocks_json")
+        if not raw_blocks:
+            continue
+        try:
+            blocks = json.loads(raw_blocks)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(blocks, list):
+            continue
+        unit["blocks_json"] = json.dumps(
+            _rewrite_block_srcs(blocks, mapping), ensure_ascii=False
+        )
+
+
+def _notes_with_rewritten_srcs(
+    notes: list[HubNote] | None, mapping: dict[str, str]
+) -> list[HubNote] | None:
+    if not notes or not mapping:
+        return notes
+    return [
+        item.model_copy(update={"figures": _rewrite_figure_dicts(item.figures, mapping)})
+        for item in notes
+    ]
+
+
+def _glossary_with_rewritten_srcs(
+    entries: list[HubGlossaryEntry] | None, mapping: dict[str, str]
+) -> list[HubGlossaryEntry] | None:
+    if not entries or not mapping:
+        return entries
+    return [
+        item.model_copy(update={"figures": _rewrite_figure_dicts(item.figures, mapping)})
+        for item in entries
+    ]
 
 
 def _require_hub_token(x_hub_sync_token: Annotated[str | None, Header()] = None) -> None:
@@ -303,6 +438,8 @@ def create_hub_work(
     )
     db.add(book)
     db.flush()
+    url_by_filename = _persist_hub_assets(book.id, body.assets)
+    _rewrite_unit_block_srcs(units, url_by_filename)
     for index, unit in enumerate(units):
         db.add(
             Chapter(
@@ -317,7 +454,12 @@ def create_hub_work(
                 blocks_json=unit["blocks_json"],
             )
         )
-    glossary_count = _upsert_hub_glossary(db, book, body.glossary, body.notes)
+    glossary_count = _upsert_hub_glossary(
+        db,
+        book,
+        _glossary_with_rewritten_srcs(body.glossary, url_by_filename),
+        _notes_with_rewritten_srcs(body.notes, url_by_filename),
+    )
     if body.credits is not None:
         apply_credits(book, body.credits.model_dump())
     if not str(getattr(book, "source_language", "") or "").strip():
