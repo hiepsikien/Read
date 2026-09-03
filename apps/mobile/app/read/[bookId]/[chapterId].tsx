@@ -26,6 +26,7 @@ import {
   buildReaderBlocks,
   notesFromRefBlocks,
   parseInlineMarkdown,
+  readerBlockHostText,
   uniqueNotesFromTokens,
   type ChapterListItem,
   type ReaderNote,
@@ -385,6 +386,10 @@ export default function ReaderScreen() {
   const blockTokens = useMemo(
     () => blocks.map((block) => (block.kind === "prose" ? block.tokens : null)),
     [blocks]
+  );
+  const explainParagraphHostText = useMemo(
+    () => readerBlockHostText(blocks, explainParagraph),
+    [blocks, explainParagraph]
   );
   const explainParagraphNotes = useMemo(() => {
     if (explainParagraph == null) return [];
@@ -1201,10 +1206,10 @@ export default function ReaderScreen() {
         api={api}
         bookId={bookId!}
         chapterId={chapterId!}
-        bookLanguage={data?.book.language || "en"}
         palette={palette}
-        bookLanguage={data.book.language}
+        bookLanguage={data?.book.language || "en"}
         paragraphIndex={explainParagraph}
+        paragraphHostText={explainParagraphHostText}
         paragraphNotes={explainParagraphNotes}
         entryId={explainEntryId}
         onClose={() => {

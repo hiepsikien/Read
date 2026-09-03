@@ -43,6 +43,7 @@ type Props = {
   palette: Palette;
   initialQuery?: string;
   paragraphIndex?: number | null;
+  paragraphHostText?: string;
   paragraphNotes?: ReaderNote[];
   entryId?: string | null;
   bookLanguage?: string | null;
@@ -58,6 +59,7 @@ export function ExplainSheet({
   palette,
   initialQuery = "",
   paragraphIndex = null,
+  paragraphHostText = "",
   paragraphNotes = [],
   entryId = null,
   bookLanguage = "en",
@@ -96,6 +98,14 @@ export function ExplainSheet({
   function persistLanguage(next: ExplainLanguage) {
     setLanguage(next);
     void SecureStore.setItemAsync(EXPLAIN_LANGUAGE_STORAGE_KEY, next);
+  }
+
+  function explainParagraphExtras() {
+    const host = paragraphHostText.trim();
+    return {
+      language,
+      ...(host ? { host_text: host } : {}),
+    };
   }
 
   function explainExtras(note?: ReaderNote) {
@@ -206,7 +216,7 @@ export function ExplainSheet({
       try {
         const payload = await api.explainChapter(bookId, chapterId, {
           paragraph_index: paragraphIndex ?? undefined,
-          language,
+          ...explainParagraphExtras(),
         });
         if (cancelled) return;
         if (payload.card && !payload.card.glossary_entry) {
@@ -225,6 +235,7 @@ export function ExplainSheet({
     mode,
     initialQuery,
     paragraphIndex,
+    paragraphHostText,
     paragraphNotes,
     entryId,
     bookId,
@@ -405,10 +416,14 @@ export function ExplainSheet({
                     const payload = await api.explainChapter(bookId, chapterId, {
                       need_context: true,
                       paragraph_index: paragraphIndex ?? undefined,
-                      language,
+                      ...explainParagraphExtras(),
                     });
                     if (payload.card && !payload.card.glossary_entry) {
                       setCard(payload.card);
+                      if (!(payload.card.ai_context || "").trim()) {
+                        setError("Chưa giải thích được đoạn này.");
+                        return;
+                      }
                       return;
                     }
                     throw new Error("unsupported");
