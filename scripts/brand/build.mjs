@@ -3,8 +3,8 @@
  *
  *   node scripts/brand/build.mjs
  *
- * Letterforms come from ./read-letters.path — the original Fraunces-based
- * "Read" outlines, kept so the typography stays continuous across the rebrand.
+ * Letterforms come from ./read-letters.path — Fraunces "Read" outlines.
+ * The mark is defined in logo.mjs. Wordmark = Fraunces letterforms only.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -24,8 +24,26 @@ const LETTERS = fs
   .join(" ")
   .trim();
 
-// Measured ink box of LETTERS in its original 823x354 user space.
-const LETTERS_BOX = { x0: 49, x1: 657.8, y0: 49, y1: 305.5 };
+/** Ink box of the letter outlines — recomputed whenever read-letters.path changes. */
+function pathBBox(d) {
+  const nums = d.match(/-?\d+\.?\d*/g)?.map(Number) ?? [];
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i + 1 < nums.length; i += 2) {
+    const x = nums[i];
+    const y = nums[i + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    x0 = Math.min(x0, x);
+    x1 = Math.max(x1, x);
+    y0 = Math.min(y0, y);
+    y1 = Math.max(y1, y);
+  }
+  return { x0, x1, y0, y1 };
+}
+
+const LETTERS_BOX = pathBBox(LETTERS);
 
 const TONES = ["color", "ink", "white"];
 const letterFill = (tone) =>
@@ -33,7 +51,7 @@ const letterFill = (tone) =>
 
 /* ------------------------------------------------------------------ mark */
 
-function markSvg(tone, { waves = 3, background = null, pad = 10 } = {}) {
+function markSvg(tone, { waves = 2, background = null, pad = 14 } = {}) {
   const geo = markGeometry({ waves, pad });
   return {
     geo,
@@ -47,8 +65,8 @@ function markSvg(tone, { waves = 3, background = null, pad = 10 } = {}) {
 }
 
 /** Mark centred in a square canvas, sized as a share of the canvas width. */
-function markSquareSvg(tone, size, { background = null, fill = 0.62 } = {}) {
-  const geo = markGeometry({ waves: 3, pad: 0 });
+function markSquareSvg(tone, size, { background = null, fill = 0.56 } = {}) {
+  const geo = markGeometry({ waves: 2, pad: 0 });
   const scale = (size * fill) / geo.ink.width;
   const w = geo.ink.width * scale;
   const h = geo.ink.height * scale;
@@ -60,35 +78,17 @@ function markSquareSvg(tone, size, { background = null, fill = 0.62 } = {}) {
 
 /* -------------------------------------------------------------- wordmark */
 
-const LOCKUP = {
-  /** Book height in wordmark units, against a 214 cap height. */
-  bookHeight: 186,
-  /** Gap between the "d" and the mark's leftmost ink. */
-  gap: 40,
-  /** Vertical centre of the mark, aligned to the lowercase optical centre. */
-  centerY: 191,
-  pad: 49,
-  waves: 3,
-};
+const WORDMARK_PAD = { right: 44, top: 44, bottom: 44 };
 
 function wordmarkGeometry() {
-  const geo = markGeometry({ waves: LOCKUP.waves, pad: 10 });
-  const scale = LOCKUP.bookHeight / geo.ink.height;
-  const left = LETTERS_BOX.x1 + LOCKUP.gap;
-  const top = LOCKUP.centerY - (geo.ink.height * scale) / 2;
-  // markGroup's own offset places ink at exactly `pad`, so undo that here.
-  const tx = left - scale * 10;
-  const ty = top - scale * 10;
-  const width = Math.round(left + geo.ink.width * scale + LOCKUP.pad);
-  return { geo, scale, tx, ty, width, height: 354 };
+  const width = Math.round(LETTERS_BOX.x1 + WORDMARK_PAD.right);
+  const height = 354;
+  return { width, height };
 }
 
 function wordmarkSvg(tone, { background = null } = {}) {
-  const { geo, scale, tx, ty, width, height } = wordmarkGeometry();
-  const body = [
-    `  <path d="${LETTERS}" fill="${letterFill(tone)}" fill-rule="evenodd"/>`,
-    markGroup(geo, tone, `translate(${tx} ${ty}) scale(${scale})`),
-  ].join("\n");
+  const { width, height } = wordmarkGeometry();
+  const body = `  <path d="${LETTERS}" fill="${letterFill(tone)}" fill-rule="evenodd"/>`;
   return { svg: svgDocument({ width, height, body, background }), width, height };
 }
 
@@ -103,14 +103,10 @@ const GRADIENT = `  <defs>
   </defs>`;
 
 /** Wordmark centred on the mist gradient — hero and social cards. */
-function bannerSvg(width, height, { fill = 0.66 } = {}) {
-  const { geo, scale: baseScale, tx, ty, width: wmW, height: wmH } =
-    wordmarkGeometry();
+function bannerSvg(width, height, { fill = 0.58 } = {}) {
+  const { width: wmW, height: wmH } = wordmarkGeometry();
   const s = (width * fill) / wmW;
-  const inner = [
-    `    <path d="${LETTERS}" fill="${PALETTE.ink}" fill-rule="evenodd"/>`,
-    markGroup(geo, "color", `translate(${tx} ${ty}) scale(${baseScale})`),
-  ].join("\n");
+  const inner = `    <path d="${LETTERS}" fill="${PALETTE.ink}" fill-rule="evenodd"/>`;
   const ox = (width - wmW * s) / 2;
   const oy = (height - wmH * s) / 2;
   const body = `${GRADIENT}
@@ -226,7 +222,7 @@ async function main() {
 
   const { width, height } = wordmarkGeometry();
   console.log(`\nwordmark aspect ${width}/${height} = ${(width / height).toFixed(4)}`);
-  const mg = markGeometry({ waves: 3 });
+  const mg = markGeometry({ waves: 2 });
   console.log(`mark aspect     ${mg.width}/${mg.height} = ${(mg.width / mg.height).toFixed(4)}`);
 }
 

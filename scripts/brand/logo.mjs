@@ -1,9 +1,9 @@
 /**
  * Read brand mark geometry — single source of truth.
  *
- * The mark is an open book whose right page radiates sound arcs, for the
- * "read it or listen to it" duality of the product. Everything is built from
- * the constants below so the whole asset set stays in proportion.
+ * Open book with two soft listening arcs — refined from the original mark
+ * with thinner strokes and fewer arcs. Used for favicon / login / app icon;
+ * the header wordmark is typography-only (Fraunces "Read").
  */
 
 export const PALETTE = {
@@ -17,31 +17,26 @@ export const PALETTE = {
 };
 
 const SPINE_X = 52;
-const PAGE_W = 38;
-const OUTER_TOP = 16;
-const OUTER_BOTTOM = 90;
-const SPINE_TOP = 36;
-const SPINE_BOTTOM = 113;
-const STROKE = 9;
+const PAGE_W = 36;
+const OUTER_TOP = 18;
+const OUTER_BOTTOM = 88;
+const SPINE_TOP = 38;
+const SPINE_BOTTOM = 108;
+const STROKE = 7;
 const HALF = STROKE / 2;
 
 const LEFT_X = SPINE_X - PAGE_W;
 const RIGHT_X = SPINE_X + PAGE_W;
 
-/**
- * Arc centre sits on the outer edge of the right page. It is optically centred
- * against the page block rather than the full silhouette — the spine's V-point
- * hangs below the pages and would otherwise drag the arcs down with it.
- */
 const ARC_CX = RIGHT_X;
-const ARC_CY = 58;
-const ARC_RADII = [18, 34, 50];
-const ARC_HALF_ANGLE = (47 * Math.PI) / 180;
-const ARC_OPACITY = [0.9, 0.62, 0.38];
+const ARC_CY = 56;
+const ARC_RADII = [20, 36];
+const ARC_HALF_ANGLE = (44 * Math.PI) / 180;
+const ARC_OPACITY = [0.75, 0.4];
 
 const bookPaths = [
-  `M ${LEFT_X} ${OUTER_TOP} C ${LEFT_X + 18} ${OUTER_TOP} ${SPINE_X - 7} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X - 7} ${SPINE_BOTTOM - 14} ${LEFT_X + 18} ${OUTER_BOTTOM} ${LEFT_X} ${OUTER_BOTTOM} Z`,
-  `M ${RIGHT_X} ${OUTER_TOP} C ${RIGHT_X - 18} ${OUTER_TOP} ${SPINE_X + 7} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X + 7} ${SPINE_BOTTOM - 14} ${RIGHT_X - 18} ${OUTER_BOTTOM} ${RIGHT_X} ${OUTER_BOTTOM} Z`,
+  `M ${LEFT_X} ${OUTER_TOP} C ${LEFT_X + 16} ${OUTER_TOP} ${SPINE_X - 6} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X - 6} ${SPINE_BOTTOM - 12} ${LEFT_X + 16} ${OUTER_BOTTOM} ${LEFT_X} ${OUTER_BOTTOM}`,
+  `M ${RIGHT_X} ${OUTER_TOP} C ${RIGHT_X - 16} ${OUTER_TOP} ${SPINE_X + 6} ${OUTER_TOP + 6} ${SPINE_X} ${SPINE_TOP} L ${SPINE_X} ${SPINE_BOTTOM} C ${SPINE_X + 6} ${SPINE_BOTTOM - 12} ${RIGHT_X - 16} ${OUTER_BOTTOM} ${RIGHT_X} ${OUTER_BOTTOM}`,
 ];
 
 function arcPath(r) {
@@ -56,10 +51,9 @@ function round(n) {
 }
 
 /**
- * @param {{ waves?: number, pad?: number }} [opts] waves: how many sound arcs
- * to draw. Fewer arcs give a tighter lockup for the wordmark.
+ * @param {{ waves?: number, pad?: number }} [opts] waves: listening arcs (1–2).
  */
-export function markGeometry({ waves = ARC_RADII.length, pad = 10 } = {}) {
+export function markGeometry({ waves = ARC_RADII.length, pad = 14 } = {}) {
   const radii = ARC_RADII.slice(0, waves);
   const outerR = radii.length ? radii[radii.length - 1] : 0;
 
@@ -87,27 +81,32 @@ export function markGeometry({ waves = ARC_RADII.length, pad = 10 } = {}) {
 
 /** Strokes for the mark, in one of the three brand tones. */
 export function markColors(tone) {
-  if (tone === "ink") return { book: PALETTE.ink, arc: PALETTE.ink };
-  if (tone === "white") return { book: PALETTE.white, arc: PALETTE.white };
-  return { book: PALETTE.sage, arc: PALETTE.sage };
+  const book =
+    tone === "ink"
+      ? PALETTE.ink
+      : tone === "white"
+        ? PALETTE.white
+        : PALETTE.sage;
+  const arc = tone === "color" ? PALETTE.sageDeep : book;
+  return { book, arc };
 }
 
 /** Inner `<g>` of the mark, ready to drop into any canvas. */
 export function markGroup(geo, tone, extraTransform = "") {
-  const c = markColors(tone);
+  const { book, arc } = markColors(tone);
   const transform =
     `${extraTransform} translate(${geo.offset.x} ${geo.offset.y})`.trim();
   const common = `fill="none" stroke-width="${geo.stroke}" stroke-linecap="round" stroke-linejoin="round"`;
-  const book = geo.book
-    .map((d) => `    <path d="${d}" stroke="${c.book}" ${common}/>`)
+  const pages = geo.book
+    .map((d) => `    <path d="${d}" stroke="${book}" ${common}/>`)
     .join("\n");
   const arcs = geo.arcs
     .map(
       (a) =>
-        `    <path d="${a.d}" stroke="${c.arc}" stroke-opacity="${a.opacity}" ${common}/>`
+        `    <path d="${a.d}" stroke="${arc}" stroke-opacity="${a.opacity}" ${common}/>`
     )
     .join("\n");
-  return `  <g transform="${transform}">\n${book}\n${arcs}\n  </g>`;
+  return `  <g transform="${transform}">\n${pages}\n${arcs}\n  </g>`;
 }
 
 export function svgDocument({ width, height, body, background }) {
